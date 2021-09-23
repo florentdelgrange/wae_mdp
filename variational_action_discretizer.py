@@ -447,7 +447,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
         log_probs = tf.math.log(relaxed_distribution.probs_parameter() + epsilon)
         return tfd.OneHotCategorical(logits=log_probs, allow_nan_stats=False)
 
-    def discrete_latent_transition_probability_distribution(
+    def discrete_latent_transition(
             self, latent_state: tf.Tensor, latent_action: tf.Tensor,
             relaxed_state_encoding: bool = False, log_latent_action: bool = False
     ) -> tfd.Distribution:
@@ -541,7 +541,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
                             reinterpreted_batch_ndims=1),
                         allow_nan_stats=False)])
 
-    def reward_probability_distribution(
+    def reward_distribution(
             self, latent_state, latent_action, next_latent_state, log_latent_action: bool = False,
             disable_mixture_distribution: bool = False
     ) -> tfd.Distribution:
@@ -712,14 +712,14 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
 
         # transition probability reconstruction
         transition_probability_distribution = \
-            self.discrete_latent_transition_probability_distribution(
+            self.discrete_latent_transition(
                 latent_state, log_latent_action,
                 relaxed_state_encoding=self.relaxed_state_encoding, log_latent_action=True)
         if self.relaxed_state_encoding:
-            continuous_action_transition = self._state_vae.relaxed_latent_transition_probability_distribution(
+            continuous_action_transition = self._state_vae.relaxed_latent_transition(
                 latent_state, action, self._state_vae.prior_temperature)
         else:
-            continuous_action_transition = self._state_vae.discrete_latent_transition_probability_distribution(
+            continuous_action_transition = self._state_vae.discrete_latent_transition(
                 latent_state, action)
         log_p_transition_action = continuous_action_transition.log_prob(next_label, next_latent_state_no_label)
         log_p_transition_latent_action = transition_probability_distribution.log_prob(
@@ -732,9 +732,9 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
             next_latent_state = tf.concat([next_label, next_latent_state_no_label], axis=-1)
 
         # rewards reconstruction
-        reward_distribution = self.reward_probability_distribution(
+        reward_distribution = self.reward_distribution(
             latent_state, log_latent_action, next_latent_state, log_latent_action=True)
-        log_p_rewards_action = self._state_vae.reward_probability_distribution(
+        log_p_rewards_action = self._state_vae.reward_distribution(
             latent_state, action, next_latent_state).log_prob(reward)
         log_p_rewards_latent_action = reward_distribution.log_prob(reward)
         log_p_rewards = log_p_rewards_latent_action - log_p_rewards_action
@@ -808,7 +808,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
         action_encoder_rate = log_q_log_latent_action - log_pi_log_latent_action
 
         # transitions
-        transition_probability_distribution = self.discrete_latent_transition_probability_distribution(
+        transition_probability_distribution = self.discrete_latent_transition(
             latent_state, log_latent_action, relaxed_state_encoding=True, log_latent_action=True)
         log_p_next_latent_state = transition_probability_distribution.log_prob(
             next_label, next_logistic_latent_state_no_label)
@@ -826,7 +826,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
         action_distribution = self.decode_action(latent_state, log_latent_action, log_latent_action=True)
         reconstruction_distribution = tfd.JointDistributionSequential([
             action_distribution,
-            self.reward_probability_distribution(
+            self.reward_distribution(
                 latent_state, log_latent_action, next_latent_state, log_latent_action=True),
             self.decode(next_latent_state)
         ])
@@ -868,7 +868,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
         self.loss_metrics['t_2_state'](self._state_vae.prior_temperature)
         self.loss_metrics['transition_log_probs'](
             tf.stop_gradient(
-                self.discrete_latent_transition_probability_distribution(
+                self.discrete_latent_transition(
                     tf.stop_gradient(tf.round(latent_state)),
                     tf.stop_gradient(tf.math.log(tf.round(tf.exp(log_latent_action)) + epsilon)),
                     log_latent_action=True
@@ -924,7 +924,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
             rate = latent_action_encoder.log_prob(latent_action) - latent_policy.log_prob(latent_action)
 
         # transition probability reconstruction
-        transition_distribution = self.discrete_latent_transition_probability_distribution(
+        transition_distribution = self.discrete_latent_transition(
             latent_state, tf.math.log(latent_action + epsilon), log_latent_action=True, relaxed_state_encoding=False)
         log_q_encoding_latent_state = next_latent_distribution.log_prob(next_latent_state_no_label)
         log_p_transition = transition_distribution.log_prob(next_label, next_latent_state_no_label)
@@ -934,7 +934,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
 
         reconstruction_distribution = tfd.JointDistributionSequential([
             self.decode_action(latent_state, tf.math.log(latent_action + epsilon), log_latent_action=True),
-            self.reward_probability_distribution(
+            self.reward_distribution(
                 latent_state, tf.math.log(latent_action + epsilon), next_latent_state, log_latent_action=True),
             self.decode(next_latent_state)
         ])
@@ -1126,7 +1126,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
                 state, latent_action, labeling_function=_labeling_function),
             latent_reward_function=lambda latent_state, latent_action,
                                           next_latent_state: (
-                self.reward_probability_distribution(
+                self.reward_distribution(
                     latent_state=tf.cast(latent_state, dtype=tf.float32),
                     latent_action=tf.cast(latent_action, dtype=tf.float32),
                     next_latent_state=tf.cast(next_latent_state,
@@ -1134,7 +1134,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
                     disable_mixture_distribution=True).mode()),
             labeling_function=labeling_function, latent_transition_function=(
                 lambda latent_state, latent_action:
-                self.discrete_latent_transition_probability_distribution(
+                self.discrete_latent_transition(
                     latent_state=tf.cast(latent_state, tf.float32),
                     latent_action=tf.math.log(latent_action + epsilon),
                     log_latent_action=True)),

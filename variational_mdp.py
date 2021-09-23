@@ -506,6 +506,11 @@ class VariationalMarkovDecisionProcess(tf.Module):
     def attach_optimizer(self, optimizer):
         self._optimizer = optimizer
 
+    def detach_optimizer(self):
+        optimizer = self._optimizer
+        self._optimizer = None
+        return optimizer
+
     def relaxed_encoding(
             self, state: tf.Tensor, temperature: float, label: Optional[tf.Tensor] = None
     ) -> tfd.Distribution:
@@ -591,7 +596,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
         else:
             return decoder_distribution
 
-    def relaxed_markov_chain_latent_transition_probability_distribution(
+    def relaxed_markov_chain_latent_transition(
             self, latent_state: tf.Tensor, temperature: float = 1e-5) -> tfd.Distribution:
         if self._has_dedicated_label_transition_network:
             next_label_logits = self.action_label_transition_network(latent_state)
@@ -617,7 +622,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                     allow_nan_stats=False, ), reinterpreted_batch_ndims=1),
                 allow_nan_stats=False)])
 
-    def relaxed_latent_transition_probability_distribution(
+    def relaxed_latent_transition(
             self, latent_state: tf.Tensor, action: tf.Tensor, next_label: Optional[tf.Tensor] = None,
             temperature: float = 1e-5
     ) -> tfd.Distribution:
@@ -659,7 +664,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                     allow_nan_stats=False)],
                 allow_nan_stats=False)
 
-    def discrete_markov_chain_latent_transition_probability_distribution(
+    def discrete_markov_chain_latent_transition(
             self, latent_state: tf.Tensor) -> tfd.Distribution:
         if self._has_dedicated_label_transition_network:
             next_label_logits = self.action_label_transition_network(latent_state)
@@ -683,7 +688,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                     logits=tf.transpose(next_state_logits(_next_label), perm=[0, 2, 1]),
                     allow_nan_stats=False), reinterpreted_batch_ndims=1))])
 
-    def discrete_latent_transition_probability_distribution(
+    def discrete_latent_transition(
             self, latent_state: tf.Tensor, action: tf.Tensor, next_label: Optional[tf.Tensor] = None
     ) -> tfd.Distribution:
         """
@@ -711,7 +716,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                         logits=next_state_logits(_next_label),
                         allow_nan_stats=False))])
 
-    def reward_probability_distribution(
+    def reward_distribution(
             self, latent_state: tf.Tensor, action: tf.Tensor, next_latent_state: tf.Tensor) -> tfd.Distribution:
         """
         Retrieves a probability distribution P(r|z, a, z') over the rewards obtained when the transition z, a, z'
@@ -795,11 +800,11 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
         log_q_encoding = next_state_encoder_distribution.log_prob(next_logistic_latent_state)
         if self.latent_policy_network is not None and self.full_optimization:
-            log_p_transition = self.relaxed_markov_chain_latent_transition_probability_distribution(
+            log_p_transition = self.relaxed_markov_chain_latent_transition(
                 latent_state, temperature=self.prior_temperature
             ).log_prob(next_label, next_logistic_latent_state)
         else:
-            log_p_transition = self.relaxed_latent_transition_probability_distribution(
+            log_p_transition = self.relaxed_latent_transition(
                 latent_state, action, temperature=self.prior_temperature
             ).log_prob(next_label, next_logistic_latent_state)
         rate = log_q_encoding - log_p_transition
@@ -811,14 +816,14 @@ class VariationalMarkovDecisionProcess(tf.Module):
             # log P(a, r, s' | z, z') =  log π(a | z) + log P(r | z, a, z') + log P(s' | z')
             reconstruction_distribution = tfd.JointDistributionSequential([
                 self.discrete_latent_policy(latent_state),
-                lambda _action: self.reward_probability_distribution(latent_state, _action, next_latent_state),
+                lambda _action: self.reward_distribution(latent_state, _action, next_latent_state),
                 self.decode(next_latent_state)
             ])
             distortion = -1. * reconstruction_distribution.log_prob(action, reward, next_state)
         else:
             # log P(r, s' | z, a, z') = log P(r | z, a, z') + log P(s' | z')
             reconstruction_distribution = tfd.JointDistributionSequential([
-                self.reward_probability_distribution(latent_state, action, next_latent_state),
+                self.reward_distribution(latent_state, action, next_latent_state),
                 self.decode(next_latent_state)
             ])
             distortion = -1. * reconstruction_distribution.log_prob(reward, next_state)
@@ -848,8 +853,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
             tf.stop_gradient(self.entropy_regularizer_scale_factor * entropy_regularizer))
         self.loss_metrics['transition_log_probs'](
             tf.stop_gradient(
-                self.discrete_latent_transition_probability_distribution(tf.stop_gradient(tf.round(latent_state)),
-                                                                         action).log_prob(
+                self.discrete_latent_transition(tf.stop_gradient(tf.round(latent_state)),
+                                                action).log_prob(
                     next_label, tf.round(tf.sigmoid(next_logistic_latent_state)))))
 
         if 'action_mse' in self.loss_metrics:
@@ -863,7 +868,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             tf.print(log_q_encoding, "Log Q(logistic z'|s', l')")
             tf.print(self.transition_network([latent_state, action]), "log-locations P_transition")
             tf.print(log_p_transition, "log P(logistic z'|z, a)")
-            tf.print(self.discrete_latent_transition_probability_distribution(
+            tf.print(self.discrete_latent_transition(
                 tf.round(latent_state), action
             ).prob(tf.round(tf.sigmoid(next_logistic_latent_state))), "P(round(z') | round(z), a)")
             tf.print(next_latent_state, "sampled z'")
@@ -958,10 +963,10 @@ class VariationalMarkovDecisionProcess(tf.Module):
         next_latent_state_no_label = tf.cast(next_latent_distribution.sample(), tf.float32)
 
         if self.latent_policy_network is not None and self.full_optimization:
-            transition_distribution = self.discrete_markov_chain_latent_transition_probability_distribution(
+            transition_distribution = self.discrete_markov_chain_latent_transition(
                 latent_state)
         else:
-            transition_distribution = self.discrete_latent_transition_probability_distribution(latent_state, action)
+            transition_distribution = self.discrete_latent_transition(latent_state, action)
         # rate = next_latent_distribution.kl_divergence(transition_distribution)
         rate = next_latent_distribution.log_prob(next_latent_state_no_label) - transition_distribution.log_prob(
             next_label, next_latent_state_no_label)
@@ -972,14 +977,14 @@ class VariationalMarkovDecisionProcess(tf.Module):
             # log P(a, r, s' | z, z') =  log π(a | z) + log P(r | z, a, z') + log P(s' | z')
             reconstruction_distribution = tfd.JointDistributionSequential([
                 self.discrete_latent_policy(latent_state),
-                lambda _action: self.reward_probability_distribution(latent_state, _action, next_latent_state),
+                lambda _action: self.reward_distribution(latent_state, _action, next_latent_state),
                 self.decode(next_latent_state)
             ])
             distortion = -1. * reconstruction_distribution.log_prob(action, reward, next_state)
         else:
             # log P(r, s' | z, a, z') = log P(r | z, a, z') + log P(s' | z')
             reconstruction_distribution = tfd.JointDistributionSequential([
-                self.reward_probability_distribution(latent_state, action, next_latent_state),
+                self.reward_distribution(latent_state, action, next_latent_state),
                 self.decode(next_latent_state)
             ])
             distortion = -1. * reconstruction_distribution.log_prob(reward, next_state)
@@ -2266,7 +2271,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             state_embedding_function=self.state_embedding_function,
             action_embedding_function=self.action_embedding_function,
             latent_reward_function=lambda latent_state, action, next_latent_state: (
-                self.reward_probability_distribution(
+                self.reward_distribution(
                     tf.cast(latent_state, dtype=tf.float32),
                     action,
                     tf.cast(next_latent_state, dtype=tf.float32)).mode()),
@@ -2274,7 +2279,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             (lambda x: labeling_function(x)[:, -1, ...]) if self.time_stacked_states else labeling_function,
             latent_transition_function=(
                 lambda latent_state, action:
-                self.discrete_latent_transition_probability_distribution(
+                self.discrete_latent_transition(
                     latent_state=tf.cast(latent_state, tf.float32),
                     action=action)),
             estimate_transition_function_from_samples=estimate_transition_function_from_samples,
