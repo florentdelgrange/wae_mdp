@@ -7,6 +7,7 @@ from tensorflow.python.keras import Model, Input, Sequential
 from tensorflow.python.keras.layers import TimeDistributed, LSTM, Dense, Concatenate, Reshape
 import tensorflow_probability as tfp
 import tensorflow_probability.python.distributions as tfd
+from tensorflow.python.keras.metrics import Mean, MeanSquaredError
 
 from variational_mdp import VariationalMarkovDecisionProcess, EvaluationCriterion
 
@@ -14,8 +15,8 @@ from variational_mdp import VariationalMarkovDecisionProcess, EvaluationCriterio
 class WassersteinRegularizerScaleFactor(NamedTuple):
     global_scaling: Optional[Union[float, tf.float32, tf.float64]] = None
     global_gradient_penalty_multiplier: Optional[float, tf.float32, tf.float64] = None
-    stationary_scaling: Optional[float, tf.float32, tf.float64] = None
-    stationary_gradient_penalty_multiplier: Optional[float, tf.float32, tf.float64] = None
+    steady_state_scaling: Optional[float, tf.float32, tf.float64] = None
+    steady_state_gradient_penalty_multiplier: Optional[float, tf.float32, tf.float64] = None
     local_transition_loss_scaling: Optional[float, tf.float32, tf.float64] = None
     local_transition_loss_gradient_penalty_multiplier: Optional[float, tf.float32, tf.float64] = None
     action_successor_scaling: Optional[float, tf.float32, tf.float64] = None
@@ -23,13 +24,13 @@ class WassersteinRegularizerScaleFactor(NamedTuple):
 
     values = namedtuple('WassersteinRegularizer', ['scaling', 'gradient_penalty_multiplier'])
 
-    if global_scaling is None and (stationary_scaling is None or
+    if global_scaling is None and (steady_state_scaling is None or
                                    local_transition_loss_scaling is None or
                                    action_successor_scaling is None):
         raise ValueError("Either a global scaling value or a unique scaling value for"
                          "each Wasserstein regularizer should be provided.")
 
-    if global_gradient_penalty_multiplier is None and (stationary_gradient_penalty_multiplier is None or
+    if global_gradient_penalty_multiplier is None and (steady_state_gradient_penalty_multiplier is None or
                                                        local_transition_loss_gradient_penalty_multiplier is None or
                                                        action_successor_gradient_penalty_multiplier is None):
         raise ValueError("Either a global gradient penalty multiplier or a unique multiplier for"
@@ -38,10 +39,10 @@ class WassersteinRegularizerScaleFactor(NamedTuple):
     @property
     def stationary(self):
         return self.values(
-            scaling=self.global_scaling if self.global_scaling is not None else self.stationary_scaling,
+            scaling=self.global_scaling if self.global_scaling is not None else self.steady_state_scaling,
             gradient_penalty_multiplier=(self.global_gradient_penalty_multiplier
                                          if self.global_gradient_penalty_multiplier is not None else
-                                         self.stationary_gradient_penalty_multiplier))
+                                         self.steady_state_gradient_penalty_multiplier))
 
     @property
     def local_transition_loss(self):
@@ -197,6 +198,17 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.steady_state_lipschitz_network = steady_state_lipschitz_network
             self.transition_loss_lipschitz_network = transition_loss_lipschitz_network
             self.action_successor_lipschitz_network = action_successor_lipschitz_network
+
+        self.loss_metrics = {
+            'reconstruction_loss': Mean(name='reconstruction_loss'),
+            'state_mse': MeanSquaredError(name='state_mse'),
+            'action_mse': MeanSquaredError(name='action_mse'),
+            'training_reward_loss': Mean(name='reward_loss'),
+            'training_transition_loss': Mean('transition_loss'),
+            'steady_state_regularizer': Mean('steady_state_wasserstein_regularizer'),
+            'action_successor_regularizer': Mean('action_successor_wasserstein_regularizer'),
+            'gradient_penalty': Mean('gradient_penalty')
+        }
 
     def _initialize_state_encoder_network(
             self,
@@ -446,6 +458,15 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             inputs=[latent_state, latent_action, next_latent_state],
             outpus=_action_successor_lipschitz_network,
             name='action_successor_lipschitz_network')
+
+    def anneal(self):
+        super().anneal()
+        for var, decay_rate in [
+            (self._action_encoder_temperature, self.encoder_temperature_decay_rate),
+            (self._latent_policy_temperature, self.prior_temperature_decay_rate),
+        ]:
+            if decay_rate.numpy().all() > 0:
+                var.assign(var * (1. - decay_rate))
 
     def attach_optimizer(
             self,
@@ -707,7 +728,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         steady_state_regularizer = (
                 self.steady_state_lipschitz_network(next_latent_state_prime) -
                 self.steady_state_lipschitz_network(next_stationary_latent_state))
-        local_transition_loss_regularizer = (
+        transition_loss_regularizer = (
                 self.transition_loss_lipschitz_network([state, action, next_latent_state]) -
                 self.transition_loss_lipschitz_network([state, action, next_latent_state_prime]))
 
@@ -742,26 +763,35 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             action_successor_regularizer = _action_successor_regularizers['regularizer']
             action_successor_gradient_penalty = _action_successor_regularizers['gradient_penalty']
 
-        wasserstein_regularizer = (
-                steady_state_regularizer +
-                local_transition_loss_regularizer +
-                action_successor_regularizer)
-
         # Lipschitz constraints
-        gradient_penalty = self.compute_gradient_penalty(
+        steady_state_gradient_penalty = self.compute_gradient_penalty(
             x=next_latent_state_prime,
             y=next_stationary_latent_state,
-            lipschitz_function=self.steady_state_lipschitz_network
-        ) + self.compute_gradient_penalty(
+            lipschitz_function=self.steady_state_lipschitz_network)
+        transition_loss_gradient_penalty = self.compute_gradient_penalty(
             x=next_latent_state,
             y=next_latent_state_prime,
-            lipschitz_function=lambda _x: self.transition_loss_lipschitz_network([state, action, _x])
-        ) + action_successor_gradient_penalty
+            lipschitz_function=lambda _x: self.transition_loss_lipschitz_network([state, action, _x]))
+
+        # loss metrics
+        self.loss_metrics['reconstruction_loss'](reconstruction_loss)
+        self.loss_metrics['state_mse'](next_state, _next_state)
+        self.loss_metrics['action_mse'](action, _action)
+        self.loss_metrics['training_reward_loss'](tf.norm(reward - _reward, ord=1, axis=1))
+        self.loss_metrics['training_transition_loss'](transition_loss_regularizer)
+        self.loss_metrics['steady_state_regularizer'](steady_state_regularizer)
+        self.loss_metrics['action_successor_regularizer'](action_successor_regularizer)
+        self.loss_metrics['gradient_penalty'](
+            steady_state_gradient_penalty + transition_loss_gradient_penalty + action_successor_gradient_penalty)
 
         return {
             'reconstruction_loss': reconstruction_loss,
-            'wasserstein_regularizer': wasserstein_regularizer,
-            'gradient_penalty': gradient_penalty
+            'steady_state_regularizer': steady_state_regularizer,
+            'steady_state_gradient_penalty': steady_state_gradient_penalty,
+            'transition_loss_regularizer': transition_loss_regularizer,
+            'transition_loss_gradient_penalty': transition_loss_gradient_penalty,
+            'action_successor_regularizer': action_successor_regularizer,
+            'action_successor_gradient_penalty': action_successor_gradient_penalty,
         }
 
     @tf.function
@@ -819,6 +849,44 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                      _x[:, :self.number_of_discrete_actions, ...],
                      _x[:, self.number_of_discrete_actions:, ...]]), )
         }
+
+    @tf.function
+    def compute_loss(
+            self,
+            state: tf.Tensor,
+            label: tf.Tensor,
+            action: tf.Tensor,
+            reward: tf.Tensor,
+            next_state: tf.Tensor,
+            next_label: tf.Tensor,
+            sample_key: Optional[tf.Tensor] = None,
+            sample_probability: Optional[tf.Tensor] = None,
+    ):
+        output = self(state, label, action, reward, next_state, next_label, sample_key)
+
+        # Importance sampling weights (is) for prioritized experience replay
+        if sample_probability is not None:
+            is_weights = (tf.stop_gradient(tf.reduce_min(sample_probability)) / sample_probability) ** self.is_exponent
+        else:
+            is_weights = 1.
+
+        return tf.reduce_mean(
+            is_weights * (
+                output['reconstruction_loss'] +
+                self.wasserstein_regularizer_scale_factor.steady_state_scaling *
+                output['steady_state_regularizer'] +
+                self.wasserstein_regularizer_scale_factor.steady_state_gradient_penalty_multiplier *
+                output['steady_state_gradient_penalty'] +
+                self.wasserstein_regularizer_scale_factor.local_transition_loss_scaling *
+                output['transition_loss_regularizer'] +
+                self.wasserstein_regularizer_scale_factor.local_transition_loss_gradient_penalty_multiplier *
+                output['transition_loss_gradient_penalty'] +
+                self.wasserstein_regularizer_scale_factor.action_successor_scaling *
+                output['action_successor_regularizer'] +
+                self.wasserstein_regularizer_scale_factor.action_successor_gradient_penalty_multiplier *
+                output['action_successor_gradient_penalty']
+            )
+        )
 
     @property
     def state_encoder_temperature(self):
