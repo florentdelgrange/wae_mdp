@@ -8,8 +8,13 @@ from tensorflow.python.keras.layers import TimeDistributed, LSTM, Dense, Concate
 import tensorflow_probability as tfp
 import tensorflow_probability.python.distributions as tfd
 from tensorflow.python.keras.metrics import Mean, MeanSquaredError
+from tf_agents import trajectories
+from tf_agents.environments import tf_environment, tf_py_environment
 
-from variational_mdp import VariationalMarkovDecisionProcess, EvaluationCriterion
+import variational_action_discretizer
+from util.io import dataset_generator
+from variational_mdp import VariationalMarkovDecisionProcess, EvaluationCriterion, debug_gradients
+from verification.local_losses import estimate_local_losses_from_samples
 
 
 class WassersteinRegularizerScaleFactor(NamedTuple):
@@ -174,8 +179,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.reconstruction_network = self._initialize_state_reconstruction_network(
                 next_latent_state, decoder_network, state_decoder_pre_processing_network)
             # action reconstruction function
-            self.action_reconstruction_network = self._initialize_action_reconstruction_network(
-                latent_state, latent_action, action_decoder_network)
+            if self.action_discretizer:
+                self.action_reconstruction_network = self._initialize_action_reconstruction_network(
+                    latent_state, latent_action, action_decoder_network)
+            else:
+                self.action_reconstruction_network = None
             # steady state Lipschitz function
             self.steady_state_lipschitz_network = self._initialize_steady_state_lipschitz_function(
                 latent_state, steady_state_lipschitz_network)
@@ -491,18 +499,18 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self._wasserstein_regularizer_optimizer = None
         return autoencoder_optimizer, wasserstein_regularizer_optimizer
 
-    def binary_encode(
+    def binary_encode_state(
             self,
             state: tf.Tensor,
             label: Optional[tf.Tensor] = None,
             temperature: Optional[float, tf.float32, tf.float64] = 0.
     ) -> tfd.Distribution:
         if temperature > 0:
-            return self.relaxed_encoding(state, label, temperature)
+            return self.relaxed_state_encoding(state, label, temperature)
         else:
-            return super().binary_encode(state, label)
+            return super().binary_encode_state(state, label)
 
-    def relaxed_encoding(
+    def relaxed_state_encoding(
             self,
             state: tf.Tensor,
             temperature: Union[float, tf.float32, tf.float64],
@@ -531,7 +539,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         else:
             return tfd.Deterministic(loc=action)
 
-    def decode(self, latent_state: tf.Tensor) -> tfd.Distribution:
+    def decode_state(self, latent_state: tf.Tensor) -> tfd.Distribution:
         if self.time_stacked_states:
             return tfd.Independent(tfd.Deterministic(loc=self.reconstruction_network(latent_state)))
         else:
@@ -541,6 +549,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self,
             latent_state: tf.Tensor,
             latent_action: tf.Tensor,
+            *args, **kwargs
     ) -> tfd.Distribution:
         if self.action_discretizer:
             return tfd.Deterministic(loc=self.action_reconstruction_network([latent_state, latent_action]))
@@ -668,6 +677,31 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 ), reinterpreted_batch_ndims=1),
             reparameterize=reparameterize and temperature > 0.)
 
+    def action_embedding_function(
+            self,
+            state: tf.Tensor,
+            latent_action: tf.Tensor,
+            label: Optional[tf.Tensor] = None,
+            labeling_function: Optional[Callable[[tf.Tensor], tf.Tensor]] = None
+    ) -> tf.Tensor:
+        if (label is None) == (labeling_function is None):
+            raise ValueError("Must either pass a label or a labeling_function")
+
+        if labeling_function is not None:
+            label = labeling_function(state)
+
+        if self.action_discretizer:
+            return self.decode_action(
+                latent_state=tf.cast(self.state_embedding_function(state, label=label), dtype=tf.float32),
+                latent_action=tf.cast(
+                    tf.one_hot(
+                        latent_action,
+                        depth=self.number_of_discrete_actions),
+                    dtype=tf.float32),
+            ).mode()
+        else:
+            return latent_action
+
     @tf.function
     def __call__(
             self,
@@ -683,10 +717,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         batch_size = tf.shape(state)[0]
         # sampling
         # encoders
-        latent_state_distribution = self.relaxed_encoding(state, self.state_encoder_temperature)
+        latent_state_distribution = self.relaxed_state_encoding(state, self.state_encoder_temperature)
         latent_state = tf.concat([label, latent_state_distribution.sample()], axis=-1)
         next_latent_state = tf.concat([
-            next_label, self.relaxed_encoding(next_state, self.state_encoder_temperature).sample()
+            next_label, self.relaxed_state_encoding(next_state, self.state_encoder_temperature).sample()
         ], axis=-1)
         latent_action = self.encode_action(latent_state, action, self.action_encoder_temperature).sample()
 
@@ -719,7 +753,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         _reward, _action, _next_state = tfd.JointDistributionSequential([
             self.reward_distribution(latent_state, latent_action),
             self.decode_action(latent_state, latent_action),
-            self.decode(next_latent_state)
+            self.decode_state(next_latent_state)
         ]).sample()
         reconstruction_loss = (
                 tf.norm(reward - _reward, ord=1, axis=1) +  # local reward loss
@@ -796,7 +830,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.loss_metrics['action_successor_regularizer'](action_successor_regularizer)
         self.loss_metrics['gradient_penalty'](
             steady_state_gradient_penalty + transition_loss_gradient_penalty + action_successor_gradient_penalty)
-        self.loss_metrics['state_encoder_entropy'](self.binary_encode(state).entropy())
+        self.loss_metrics['state_encoder_entropy'](self.binary_encode_state(state).entropy())
         self.loss_metrics['action_encoder_entropy'](self.encode_action(latent_state, action, temperature=0.).entropy())
 
         return {
@@ -884,10 +918,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         batch_size = tf.shape(state)[0]
         # sampling
         # encoders
-        latent_state_distribution = self.binary_encode(state)
+        latent_state_distribution = self.binary_encode_state(state)
         latent_state = tf.concat([label, latent_state_distribution.sample()], axis=-1)
         next_latent_state = tf.concat([
-            next_label, self.binary_encode(next_state).sample()
+            next_label, self.binary_encode_state(next_state).sample()
         ], axis=-1)
         latent_action = self.encode_action(latent_state, action, temperature=0.).sample()
 
@@ -915,7 +949,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         _reward, _action, _next_state = tfd.JointDistributionSequential([
             self.reward_distribution(latent_state, latent_action),
             self.decode_action(latent_state, latent_action),
-            self.decode(next_latent_state)
+            self.decode_state(next_latent_state)
         ]).sample()
         reconstruction_loss = (
                 tf.norm(reward - _reward, ord=1, axis=1) +  # local reward loss
@@ -983,23 +1017,48 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         else:
             is_weights = 1.
 
-        return tf.reduce_mean(
-            is_weights * (
-                output['reconstruction_loss'] +
+        reconstruction_loss = output['reconstruction_loss']
+        wasserstein_loss = (
                 self.wasserstein_regularizer_scale_factor.steady_state_scaling *
                 output['steady_state_regularizer'] +
-                self.wasserstein_regularizer_scale_factor.steady_state_gradient_penalty_multiplier *
-                output['steady_state_gradient_penalty'] +
                 self.wasserstein_regularizer_scale_factor.local_transition_loss_scaling *
                 output['transition_loss_regularizer'] +
+                self.wasserstein_regularizer_scale_factor.action_successor_scaling *
+                output['action_successor_regularizer']
+        )
+        gradient_penalty = (
+                self.wasserstein_regularizer_scale_factor.steady_state_gradient_penalty_multiplier *
+                output['steady_state_gradient_penalty'] +
                 self.wasserstein_regularizer_scale_factor.local_transition_loss_gradient_penalty_multiplier *
                 output['transition_loss_gradient_penalty'] +
-                self.wasserstein_regularizer_scale_factor.action_successor_scaling *
-                output['action_successor_regularizer'] +
                 self.wasserstein_regularizer_scale_factor.action_successor_gradient_penalty_multiplier *
                 output['action_successor_gradient_penalty']
-            )
         )
+
+        loss = lambda minimize: tf.reduce_mean(
+            (-1.) ** (1. - minimize) * is_weights *
+            (minimize * reconstruction_loss + wasserstein_loss + (1. - minimize) * gradient_penalty)
+        )
+
+        return {'min': loss(1.), 'max': loss(0.)}
+
+    def entropy_regularizer(
+            self, state: tf.Tensor,
+            use_marginal_entropy: bool = False,
+            latent_states: Optional[tf.Tensor] = None
+    ):
+        return NotImplemented
+
+    def mean_latent_bits_used(self, inputs, eps=1e-3, deterministic=True):
+        state, label, action, reward, next_state, next_label = inputs[:6]
+        latent_state = tf.cast(self.binary_encode_state(state, label).sample(), tf.float32)
+        mean = tf.reduce_mean(self.encode_action(latent_state, action, temperature=0.).probs_parameter(), axis=0)
+        check = lambda x: 1 if 1 - eps > x > eps else 0
+        mean_bits_used = tf.reduce_sum(tf.map_fn(check, mean), axis=0).numpy()
+
+        mbu = {'mean_action_bits_used': mean_bits_used}
+        mbu.update(super().mean_latent_bits_used(inputs, eps, deterministic))
+        return mbu
 
     @property
     def state_encoder_temperature(self):
@@ -1026,3 +1085,156 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     def latent_policy_temperature(self, value):
         self._action_encoder_temperature = tf.Variable(
             value, dtype=tf.float32, trainable=False, name='latent_policy_temperature')
+
+    @property
+    def inference_variables(self):
+        if self.action_discretizer:
+            return self.state_encoder_network.trainable_variables + self.action_encoder_network.trainable_variables
+        else:
+            return self.state_encoder_network.trainable_variables
+
+    @property
+    def generator_variables(self):
+        variables = [self.latent_steady_state_logits]
+        if not self.action_discretizer:
+            variables += self.action_reconstruction_network.trainable_variables
+        for network in [self.transition_network,
+                        self.latent_policy_network.trainable_variables,
+                        self.reward_network.trainable_variables,
+                        self.reconstruction_network, ]:
+            variables += network.trainable_variables
+        return variables
+
+    @property
+    def wasserstein_variables(self):
+        return [self.steady_state_lipschitz_network.trainable_variables,
+                self.transition_loss_lipschitz_network.trainable_variables,
+                self.action_successor_lipschitz_network.trainable_variables]
+
+    def _compute_apply_gradients(
+            self, state, label, action, reward, next_state, next_label,
+            autoencoder_variables=None, wasserstein_regularizer_variables=None,
+            sample_key=None, sample_probability=None,
+            *args, **kwargs
+    ):
+        if autoencoder_variables is None and wasserstein_regularizer_variables is None:
+            raise ValueError("Must pass autoencoder and/or wasserstein regularizer variables")
+        with tf.GradientTape() as tape:
+            loss = self.compute_loss(
+                state, label, action, reward, next_state, next_label,
+                sample_key=sample_key, sample_probability=sample_probability)
+
+        for optimization_direction, variables in {
+            'min': autoencoder_variables, 'max': wasserstein_regularizer_variables
+        }.items():
+            if variables is not None:
+                gradients = tape.gradient(loss[optimization_direction], variables)
+                {'min': self._autoencoder_optimizer,
+                 'max': self._wasserstein_regularizer_optimizer
+                 }[optimization_direction].apply_gradients(zip(gradients, variables))
+
+                if debug_gradients:
+                    for gradient, variable in zip(gradients, variables):
+                        tf.print(gradient, "Gradient for {}".format(variable.name), ' -- variable=', variables)
+
+        return loss['min']
+
+    @tf.function
+    def compute_apply_gradients(
+            self,
+            state: tf.Tensor,
+            label: tf.Tensor,
+            action: tf.Tensor,
+            reward: tf.Tensor,
+            next_state: tf.Tensor,
+            next_label: tf.Tensor,
+            sample_key: Optional[tf.Tensor] = None,
+            sample_probability: Optional[tf.Tensor] = None,
+    ):
+        return self._compute_apply_gradients(
+            state, label, action, reward, next_state, next_label,
+            autoencoder_variables=self.inference_variables + self.generator_variables,
+            wasserstein_regularizer_variables=self.wasserstein_variables,
+            sample_key=sample_key, sample_probability=sample_probability)
+
+    @tf.function
+    def inference_update(
+            self,
+            state: tf.Tensor,
+            label: tf.Tensor,
+            action: tf.Tensor,
+            reward: tf.Tensor,
+            next_state: tf.Tensor,
+            next_label: tf.Tensor,
+            sample_key: Optional[tf.Tensor] = None,
+            sample_probability: Optional[tf.Tensor] = None,
+    ):
+        return self._compute_apply_gradients(
+            state, label, action, reward, next_state, next_label,
+            autoencoder_variables=self.generator_variables,
+            wasserstein_regularizer_variables=self.wasserstein_variables,
+            sample_key=sample_key, sample_probability=sample_probability)
+
+    @tf.function
+    def generator_update(
+            self,
+            state: tf.Tensor,
+            label: tf.Tensor,
+            action: tf.Tensor,
+            reward: tf.Tensor,
+            next_state: tf.Tensor,
+            next_label: tf.Tensor,
+            sample_key: Optional[tf.Tensor] = None,
+            sample_probability: Optional[tf.Tensor] = None,
+    ):
+        return self._compute_apply_gradients(
+            state, label, action, reward, next_state, next_label,
+            autoencoder_variables=self.generator_variables,
+            wasserstein_regularizer_variables=self.wasserstein_variables,
+            sample_key=sample_key, sample_probability=sample_probability)
+
+    def wrap_tf_environment(
+            self,
+            tf_env: tf_environment.TFEnvironment,
+            labeling_function: Callable[[tf.Tensor], tf.Tensor],
+            *args,
+            **kwargs
+    ) -> tf_environment.TFEnvironment:
+        return variational_action_discretizer.VariationalTFEnvironmentDiscretizer(
+            variational_action_discretizer=self,
+            tf_env=tf_env,
+            labeling_function=labeling_function)
+
+    def estimate_local_losses_from_samples(
+            self,
+            environment: tf_py_environment.TFPyEnvironment,
+            steps: int,
+            labeling_function: Callable[[tf.Tensor], tf.Tensor],
+            estimate_transition_function_from_samples: bool = False,
+            assert_estimated_transition_function_distribution: bool = False,
+            replay_buffer_max_frames: Optional[int] = int(1e5),
+            reward_scaling: Optional[float] = 1.,
+    ):
+        if self.time_stacked_states:
+            labeling_function = lambda x: labeling_function(x)[:, -1, ...]
+        _labeling_function = dataset_generator.ergodic_batched_labeling_function(labeling_function)
+
+        return estimate_local_losses_from_samples(
+            environment=environment,
+            latent_policy=self.get_latent_policy(),
+            steps=steps,
+            number_of_discrete_actions=self.number_of_discrete_actions,
+            state_embedding_function=self.state_embedding_function,
+            action_embedding_function=lambda state, latent_action: self.action_embedding_function(
+                state, latent_action, labeling_function=_labeling_function),
+            latent_reward_function=lambda latent_state, latent_action, _: (
+                self.reward_distribution(
+                    latent_state=tf.cast(latent_state, dtype=tf.float32),
+                    latent_action=tf.cast(latent_action, dtype=tf.float32)).mode()),
+            labeling_function=labeling_function,
+            latent_transition_function=lambda latent_state, latent_action: self.discrete_latent_transition(
+                latent_state=tf.cast(latent_state, tf.float32),
+                latent_action=tf.cast(latent_action, tf.float32)),
+            estimate_transition_function_from_samples=estimate_transition_function_from_samples,
+            replay_buffer_max_frames=replay_buffer_max_frames,
+            reward_scaling=reward_scaling)

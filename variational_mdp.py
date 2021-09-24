@@ -1166,7 +1166,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
     def _compute_apply_gradients(
             self, state, label, action, reward, next_state, next_label, trainable_variables,
-            sample_key=None, sample_probability=None):
+            sample_key=None, sample_probability=None, *args, **kwargs):
         with tf.GradientTape() as tape:
             loss = self.compute_loss(
                 state, label, action, reward, next_state, next_label,
@@ -2123,9 +2123,6 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 latent_eval_env, self.get_latent_policy(), num_episodes=num_eval_episodes,
                 observers=[] if not render else [lambda _: eval_env.render(mode='human')])
 
-        driver_run = eval_policy_driver.run
-        driver_run_tf_fun = common.function(eval_policy_driver.run)
-        eval_policy_driver.run = driver_run_tf_fun if len(eval_policy_driver.observers) == 0 else eval_policy_driver.run
         eval_policy_driver.observers.append(eval_avg_rewards)
         try:
             eval_policy_driver.run()
@@ -2135,8 +2132,6 @@ class VariationalMarkovDecisionProcess(tf.Module):
             eval_avg_rewards.result = lambda: -1. * np.inf
 
         eval_policy_driver.observers.remove(eval_avg_rewards)
-        eval_policy_driver.run = driver_run
-        del driver_run_tf_fun
 
         if train_summary_writer is not None:
             with train_summary_writer.as_default():
