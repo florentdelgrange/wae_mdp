@@ -171,50 +171,50 @@ def estimate_local_losses_from_samples(
         _transition_function_estimation_num_frames = 0
         transition_function_estimation_time = 0
 
-    local_probability_loss_time = time.time()
+    local_transition_loss_time = time.time()
 
-    local_probability_loss = estimate_local_probability_loss(
+    local_transition_loss = estimate_local_transition_loss(
         state, label, latent_action, next_state, next_label,
         latent_transition_function, latent_state, next_latent_state_no_label)
 
-    local_probability_loss_time = time.time() - local_probability_loss_time
+    local_transition_loss_time = time.time() - local_transition_loss_time
 
-    local_probability_loss_time2 = time.time()
+    local_transition_loss_time2 = time.time()
     if empirical_latent_transition_function is not None:
-        local_probability_loss_transition_function_estimation = estimate_local_probability_loss(
+        local_transition_loss_transition_fn_estimation = estimate_local_transition_loss(
             state, label, latent_action, next_state, next_label,
             empirical_latent_transition_function, latent_state, next_latent_state_no_label)
     else:
-        local_probability_loss_transition_function_estimation = None
+        local_transition_loss_transition_fn_estimation = None
 
-    local_probability_loss_time2 = time.time() - local_probability_loss_time2
+    local_transition_loss_time2 = time.time() - local_transition_loss_time2
 
     def print_time_metrics():
         print("Time to fill in the Replay Buffer ({:d} frames): {:.3f}".format(replay_buffer_max_frames, collect_time))
         print("Time to estimate the local reward loss function (from {:d} transitions):"
               " {:.3f}".format(steps, local_reward_loss_time))
-        print("Time to estimate the local probability loss function (from {:d} transitions):"
-              " {:.3f}".format(steps, local_probability_loss_time))
+        print("Time to estimate the local transition loss function (from {:d} transitions):"
+              " {:.3f}".format(steps, local_transition_loss_time))
         if estimate_transition_function_from_samples:
-            print("Time to estimate the probability transition function (from {:d} transitions): {:3f}".format(
-                _transition_function_estimation_num_frames, local_probability_loss_time2))
+            print("Time to estimate the transition function (from {:d} transitions): {:3f}".format(
+                _transition_function_estimation_num_frames, local_transition_loss_time2))
 
     time_metrics = {
         'fill_replay_buffer': collect_time,
         'local_reward_loss': local_reward_loss_time,
-        'local_probability_loss': local_probability_loss_time,
+        'local_transition_loss': local_transition_loss_time,
         'transition_fun':
             transition_function_estimation_time if estimate_transition_function_from_samples else 0.,
-        'local_probability_loss_transition_function_estimation': local_probability_loss_time2
+        'local_transition_loss_transition_function_estimation': local_transition_loss_time2
     }
 
     replay_buffer.clear()
 
     return namedtuple(
         'LocalLossesEstimationMetrics',
-        ['local_reward_loss', 'local_probability_loss', 'local_probability_loss_transition_function_estimation',
+        ['local_reward_loss', 'local_transition_loss', 'local_transition_loss_transition_function_estimation',
          'print_time_metrics', 'time_metrics'])(
-            local_reward_loss, local_probability_loss, local_probability_loss_transition_function_estimation,
+            local_reward_loss, local_transition_loss, local_transition_loss_transition_fn_estimation,
             print_time_metrics, time_metrics)
 
 
@@ -247,7 +247,7 @@ def estimate_local_reward_loss(
 
 
 @tf.function
-def estimate_local_probability_loss(
+def estimate_local_transition_loss(
         state: tf.Tensor,
         label: tf.Tensor,
         latent_action: tf.Tensor,

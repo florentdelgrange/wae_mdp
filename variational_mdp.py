@@ -2065,21 +2065,21 @@ class VariationalMarkovDecisionProcess(tf.Module):
                     if (local_losses_metrics.local_probability_loss_transition_function_estimation is not None and
                             local_losses_metrics.local_probability_loss_transition_function_estimation <
                             local_losses_metrics.local_probability_loss):
-                        local_probability_loss = \
+                        local_transition_loss = \
                             local_losses_metrics.local_probability_loss_transition_function_estimation
-                        local_probability_loss_time = local_losses_metrics.time_metrics[
-                            'local_probability_loss_transition_function_estimation']
+                        local_transition_loss_time = local_losses_metrics.time_metrics[
+                            'local_transition_loss_transition_function_estimation']
                     else:
-                        local_probability_loss = local_losses_metrics.local_probability_loss
-                        local_probability_loss_time = local_losses_metrics.time_metrics['local_probability_loss']
-                    tf.summary.scalar('local_probability_loss', local_probability_loss, step=global_step)
+                        local_transition_loss = local_losses_metrics.local_probability_loss
+                        local_transition_loss_time = local_losses_metrics.time_metrics['local_transition_loss']
+                    tf.summary.scalar('local_transition_loss', local_transition_loss, step=global_step)
                     tf.summary.scalar(
                         'local_losses_computation_time',
-                        local_losses_metrics.time_metrics['local_reward_loss'] + local_probability_loss_time,
+                        local_losses_metrics.time_metrics['local_reward_loss'] + local_transition_loss_time,
                         step=global_step)
                     tf.print('Local reward loss: {:.2f}'.format(local_losses_metrics.local_reward_loss))
-                    tf.print('Local probability loss: {:.2f}'.format(local_losses_metrics.local_probability_loss))
-                    tf.print('Local probability loss (empirical probability function): {:.2f}'
+                    tf.print('Local transition loss: {:.2f}'.format(local_losses_metrics.local_probability_loss))
+                    tf.print('Local transition loss (empirical transition function): {:.2f}'
                              ''.format(local_losses_metrics.local_probability_loss_transition_function_estimation))
 
             print('eval ELBO: ', metrics['eval_elbo'].result().numpy())
