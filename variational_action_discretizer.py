@@ -970,84 +970,6 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
             deterministic_embedding_functions: bool = True
     ) -> tf_environment.TFEnvironment:
 
-        class VariationalTFEnvironmentDiscretizer(tf_environment.TFEnvironment):
-
-            def __init__(
-                    self,
-                    variational_action_discretizer: VariationalActionDiscretizer,
-                    tf_env: tf_environment.TFEnvironment,
-                    labeling_function: Callable[[tf.Tensor], tf.Tensor],
-                    deterministic_embedding_functions: bool = True
-            ):
-                action_spec = specs.BoundedTensorSpec(
-                    shape=(),
-                    dtype=tf.int32,
-                    minimum=0,
-                    maximum=variational_action_discretizer.number_of_discrete_actions - 1,
-                    name='action'
-                )
-                observation_spec = specs.BoundedTensorSpec(
-                    shape=(variational_action_discretizer.latent_state_size,),
-                    dtype=tf.int32,
-                    minimum=0,
-                    maximum=1,
-                    name='observation'
-                )
-                time_step_spec = ts.time_step_spec(observation_spec)
-                super(VariationalTFEnvironmentDiscretizer, self).__init__(
-                    time_step_spec=time_step_spec,
-                    action_spec=action_spec,
-                    batch_size=tf_env.batch_size
-                )
-
-                self.embed_observation = variational_action_discretizer.binary_encode_state
-                self.embed_latent_action = (
-                    lambda latent_state, latent_action: variational_action_discretizer.decode_action(
-                        latent_state, latent_action, disable_mixture_distribution=True))
-                self.tf_env = tf_env
-                self._labeling_function = labeling_function
-                self.observation_shape, self.action_shape, self.reward_shape = [
-                    variational_action_discretizer.state_shape,
-                    variational_action_discretizer.action_shape,
-                    variational_action_discretizer.reward_shape
-                ]
-                self._current_latent_state = None
-                if deterministic_embedding_functions:
-                    self._get_embedding = lambda distribution: distribution.mode()
-                else:
-                    self._get_embedding = lambda distribution: distribution.sample()
-                self.deterministic_embedding_functions = deterministic_embedding_functions
-                self.labeling_function = dataset_generator.ergodic_batched_labeling_function(labeling_function)
-
-            def _current_time_step(self):
-                if self._current_latent_state is None:
-                    return self.reset()
-                time_step = self.tf_env.current_time_step()
-                return trajectories.time_step.TimeStep(
-                    time_step.step_type, time_step.reward, time_step.discount, self._current_latent_state)
-
-            def _step(self, action):
-                real_action = self._get_embedding(
-                    self.embed_latent_action(
-                        tf.cast(self._current_latent_state, tf.float32),
-                        tf.one_hot(indices=action, depth=self.action_spec().maximum + 1, axis=-1, dtype=tf.float32)))
-
-                time_step = self.tf_env.step(real_action)
-                label = self.labeling_function(time_step.observation)
-
-                latent_state = self._get_embedding(self.embed_observation(time_step.observation, label))
-                self._current_latent_state = latent_state
-                return self._current_time_step()
-
-            def _reset(self):
-                time_step = self.tf_env.reset()
-                label = self.labeling_function(time_step.observation)
-                self._current_latent_state = self._get_embedding(self.embed_observation(time_step.observation, label))
-                return self._current_time_step()
-
-            def render(self):
-                return self.tf_env.render()
-
         return VariationalTFEnvironmentDiscretizer(self, tf_env, labeling_function, deterministic_embedding_functions)
 
     @property
@@ -1142,50 +1064,6 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
             replay_buffer_max_frames=replay_buffer_max_frames,
             reward_scaling=reward_scaling)
 
-    def eval_policy(
-            self,
-            eval_env: Optional[py_environment.PyEnvironment] = None,
-            eval_policy_driver: Optional[tf_agents.drivers.driver.Driver] = None,
-            labeling_function: Optional[Callable[[tf.Tensor], tf.Tensor]] = None,
-            num_eval_episodes: int = 30,
-            train_summary_writer: Optional = None,
-            global_step: Optional[tf.Variable] = None,
-            render: bool = False,
-    ):
-        if (eval_env is None) == (eval_policy_driver is None):
-            raise ValueError('Must either pass an eval_tf_env or an eval_tf_driver.')
-
-        eval_avg_rewards = tf_agents.metrics.tf_metrics.AverageReturnMetric()
-        if eval_env is not None:
-            if labeling_function is None:
-                raise ValueError('Must provide a labeling function if eval_env is provided.')
-            eval_tf_env = tf_py_environment.TFPyEnvironment(eval_env)
-            if self.time_stacked_states:
-                latent_eval_env = self.wrap_tf_environment(eval_tf_env, lambda x: labeling_function(x)[:, -1, ...])
-            else:
-                latent_eval_env = self.wrap_tf_environment(eval_tf_env, labeling_function)
-            latent_eval_env.reset()
-            eval_policy_driver = tf_agents.drivers.dynamic_episode_driver.DynamicEpisodeDriver(
-                latent_eval_env, self.get_latent_policy(), num_episodes=num_eval_episodes,
-                observers=[] if not render else [lambda _: eval_env.render(mode='human')])
-
-        eval_policy_driver.observers.append(eval_avg_rewards)
-        try:
-            eval_policy_driver.run()
-        except Exception as e:
-            tf.print("NaN values occurred in the environment while the driver was running:")
-            tf.print(e)
-            eval_avg_rewards.result = lambda: -1. * np.inf
-
-        eval_policy_driver.observers.remove(eval_avg_rewards)
-
-        if train_summary_writer is not None:
-            with train_summary_writer.as_default():
-                tf.summary.scalar('policy_evaluation_avg_rewards', eval_avg_rewards.result(), step=global_step)
-        tf.print('eval policy', eval_avg_rewards.result())
-
-        return eval_avg_rewards.result()
-
 
 def load(tf_model_path: str, full_optimization: bool = False,
          step: Optional[int] = None) -> VariationalActionDiscretizer:
@@ -1238,3 +1116,82 @@ def load(tf_model_path: str, full_optimization: bool = False,
             checkpoint.restore(checkpoint_path)
 
     return model
+
+
+class VariationalTFEnvironmentDiscretizer(tf_environment.TFEnvironment):
+
+    def __init__(
+            self,
+            variational_action_discretizer,
+            tf_env: tf_environment.TFEnvironment,
+            labeling_function: Callable[[tf.Tensor], tf.Tensor],
+            deterministic_embedding_functions: bool = True
+    ):
+        action_spec = specs.BoundedTensorSpec(
+            shape=(),
+            dtype=tf.int32,
+            minimum=0,
+            maximum=variational_action_discretizer.number_of_discrete_actions - 1,
+            name='action'
+        )
+        observation_spec = specs.BoundedTensorSpec(
+            shape=(variational_action_discretizer.latent_state_size,),
+            dtype=tf.int32,
+            minimum=0,
+            maximum=1,
+            name='observation'
+        )
+        time_step_spec = ts.time_step_spec(observation_spec)
+        super(VariationalTFEnvironmentDiscretizer, self).__init__(
+            time_step_spec=time_step_spec,
+            action_spec=action_spec,
+            batch_size=tf_env.batch_size
+        )
+
+        self.embed_observation = variational_action_discretizer.binary_encode_state
+        self.embed_latent_action = (
+            lambda latent_state, latent_action: variational_action_discretizer.decode_action(
+                latent_state, latent_action, disable_mixture_distribution=True))
+        self.tf_env = tf_env
+        self._labeling_function = labeling_function
+        self.observation_shape, self.action_shape, self.reward_shape = [
+            variational_action_discretizer.state_shape,
+            variational_action_discretizer.action_shape,
+            variational_action_discretizer.reward_shape
+        ]
+        self._current_latent_state = None
+        if deterministic_embedding_functions:
+            self._get_embedding = lambda distribution: distribution.mode()
+        else:
+            self._get_embedding = lambda distribution: distribution.sample()
+        self.deterministic_embedding_functions = deterministic_embedding_functions
+        self.labeling_function = dataset_generator.ergodic_batched_labeling_function(labeling_function)
+
+    def _current_time_step(self):
+        if self._current_latent_state is None:
+            return self.reset()
+        time_step = self.tf_env.current_time_step()
+        return trajectories.time_step.TimeStep(
+            time_step.step_type, time_step.reward, time_step.discount, self._current_latent_state)
+
+    def _step(self, action):
+        real_action = self._get_embedding(
+            self.embed_latent_action(
+                tf.cast(self._current_latent_state, tf.float32),
+                tf.one_hot(indices=action, depth=self.action_spec().maximum + 1, axis=-1, dtype=tf.float32)))
+
+        time_step = self.tf_env.step(real_action)
+        label = self.labeling_function(time_step.observation)
+
+        latent_state = self._get_embedding(self.embed_observation(time_step.observation, label))
+        self._current_latent_state = latent_state
+        return self._current_time_step()
+
+    def _reset(self):
+        time_step = self.tf_env.reset()
+        label = self.labeling_function(time_step.observation)
+        self._current_latent_state = self._get_embedding(self.embed_observation(time_step.observation, label))
+        return self._current_time_step()
+
+    def render(self):
+        return self.tf_env.render()
