@@ -12,14 +12,14 @@ from variational_mdp import VariationalMarkovDecisionProcess, EvaluationCriterio
 
 
 class WassersteinRegularizerScaleFactor(NamedTuple):
-    global_scaling: Optional[float] = None
-    global_gradient_penalty_multiplier: Optional[float] = None
-    stationary_scaling: Optional[float] = None
-    stationary_gradient_penalty_multiplier: Optional[float] = None
-    local_transition_loss_scaling: Optional[float] = None
-    local_transition_loss_gradient_penalty_multiplier: Optional[float] = None
-    action_successor_scaling: Optional[float] = None
-    action_successor_gradient_penalty_multiplier: Optional[float] = None
+    global_scaling: Optional[Union[float, tf.float32, tf.float64]] = None
+    global_gradient_penalty_multiplier: Optional[float, tf.float32, tf.float64] = None
+    stationary_scaling: Optional[float, tf.float32, tf.float64] = None
+    stationary_gradient_penalty_multiplier: Optional[float, tf.float32, tf.float64] = None
+    local_transition_loss_scaling: Optional[float, tf.float32, tf.float64] = None
+    local_transition_loss_gradient_penalty_multiplier: Optional[float, tf.float32, tf.float64] = None
+    action_successor_scaling: Optional[float, tf.float32, tf.float64] = None
+    action_successor_gradient_penalty_multiplier: Optional[float, tf.float32, tf.float64] = None
 
     values = namedtuple('WassersteinRegularizer', ['scaling', 'gradient_penalty_multiplier'])
 
@@ -85,8 +85,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             time_stacked_states: bool = False,
             state_encoder_temperature: float = 2. / 3,
             state_prior_temperature: float = 1. / 2,
-            action_encoder_temperature: Optional[float] = None,
-            latent_policy_temperature: Optional[float] = None,
+            action_encoder_temperature: Optional[float, tf.float32, tf.float64] = None,
+            latent_policy_temperature: Optional[float, tf.float32, tf.float64] = None,
             wasserstein_regularizer_scale_factor: WassersteinRegularizerScaleFactor = WassersteinRegularizerScaleFactor(
                 global_scaling=1., global_gradient_penalty_multiplier=1.),
             encoder_temperature_decay_rate: float = 0.,
@@ -97,11 +97,12 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             wasserstein_regularizer_optimizer: Optional = None,
             evaluation_window_size: int = 1,
             evaluation_criterion: EvaluationCriterion = EvaluationCriterion.MAX,
-            importance_sampling_exponent: Optional[float] = 1.,
-            importance_sampling_exponent_growth_rate: Optional[float] = 0.,
+            importance_sampling_exponent: Optional[float, tf.float32, tf.float64] = 1.,
+            importance_sampling_exponent_growth_rate: Optional[float, tf.float32, tf.float64] = 0.,
             time_stacked_lstm_units: int = 128,
             reward_bounds: Optional[Tuple[float, float]] = None,
             steady_state_logits: Optional[tf.Variable] = None,
+            marginal_encoder_sampling: bool = False,
     ):
         super(WassersteinMarkovDecisionProcess, self).__init__(
             state_shape=state_shape, action_shape=action_shape, reward_shape=reward_shape, label_shape=label_shape,
@@ -124,6 +125,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self._autoencoder_optimizer = generative_optimizer
         self._wasserstein_regularizer_optimizer = wasserstein_regularizer_optimizer
         self.action_discretizer = discretize_action_space
+        self.marginal_encoder_sampling = marginal_encoder_sampling
 
         if not self.action_discretizer:
             assert len(action_shape) == 1
@@ -498,10 +500,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             temperature: Optional[Union[float, tf.float32, tf.float64]] = 0.
     ) -> tfd.Distribution:
         logits = self.action_encoder_network([latent_state, action])
-        if temperature > 0:
-            return tfd.RelaxedOneHotCategorical(logits=logits, temperature=temperature)
+        if self.action_discretizer:
+            if temperature > 0:
+                return tfd.RelaxedOneHotCategorical(logits=logits, temperature=temperature)
+            else:
+                return tfd.OneHotCategorical(logits=logits)
         else:
-            return tfd.OneHotCategorical(logits=logits)
+            return tfd.Deterministic(loc=action)
 
     def decode(self, latent_state: tf.Tensor) -> tfd.Distribution:
         if self.time_stacked_states:
@@ -514,7 +519,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             latent_state: tf.Tensor,
             latent_action: tf.Tensor,
     ) -> tfd.Distribution:
-        return tfd.Deterministic(loc=self.action_reconstruction_network([latent_state, latent_action]))
+        if self.action_discretizer:
+            return tfd.Deterministic(loc=self.action_reconstruction_network([latent_state, latent_action]))
+        else:
+            return tfd.Deterministic(loc=latent_action)
 
     def relaxed_latent_transition(
             self, latent_state: tf.Tensor, latent_action: tf.Tensor, next_label: Optional[tf.Tensor] = None,
@@ -614,12 +622,210 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         else:
             return tfd.OneHotCategorical(logits=self.latent_steady_state_logits)
 
+    def marginal_state_encoder_distribution(
+            self,
+            states: tf.Tensor,
+            labels: tf.Tensor,
+            temperature: Union[float, tf.float32, tf.float64] = 1e-5,
+            reparameterize: bool = True
+    ) -> tfd.Distribution:
+        logits = self.state_encoder_network(states)
+        logits = tf.concat([(labels * 2. - 1.) * 10., logits], axis=-1)
+        batch_size = tf.shape(logits)[0]
+        return tfd.MixtureSameFamily(
+            mixture_distribution=tfd.Categorical(
+                logits=tf.ones(shape=(batch_size, batch_size))),
+            components_distribution=tfd.Independent(
+                tfd.RelaxedBernoulli(
+                    logits=tf.tile(tf.expand_dims(logits, axis=0), [batch_size, 1, 1]),
+                    temperature=temperature,
+                ) if temperature > 0. else
+                tfd.Bernoulli(
+                    logits=tf.tile(tf.expand_dims(logits, axis=0), [batch_size, 1, 1]),
+                ), reinterpreted_batch_ndims=1),
+            reparameterize=reparameterize and temperature > 0.)
+
+    @tf.function
+    def __call__(
+            self,
+            state: tf.Tensor,
+            label: tf.Tensor,
+            action: tf.Tensor,
+            reward: tf.Tensor,
+            next_state: tf.Tensor,
+            next_label: tf.Tensor,
+            sample_key: Optional[tf.Tensor] = None,
+            *args, **kwargs
+    ):
+        batch_size = tf.shape(state)[0]
+        # sampling
+        # encoders
+        latent_state_distribution = self.relaxed_encoding(state, self.state_encoder_temperature)
+        latent_state = tf.concat([label, latent_state_distribution.sample()], axis=-1)
+        next_latent_state = tf.concat([
+            next_label, self.relaxed_encoding(next_state, self.state_encoder_temperature).sample()
+        ], axis=-1)
+        latent_action = self.encode_action(latent_state, action, self.action_encoder_temperature).sample()
+
+        # latent steady-state distribution
+        stationary_latent_state, stationary_latent_action = tfd.JointDistributionSequential([
+            self.latent_steady_state_distribution(
+                temperature=self.encoder_temperature),
+            lambda _latent_state: self.relaxed_latent_policy(
+                _latent_state,
+                temperature=self.latent_policy_temperature),
+        ]).sample(sample_shape=batch_size)
+        next_stationary_latent_state = tf.concat(
+            self.relaxed_latent_transition(
+                stationary_latent_state,
+                stationary_latent_action,
+                temperature=self.state_prior_temperature).sample(),
+            axis=-1)
+
+        # next latent state from the latent transition function
+        next_latent_state_prime = tf.concat(
+            self.relaxed_latent_transition(
+                latent_state,
+                latent_action,
+                temperature=self.state_prior_temperature
+            ).sample(),
+            axis=-1)
+
+        # reconstruction loss
+        # the reward as well as the state and action reconstruction functions are deterministic
+        _reward, _action, _next_state = tfd.JointDistributionSequential([
+            self.reward_distribution(latent_state, latent_action),
+            self.decode_action(latent_state, latent_action),
+            self.decode(next_latent_state)
+        ]).sample()
+        reconstruction_loss = (
+                tf.norm(reward - _reward, ord=1, axis=1) +  # local reward loss
+                tf.norm(action - _action, ord=1, axis=1) +
+                tf.norm(next_state - _next_state, ord=1, axis=1))
+
+        # Wasserstein regularizers
+        steady_state_regularizer = (
+                self.steady_state_lipschitz_network(next_latent_state_prime) -
+                self.steady_state_lipschitz_network(next_stationary_latent_state))
+        local_transition_loss_regularizer = (
+                self.transition_loss_lipschitz_network([state, action, next_latent_state]) -
+                self.transition_loss_lipschitz_network([state, action, next_latent_state_prime]))
+
+        if not self.marginal_encoder_sampling:
+            _latent_action = self.encode_action(stationary_latent_state, action).sample()
+            action_successor_regularizer = (
+                    self.action_successor_lipschitz_network(
+                        [stationary_latent_state,
+                         _latent_action,
+                         next_latent_state]
+                    ) * latent_state_distribution.prob(stationary_latent_state) /
+                    self.marginal_state_encoder_distribution(
+                        states=tf.concat([state, next_state], axis=0),
+                        labels=tf.concat([label, next_label], axis=0),
+                        temperature=self.state_encoder_temperature,
+                        reparameterize=False
+                    ).prob(stationary_latent_state) -
+                    self.action_successor_lipschitz_network([
+                        stationary_latent_state,
+                        stationary_latent_action,
+                        next_stationary_latent_state]))
+            action_successor_gradient_penalty = self.compute_gradient_penalty(
+                x=tf.concat([_latent_action, next_latent_state], axis=1),
+                y=tf.concat([stationary_latent_action, next_stationary_latent_state], axis=1),
+                lipschitz_function=lambda _x: self.action_successor_lipschitz_network(
+                    [stationary_latent_state,
+                     _x[:, :self.number_of_discrete_actions, ...],
+                     _x[:, self.number_of_discrete_actions:, ...]]))
+        else:
+            _action_successor_regularizers = self.marginal_encoder_wasserstein_action_successor_regularizer(
+                state, label, action, next_state, next_label, latent_state_distribution, next_latent_state)
+            action_successor_regularizer = _action_successor_regularizers['regularizer']
+            action_successor_gradient_penalty = _action_successor_regularizers['gradient_penalty']
+
+        wasserstein_regularizer = (
+                steady_state_regularizer +
+                local_transition_loss_regularizer +
+                action_successor_regularizer)
+
+        # Lipschitz constraints
+        gradient_penalty = self.compute_gradient_penalty(
+            x=next_latent_state_prime,
+            y=next_stationary_latent_state,
+            lipschitz_function=self.steady_state_lipschitz_network
+        ) + self.compute_gradient_penalty(
+            x=next_latent_state,
+            y=next_latent_state_prime,
+            lipschitz_function=lambda _x: self.transition_loss_lipschitz_network([state, action, _x])
+        ) + action_successor_gradient_penalty
+
+        return {
+            'reconstruction_loss': reconstruction_loss,
+            'wasserstein_regularizer': wasserstein_regularizer,
+            'gradient_penalty': gradient_penalty
+        }
+
+    @tf.function
+    def compute_gradient_penalty(
+            self,
+            x: tf.Tensor,
+            y: tf.Tensor,
+            lipschitz_function: Callable[[tf.Tensor], tf.Tensor],
+    ):
+        noise = tf.random.uniform(shape=(tf.shape(x)[0], 1), minval=0., maxval=1.)
+        straight_lines = noise * x + (1. - noise) * y
+        gradients = tf.gradients(lipschitz_function(straight_lines), straight_lines)[0]
+        return tf.square(tf.norm(gradients, ord=2, axis=1) - 1.)
+
+    @tf.function
+    def marginal_encoder_wasserstein_action_successor_regularizer(
+            self,
+            state: tf.Tensor,
+            label: tf.Tensor,
+            action: tf.Tensor,
+            next_state: tf.Tensor,
+            next_label: tf.Tensor,
+            latent_state_distribution: tfd.Distribution,
+            next_latent_state: tf.Tensor,
+    ):
+        marginal_state_encoder = self.marginal_state_encoder_distribution(
+            states=tf.concat([state, next_state], axis=0),
+            labels=tf.concat([label, next_label], axis=0),
+            temperature=self.state_encoder_temperature,
+            reparameterize=True)
+        latent_state = marginal_state_encoder.sample(sample_shape=tf.shape(state)[0])
+        latent_action = self.encode_action(latent_state, action, temperature=self.action_encoder_temperature)
+        regularizer = (
+                self.action_successor_lipschitz_network(latent_state, latent_action, next_latent_state) *
+                latent_state_distribution.prob(latent_state) /
+                marginal_state_encoder.prob(latent_state))
+        x = tf.concat([latent_action, next_latent_state], axis=1)
+
+        latent_action = self.relaxed_latent_policy(latent_state, temperature=self.latent_policy_temperature).sample()
+        next_latent_state = tf.concat(
+            self.relaxed_latent_transition(
+                latent_state,
+                latent_action,
+                temperature=self.state_prior_temperature
+            ).sample(),
+            axis=-1)
+        regularizer -= self.action_successor_lipschitz_network(latent_state, latent_action, next_latent_state)
+        y = tf.concat([latent_action, next_latent_state], axis=1)
+
+        return {
+            'regularizer': regularizer,
+            'gradient_penalty': self.compute_gradient_penalty(
+                x, y, lipschitz_function=lambda _x: self.action_successor_lipschitz_network(
+                    [latent_state,
+                     _x[:, :self.number_of_discrete_actions, ...],
+                     _x[:, self.number_of_discrete_actions:, ...]]), )
+        }
+
     @property
     def state_encoder_temperature(self):
         return self.encoder_temperature
 
     @property
-    def state_encoder_prior_temperature(self):
+    def state_prior_temperature(self):
         return self.prior_temperature
 
     @property
