@@ -696,13 +696,13 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
             return self._full_optimization_call(state, label, action, reward, next_state, next_label, sample_key)
 
         if self.relaxed_state_encoding:
-            logistic_latent_state = self.relaxed_encoding(state, self._state_vae.encoder_temperature).sample()
+            logistic_latent_state = self.relaxed_state_encoding(state, self._state_vae.encoder_temperature).sample()
             latent_state = tf.concat([label, tf.sigmoid(logistic_latent_state)], axis=-1)
-            next_latent_state_no_label = self._state_vae.relaxed_encoding(
+            next_latent_state_no_label = self._state_vae.relaxed_state_encoding(
                 next_state, self._state_vae.encoder_temperature).sample()
         else:
-            latent_state = tf.concat([label, tf.cast(self.binary_encode(state).sample(), tf.float32)])
-            next_latent_state_no_label = tf.cast(self.binary_encode(next_state).sample())
+            latent_state = tf.concat([label, tf.cast(self.binary_encode_state(state).sample(), tf.float32)])
+            next_latent_state_no_label = tf.cast(self.binary_encode_state(next_state).sample())
         q = self.relaxed_action_encoding(latent_state, action, self.encoder_temperature)
         p = self.relaxed_latent_policy(latent_state, self.prior_temperature)
         log_latent_action = q.sample()
@@ -794,8 +794,8 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
             sample_key: Optional[tf.Tensor] = None
     ):
         # sampling from encoder distributions
-        latent_state_encoder = self._state_vae.relaxed_encoding(state, self._state_vae.encoder_temperature)
-        next_latent_state_encoder = self._state_vae.relaxed_encoding(next_state, self._state_vae.encoder_temperature)
+        latent_state_encoder = self._state_vae.relaxed_state_encoding(state, self._state_vae.encoder_temperature)
+        next_latent_state_encoder = self._state_vae.relaxed_state_encoding(next_state, self._state_vae.encoder_temperature)
         latent_state = tf.concat([label, tf.sigmoid(latent_state_encoder.sample())], axis=-1)
         next_logistic_latent_state_no_label = next_latent_state_encoder.sample()
         latent_action_encoder = self.relaxed_action_encoding(latent_state, action, self.encoder_temperature)
@@ -828,7 +828,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
             action_distribution,
             self.reward_distribution(
                 latent_state, log_latent_action, next_latent_state, log_latent_action=True),
-            self.decode(next_latent_state)
+            self.decode_state(next_latent_state)
         ])
 
         distortion = -1. * reconstruction_distribution.log_prob(action, reward, next_state)
@@ -910,8 +910,8 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
             next_state: tf.Tensor,
             next_label: tf.Tensor
     ):
-        latent_distribution = self.binary_encode(state)
-        next_latent_distribution = self.binary_encode(next_state)
+        latent_distribution = self.binary_encode_state(state)
+        next_latent_distribution = self.binary_encode_state(next_state)
         latent_state = tf.concat([label, tf.cast(latent_distribution.sample(), tf.float32)], axis=-1)
         next_latent_state_no_label = tf.cast(next_latent_distribution.sample(), tf.float32)
 
@@ -936,7 +936,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
             self.decode_action(latent_state, tf.math.log(latent_action + epsilon), log_latent_action=True),
             self.reward_distribution(
                 latent_state, tf.math.log(latent_action + epsilon), next_latent_state, log_latent_action=True),
-            self.decode(next_latent_state)
+            self.decode_state(next_latent_state)
         ])
 
         distortion = -1. * reconstruction_distribution.log_prob(action, reward, next_state)
@@ -951,7 +951,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
 
     def mean_latent_bits_used(self, inputs, eps=1e-3, deterministic=True):
         state, label, action, reward, next_state, next_label = inputs[:6]
-        latent_state = tf.cast(self.binary_encode(state, label).sample(), tf.float32)
+        latent_state = tf.cast(self.binary_encode_state(state, label).sample(), tf.float32)
         mean = tf.reduce_mean(self.discrete_action_encoding(latent_state, action).probs_parameter(), axis=0)
         check = lambda x: 1 if 1 - eps > x > eps else 0
         mean_bits_used = tf.reduce_sum(tf.map_fn(check, mean), axis=0).numpy()
@@ -1000,7 +1000,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
                     batch_size=tf_env.batch_size
                 )
 
-                self.embed_observation = variational_action_discretizer.binary_encode
+                self.embed_observation = variational_action_discretizer.binary_encode_state
                 self.embed_latent_action = (
                     lambda latent_state, latent_action: variational_action_discretizer.decode_action(
                         latent_state, latent_action, disable_mixture_distribution=True))

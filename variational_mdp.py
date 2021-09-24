@@ -511,7 +511,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
         self._optimizer = None
         return optimizer
 
-    def relaxed_encoding(
+    def relaxed_state_encoding(
             self, state: tf.Tensor, temperature: float, label: Optional[tf.Tensor] = None
     ) -> tfd.Distribution:
         """
@@ -530,7 +530,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 scale=1. / temperature,
                 allow_nan_stats=False, ))
 
-    def binary_encode(self, state: tf.Tensor, label: Optional[tf.Tensor] = None) -> tfd.Distribution:
+    def binary_encode_state(self, state: tf.Tensor, label: Optional[tf.Tensor] = None) -> tfd.Distribution:
         """
         Embed the input state and its label (if given) into a Bernoulli probability distribution over the binary
         representation of the latent state space.
@@ -543,7 +543,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 logits=logits,
                 allow_nan_stats=False))
 
-    def decode(self, latent_state: tf.Tensor) -> tfd.Distribution:
+    def decode_state(self, latent_state: tf.Tensor) -> tfd.Distribution:
         """
         Decode a binary latent state to a probability distribution over states of the original MDP.
         """
@@ -746,7 +746,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
         if label is not None:
             label = tf.cast(label, dtype=tf.float32)
 
-        return self.binary_encode(state, label).mode()
+        return self.binary_encode_state(state, label).mode()
 
     def action_embedding_function(
             self,
@@ -790,8 +790,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
             return self.latent_policy_training(state, label, action, reward, next_state, next_label)
 
         # Logistic samples
-        state_encoder_distribution = self.relaxed_encoding(state, temperature=self.encoder_temperature)
-        next_state_encoder_distribution = self.relaxed_encoding(next_state, temperature=self.encoder_temperature)
+        state_encoder_distribution = self.relaxed_state_encoding(state, temperature=self.encoder_temperature)
+        next_state_encoder_distribution = self.relaxed_state_encoding(next_state, temperature=self.encoder_temperature)
 
         # Sigmoid of Logistic samples with location alpha/t and scale 1/t gives Relaxed Bernoulli
         # samples of location alpha and temperature t
@@ -817,14 +817,14 @@ class VariationalMarkovDecisionProcess(tf.Module):
             reconstruction_distribution = tfd.JointDistributionSequential([
                 self.discrete_latent_policy(latent_state),
                 lambda _action: self.reward_distribution(latent_state, _action, next_latent_state),
-                self.decode(next_latent_state)
+                self.decode_state(next_latent_state)
             ])
             distortion = -1. * reconstruction_distribution.log_prob(action, reward, next_state)
         else:
             # log P(r, s' | z, a, z') = log P(r | z, a, z') + log P(s' | z')
             reconstruction_distribution = tfd.JointDistributionSequential([
                 self.reward_distribution(latent_state, action, next_latent_state),
-                self.decode(next_latent_state)
+                self.decode_state(next_latent_state)
             ])
             distortion = -1. * reconstruction_distribution.log_prob(reward, next_state)
 
@@ -934,7 +934,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             next_state: tf.Tensor,
             next_label: tf.Tensor
     ):
-        latent_distribution = self.relaxed_encoding(state, label, temperature=self.encoder_temperature)
+        latent_distribution = self.relaxed_state_encoding(state, label, temperature=self.encoder_temperature)
         latent_state = latent_distribution.sample()
 
         latent_policy_distribution = self.discrete_latent_policy(latent_state)
@@ -957,8 +957,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
         Evaluate the ELBO by making use of a discrete latent space.
         """
 
-        latent_distribution = self.binary_encode(state)
-        next_latent_distribution = self.binary_encode(next_state)
+        latent_distribution = self.binary_encode_state(state)
+        next_latent_distribution = self.binary_encode_state(next_state)
         latent_state = tf.concat([label, tf.cast(latent_distribution.sample(), tf.float32)], axis=-1)
         next_latent_state_no_label = tf.cast(next_latent_distribution.sample(), tf.float32)
 
@@ -978,14 +978,14 @@ class VariationalMarkovDecisionProcess(tf.Module):
             reconstruction_distribution = tfd.JointDistributionSequential([
                 self.discrete_latent_policy(latent_state),
                 lambda _action: self.reward_distribution(latent_state, _action, next_latent_state),
-                self.decode(next_latent_state)
+                self.decode_state(next_latent_state)
             ])
             distortion = -1. * reconstruction_distribution.log_prob(action, reward, next_state)
         else:
             # log P(r, s' | z, a, z') = log P(r | z, a, z') + log P(s' | z')
             reconstruction_distribution = tfd.JointDistributionSequential([
                 self.reward_distribution(latent_state, action, next_latent_state),
-                self.decode(next_latent_state)
+                self.decode_state(next_latent_state)
             ])
             distortion = -1. * reconstruction_distribution.log_prob(reward, next_state)
 
@@ -1005,9 +1005,9 @@ class VariationalMarkovDecisionProcess(tf.Module):
         mean_bits_used = 0
         s, l = inputs[:2]
         if deterministic:
-            mean = tf.reduce_mean(tf.cast(self.binary_encode(s, l).mode(), dtype=tf.float32), axis=0)
+            mean = tf.reduce_mean(tf.cast(self.binary_encode_state(s, l).mode(), dtype=tf.float32), axis=0)
         else:
-            mean = tf.reduce_mean(self.binary_encode(s, l).mean(), axis=0)
+            mean = tf.reduce_mean(self.binary_encode_state(s, l).mean(), axis=0)
         check = lambda x: 1 if 1 - eps > x > eps else 0
         mean_bits_used += tf.reduce_sum(tf.map_fn(check, mean), axis=0).numpy()
         return {'mean_state_bits_used': mean_bits_used}
@@ -2176,7 +2176,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                     batch_size=tf_env.batch_size
                 )
 
-                self.embed_observation = vae_mdp.binary_encode
+                self.embed_observation = vae_mdp.binary_encode_state
                 self.tf_env = tf_env
                 self._labeling_function = labeling_function
                 self.observation_shape, self.action_shape, self.reward_shape = [
