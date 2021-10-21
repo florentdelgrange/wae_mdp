@@ -1539,6 +1539,9 @@ class VariationalMarkovDecisionProcess(tf.Module):
             dataset_iterator=dataset_iterator,
             epsilon_greedy=epsilon_greedy)
 
+    def attach_dataset_iterator(self, dataset_iterator):
+        pass
+
     def train_from_policy(
             self,
             policy: tf_agents.policies.tf_policy.TFPolicy,
@@ -1717,6 +1720,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
         replay_buffer_num_frames = dataset_components.replay_buffer_num_frames_fn
         manager = dataset_components.wrapped_manager
         dataset_iterator = dataset_components.dataset_iterator
+        self.attach_dataset_iterator(dataset_iterator)
         dataset = dataset_components.dataset
 
         if replay_buffer_num_frames() < batch_size:
