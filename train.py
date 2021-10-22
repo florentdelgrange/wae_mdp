@@ -22,24 +22,28 @@ import hyperparameter_search
 import policies
 import policies.saved_policy
 import reinforcement_learning
-import variational_action_discretizer
 import variational_mdp
+import variational_action_discretizer
+import wasserstein_mdp
 import reinforcement_learning.environments
 
 
-def generate_network_components(params, name=''):
+def generate_network_components(params, name='', wasserstein_networks=False):
     activation = getattr(tf.nn, params["activation"])
     component_names = ['encoder', 'transition', 'label_transition', 'reward', 'decoder', 'discrete_policy',
                        'state_encoder_pre_processing', 'state_decoder_pre_processing']
+    if wasserstein_networks:
+        component_names += ['steady_state', 'local_loss', 'action_successor']
     network_components = []
 
     for component_name in component_names:
-        x = Sequential(name="{}_{}_network_body".format(name, component_name))
+        x = Sequential(name="{}{}_network_body".format(name + '_', component_name))
         for i, units in enumerate(params[component_name + '_layers']):
-            x.add(Dense(units, activation=activation, name="{}_{}_{}".format(name, component_name, i)))
+            x.add(Dense(units, activation=activation, name="{}{}_{}".format(name+'_', component_name, i)))
         network_components.append(x)
 
-    return namedtuple("VAEArchitecture", component_names)(*network_components)
+    return namedtuple("{}AEArchitecture".format('V' if not wasserstein_networks else 'W'),
+                      component_names)(*network_components)
 
 
 def generate_vae_name(params):
@@ -128,6 +132,78 @@ def generate_vae_name(params):
 
     return vae_name
 
+
+def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.WassersteinRegularizerScaleFactor):
+    base_model_name = ''
+
+    if params['policy_path'][-1] == os.path.sep:
+        params['policy_path'] = params['policy_path'][:-1]
+
+    wae_name = 'vae_LS{}_TD{:.2f}-{:.2f}_activation={}_lr={:g}_seed={:d}' \
+               '_WSR={:g}_TLR={:g}_WASR={:g}' \
+               '_SGP={:g}_TLGP={:g}_ASGP={:g}_marginal_encoder_sampling={}'.format(
+        params['latent_size'],
+        params['relaxed_state_encoder_temperature'],
+        params['relaxed_state_prior_temperature'],
+        params['activation'],
+        params['learning_rate'],
+        int(params['seed']),
+        wasserstein_regularizer.steady_state_scaling,
+        wasserstein_regularizer.local_transition_loss_scaling,
+        wasserstein_regularizer.action_successor_scaling,
+        wasserstein_regularizer.steady_state_gradient_penalty_multiplier,
+        wasserstein_regularizer.local_transition_loss_gradient_penalty_multiplier,
+        wasserstein_regularizer.action_successor_gradient_penalty_multiplier,
+        params['marginal_encoder_sampling'])
+    if params['action_discretizer']:
+        if wae_name != '':
+            base_model_name = wae_name
+        wae_name = os.path.join(
+            base_model_name,
+            os.path.split(params['policy_path'])[-1],
+            'action_discretizer',
+            'LA{}_TD{:.2f}-{:.2f}'.format(
+                params['number_of_discrete_actions'],
+                params['encoder_temperature'],
+                params['prior_temperature'])
+        )
+
+    if params['prioritized_experience_replay']:
+        wae_name += '_PER-P_exp={:g}-WIS_exponent={:g}-WIS_growth={:g}'.format(
+            params['priority_exponent'],
+            params['importance_sampling_exponent'],
+            params['importance_sampling_exponent_growth_rate'])
+        if params['buckets_based_priority']:
+            wae_name += '_buckets_based'
+        else:
+            wae_name += '_loss_based'
+    if params['max_state_decoder_variance'] > 0:
+        wae_name += '_max_state_decoder_variance={:g}'.format(params['max_state_decoder_variance'])
+    if params['epsilon_greedy'] > 0:
+        wae_name += '_epsilon_greedy={:g}-decay={:g}'.format(params['epsilon_greedy'],
+                                                             params['epsilon_greedy_decay_rate'])
+    if params['marginal_entropy_regularizer_ratio'] > 0:
+        wae_name += '_marginal_state_entropy_ratio={:g}'.format(params['marginal_entropy_regularizer_ratio'])
+    if params['time_stacked_states'] > 1:
+        wae_name += '_time_stacked_states={}'.format(params['time_stacked_states'])
+
+    additional_parameters = [
+        'one_output_per_action',
+        # 'full_vae_optimization',
+        # 'relaxed_state_encoding',
+        'full_covariance',
+        'latent_policy',
+        'decompose_training',
+    ]
+    nb_additional_params = sum(
+        map(lambda x: params[x], additional_parameters))
+    if nb_additional_params > 0:
+        wae_name += ('_params={}' + '-{}' * (nb_additional_params - 1)).format(
+            *filter(lambda x: params[x], additional_parameters))
+    if not params['label_transition_function']:
+        wae_name += '_no_label_net'
+
+    return wae_name
 
 def get_environment_specs(
         environment_suite,
@@ -340,17 +416,45 @@ def main(argv):
             vae.entropy_regularizer_decay_rate = params['entropy_regularizer_decay_rate']
         return vae
 
-    models = [build_vae_model()]
-    if params['action_discretizer']:
-        if not params['decompose_training']:
-            models[0] = build_action_discretizer_vae_model(models[0], full_optimization=params['full_vae_optimization'])
+    if not params['wae']:
+        models = [build_vae_model()]
+        if params['action_discretizer']:
+            if not params['decompose_training']:
+                models[0] = build_action_discretizer_vae_model(models[0], full_optimization=params['full_vae_optimization'])
+            else:
+                models.append(build_action_discretizer_vae_model(models[0], full_optimization=False))
         else:
-            models.append(build_action_discretizer_vae_model(models[0], full_optimization=False))
-    else:
-        if params['decompose_training']:
-            models.append(models[0])
+            if params['decompose_training']:
+                models.append(models[0])
 
-    optimizer = getattr(tf.optimizers, params['optimizer'])(learning_rate=params['learning_rate'])
+        optimizer = getattr(tf.optimizers, params['optimizer'])(learning_rate=params['learning_rate'])
+    else:
+        wasserstein_regularizer_scale_factor = wasserstein_mdp.WassersteinRegularizerScaleFactor(
+            global_scaling=params['global_wasserstein_regularizer_scale_factor'],
+            global_gradient_penalty_multiplier=params["global_gradient_penalty_scale_factor"],
+            steady_state_scaling=params["steady_state_wasserstein_regularizer_scale_factor"],
+            steady_state_gradient_penalty_multiplier=params["steady_state_gradient_penalty_multiplier"],
+            local_transition_loss_scaling=params["local_transition_loss_regularizer_scale_factor"],
+            local_transition_loss_gradient_penalty_multiplier=params[
+                "local_transition_loss_gradient_penalty_multiplier"],
+            action_successor_scaling=params["action_successor_gradient_penalty_multiplier"],
+            action_successor_gradient_penalty_multiplier=params["action_successor_gradient_penalty_multiplier"]
+        )
+        wasserstein_optimizer = getattr(tf.optimizers, params['optimizer'])(learning_rate=params['learning_rate'])
+        network = generate_network_components(params, wasserstein_networks=True)
+        action_network = generate_network_components(params, name='action')
+        model = wasserstein_mdp.WassersteinMarkovDecisionProcess(
+            state_shape=state_shape, action_shape=action_shape, reward_shape=reward_shape, label_shape=label_shape,
+            discretize_action_space=params['action_discretizer'],
+            state_encoder_network=network.encoder,
+            action_encoder_network=action_network.encoder,
+            action_decoder_network=action_network.decoder,
+            transition_network=network.transition,
+            reward_network=network.reward,
+            decoder_network=network.decoder,
+            latent_policy_network=network.discrete_policy,
+
+        )
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
 
     if params['logs']:
@@ -844,6 +948,62 @@ if __name__ == '__main__':
         "generate_videos",
         default=False,
         help="whether to generate videos during the latent policy evaluation or not."
+    )
+    flags.DEFINE_bool(
+        "wae",
+        default=False,
+        help='abstract the environment via a Wasserstein Autoencoder.'
+    ),
+    flags.DEFINE_float(
+        "global_wasserstein_regularizer_scale_factor",
+        default=10.,
+        help='default Wasserstein regularizer scale factor used when the dedicated one is not provided.'
+    ),
+    flags.DEFINE_float(
+        "global_gradient_penalty_scale_factor",
+        default=10.,
+        help='default gradient penalty scale factor used when the dedicated one is not provided.'
+    )
+    flags.DEFINE_float(
+        "steady_state_wasserstein_regularizer_scale_factor",
+        default=None,
+        required=False,
+        help='Scale factor of the Wasserstein regularizer of the steady state distribution.'
+    )
+    flags.DEFINE_float(
+        "steady_state_gradient_penalty_multiplier",
+        default=None,
+        required=False,
+        help="Multiplier of the gradient penalty for the steady-state Lipschitz function."
+    )
+    flags.DEFINE_float(
+        "local_transition_loss_regularizer_scale_factor",
+        default=None,
+        required=False,
+        help='Scale factor of the local loss regularizer.'
+    )
+    flags.DEFINE_float(
+        "local_transition_loss_gradient_penalty_multiplier",
+        default=None,
+        required=False,
+        help="Multiplier of the gradient penalty for the local loss Lipschitz function."
+    )
+    flags.DEFINE_float(
+        "action_successor_wasserstein_regularizer_scale_factor",
+        default=None,
+        required=False,
+        help='Scale factor of the Wasserstein regularizer of the action-successor distribution.'
+    )
+    flags.DEFINE_float(
+        "action_successor_gradient_penalty_multiplier",
+        default=None,
+        required=False,
+        help="Multiplier of the gradient penalty for the action-successor Lipschitz function."
+    )
+    flags.DEFINE_bool(
+        'marginal_encoder_sampling',
+        default=False,
+        help="whether to sample from the marginal encoder to minimize the action-successor regularizer."
     )
     FLAGS = flags.FLAGS
 
