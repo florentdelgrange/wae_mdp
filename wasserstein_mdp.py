@@ -8,6 +8,7 @@ from tensorflow.python.keras.layers import TimeDistributed, LSTM, Dense, Concate
 import tensorflow_probability.python.distributions as tfd
 from tensorflow.python.keras.metrics import Mean, MeanSquaredError
 from tf_agents.environments import tf_environment, tf_py_environment
+from tf_agents.typing.types import Float
 
 import variational_action_discretizer
 from util.io import dataset_generator
@@ -16,31 +17,34 @@ from verification.local_losses import estimate_local_losses_from_samples
 
 
 class WassersteinRegularizerScaleFactor(NamedTuple):
-    global_scaling: Optional[Union[float, tf.float32, tf.float64]] = None
-    global_gradient_penalty_multiplier: Optional[float, tf.float32, tf.float64] = None
-    steady_state_scaling: Optional[float, tf.float32, tf.float64] = None
-    steady_state_gradient_penalty_multiplier: Optional[float, tf.float32, tf.float64] = None
-    local_transition_loss_scaling: Optional[float, tf.float32, tf.float64] = None
-    local_transition_loss_gradient_penalty_multiplier: Optional[float, tf.float32, tf.float64] = None
-    action_successor_scaling: Optional[float, tf.float32, tf.float64] = None
-    action_successor_gradient_penalty_multiplier: Optional[float, tf.float32, tf.float64] = None
+    global_scaling: Optional[Float] = None
+    global_gradient_penalty_multiplier: Optional[Float] = None
+    steady_state_scaling: Optional[Float] = None
+    steady_state_gradient_penalty_multiplier: Optional[Float] = None
+    local_transition_loss_scaling: Optional[Float] = None
+    local_transition_loss_gradient_penalty_multiplier: Optional[Float] = None
+    action_successor_scaling: Optional[Float] = None
+    action_successor_gradient_penalty_multiplier: Optional[Float] = None
 
     values = namedtuple('WassersteinRegularizer', ['scaling', 'gradient_penalty_multiplier'])
 
-    if global_scaling is None and (steady_state_scaling is None or
-                                   local_transition_loss_scaling is None or
-                                   action_successor_scaling is None):
-        raise ValueError("Either a global scaling value or a unique scaling value for"
-                         "each Wasserstein regularizer should be provided.")
+    def sanity_check(self):
+        if self.global_scaling is None and (self.steady_state_scaling is None or
+                                            self.local_transition_loss_scaling is None or
+                                            self.action_successor_scaling is None):
+            raise ValueError("Either a global scaling value or a unique scaling value for"
+                             "each Wasserstein regularizer should be provided.")
 
-    if global_gradient_penalty_multiplier is None and (steady_state_gradient_penalty_multiplier is None or
-                                                       local_transition_loss_gradient_penalty_multiplier is None or
-                                                       action_successor_gradient_penalty_multiplier is None):
-        raise ValueError("Either a global gradient penalty multiplier or a unique multiplier for"
-                         "each Wasserstein regularizer should be provided.")
+        if self.global_gradient_penalty_multiplier is None and (
+                self.steady_state_gradient_penalty_multiplier is None or
+                self.local_transition_loss_gradient_penalty_multiplier is None or
+                self.action_successor_gradient_penalty_multiplier is None):
+            raise ValueError("Either a global gradient penalty multiplier or a unique multiplier for"
+                             "each Wasserstein regularizer should be provided.")
 
     @property
     def stationary(self):
+        self.sanity_check()
         return self.values(
             scaling=self.steady_state_scaling if self.steady_state_scaling is not None else self.global_scaling,
             gradient_penalty_multiplier=(self.steady_state_gradient_penalty_multiplier
@@ -49,6 +53,7 @@ class WassersteinRegularizerScaleFactor(NamedTuple):
 
     @property
     def local_transition_loss(self):
+        self.sanity_check()
         return self.values(
             scaling=(self.local_transition_loss_scaling
                      if self.local_transition_loss_scaling is not None else
@@ -59,6 +64,7 @@ class WassersteinRegularizerScaleFactor(NamedTuple):
 
     @property
     def action_successor_loss(self):
+        self.sanity_check()
         return self.values(
             scaling=(self.action_successor_scaling
                      if self.action_successor_scaling is not None else
@@ -93,20 +99,20 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             time_stacked_states: bool = False,
             state_encoder_temperature: float = 2. / 3,
             state_prior_temperature: float = 1. / 2,
-            action_encoder_temperature: Optional[float, tf.float32, tf.float64] = None,
-            latent_policy_temperature: Optional[float, tf.float32, tf.float64] = None,
+            action_encoder_temperature: Optional[Float] = None,
+            latent_policy_temperature: Optional[Float] = None,
             wasserstein_regularizer_scale_factor: WassersteinRegularizerScaleFactor = WassersteinRegularizerScaleFactor(
                 global_scaling=1., global_gradient_penalty_multiplier=1.),
             encoder_temperature_decay_rate: float = 0.,
             prior_temperature_decay_rate: float = 0.,
             pre_loaded_model: bool = False,
             reset_state_label: bool = True,
-            generative_optimizer: Optional = None,
+            autoencoder_optimizer: Optional = None,
             wasserstein_regularizer_optimizer: Optional = None,
             evaluation_window_size: int = 1,
             evaluation_criterion: EvaluationCriterion = EvaluationCriterion.MAX,
-            importance_sampling_exponent: Optional[float, tf.float32, tf.float64] = 1.,
-            importance_sampling_exponent_growth_rate: Optional[float, tf.float32, tf.float64] = 0.,
+            importance_sampling_exponent: Optional[Float] = 1.,
+            importance_sampling_exponent_growth_rate: Optional[Float] = 0.,
             time_stacked_lstm_units: int = 128,
             reward_bounds: Optional[Tuple[float, float]] = None,
             steady_state_logits: Optional[tf.Variable] = None,
@@ -129,7 +135,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         self.wasserstein_regularizer_scale_factor = wasserstein_regularizer_scale_factor
         self.mixture_components = None
-        self._autoencoder_optimizer = generative_optimizer
+        self._autoencoder_optimizer = autoencoder_optimizer
         self._wasserstein_regularizer_optimizer = wasserstein_regularizer_optimizer
         self.action_discretizer = discretize_action_space
 
@@ -207,6 +213,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.transition_loss_lipschitz_network = transition_loss_lipschitz_network
             self.action_successor_lipschitz_network = action_successor_lipschitz_network
 
+        self.encoder_network = self.state_encoder_network
         self.loss_metrics = {
             'reconstruction_loss': Mean(name='reconstruction_loss'),
             'state_mse': MeanSquaredError(name='state_mse'),
@@ -305,15 +312,15 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             units=self.number_of_discrete_actions,
             activation=None,
             name='latent_policy_exp_one_hot_logits'
-        )(self.latent_policy_network)
+        )(_latent_policy_network)
         return Model(
             inputs=latent_state,
-            outputs=self.latent_policy_network,
+            outputs=_latent_policy_network,
             name='latent_policy_network')
 
     def _initialize_latent_steady_state_logits(self):
         return tf.Variable(
-            initial_value=tf.ones(shape=(self.latent_state_size,)),
+            initial_value=tf.zeros(shape=(self.latent_state_size,)),
             trainable=True,
             name='latent_steady_state_distribution_logits')
 
@@ -394,7 +401,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             latent_action: Input,
             action_decoder_network: Model
     ):
-        action_reconstruction_network = Concatenate('action_reconstruction_input')([
+        action_reconstruction_network = Concatenate(name='action_reconstruction_input')([
             latent_state, latent_action])
         action_reconstruction_network = action_decoder_network(action_reconstruction_network)
         action_reconstruction_network = Dense(
@@ -463,11 +470,12 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         _action_successor_lipschitz_network = Dense(
             units=1,
             activation=None,
-            name='action_successor_lipschitz_network_output')
+            name='action_successor_lipschitz_network_output'
+        )(_action_successor_lipschitz_network)
 
         return Model(
             inputs=[latent_state, latent_action, next_latent_state],
-            outpus=_action_successor_lipschitz_network,
+            outputs=_action_successor_lipschitz_network,
             name='action_successor_lipschitz_network')
 
     def anneal(self):
@@ -483,15 +491,15 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self,
             optimizers: Optional[Union[Tuple, List]] = None,
             autoencoder_optimizer: Optional = None,
-            wasserstein_regularize_optimizer: Optional = None
+            wasserstein_regularizer_optimizer: Optional = None
     ):
-        assert len(optimizers) == 2
         assert optimizers is not None or (
-                autoencoder_optimizer is not None and wasserstein_regularize_optimizer is not None)
+                autoencoder_optimizer is not None and wasserstein_regularizer_optimizer is not None)
         if optimizers is not None:
-            [autoencoder_optimizer, wasserstein_regularize_optimizer] = optimizers
+            assert len(optimizers) == 2
+            autoencoder_optimizer, wasserstein_regularizer_optimizer = optimizers
         self._autoencoder_optimizer = autoencoder_optimizer
-        self._wasserstein_regularizer_optimizer = wasserstein_regularize_optimizer
+        self._wasserstein_regularizer_optimizer = wasserstein_regularizer_optimizer
 
     def detach_optimizer(self):
         autoencoder_optimizer = self._autoencoder_optimizer
@@ -507,7 +515,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self,
             state: tf.Tensor,
             label: Optional[tf.Tensor] = None,
-            temperature: Optional[float, tf.float32, tf.float64] = 0.
+            temperature: Optional[Float] = 0.
     ) -> tfd.Distribution:
         if temperature > 0:
             return self.relaxed_state_encoding(state, label, temperature)
@@ -517,7 +525,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     def relaxed_state_encoding(
             self,
             state: tf.Tensor,
-            temperature: Union[float, tf.float32, tf.float64],
+            temperature: Float,
             label: Optional[tf.Tensor] = None
     ) -> tfd.Distribution:
         logits = self.encoder_network(state)
@@ -532,7 +540,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self,
             latent_state: tf.Tensor,
             action: tf.Tensor,
-            temperature: Optional[Union[float, tf.float32, tf.float64]] = 0.
+            temperature: Optional[Float] = 0.
     ) -> tfd.Distribution:
         logits = self.action_encoder_network([latent_state, action])
         if self.action_discretizer:
@@ -562,7 +570,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
     def relaxed_latent_transition(
             self, latent_state: tf.Tensor, latent_action: tf.Tensor, next_label: Optional[tf.Tensor] = None,
-            temperature: Union[float, tf.float32, tf.float64] = 1e-5
+            temperature: Float = 1e-5
     ) -> tfd.Distribution:
         next_label_logits, next_latent_state_logits = self.transition_network([latent_state, latent_action])
         if next_label is not None:
@@ -635,7 +643,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     def relaxed_latent_policy(
             self,
             latent_state: tf.Tensor,
-            temperature: Union[float, tf.float32, tf.float64] = 1e-5,
+            temperature: Float = 1e-5,
     ) -> tfd.Distribution:
         if temperature > 0:
             return tfd.RelaxedOneHotCategorical(
@@ -662,7 +670,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self,
             states: tf.Tensor,
             labels: tf.Tensor,
-            temperature: Union[float, tf.float32, tf.float64] = 1e-5,
+            temperature: Float = 1e-5,
             reparameterize: bool = True
     ) -> tfd.Distribution:
         logits = self.state_encoder_network(states)
@@ -729,12 +737,12 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         latent_action = self.encode_action(latent_state, action, self.action_encoder_temperature).sample()
 
         # latent steady-state distribution
-        stationary_latent_state, stationary_latent_action = tfd.JointDistributionSequential(
-            [self.latent_steady_state_distribution(temperature=self.encoder_temperature),
-             lambda _latent_state: self.relaxed_latent_policy(
-                 _latent_state,
-                 temperature=self.latent_policy_temperature)]
-        ).sample(sample_shape=batch_size)
+        stationary_latent_state, stationary_latent_action = tfd.JointDistributionSequential([
+            self.latent_steady_state_distribution(temperature=self.encoder_temperature),
+            lambda _latent_state: self.relaxed_latent_policy(
+                _latent_state,
+                temperature=self.latent_policy_temperature)
+        ]).sample(sample_shape=batch_size)
         next_stationary_latent_state = tf.concat(
             self.relaxed_latent_transition(
                 stationary_latent_state,
@@ -743,7 +751,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             axis=-1)
 
         # next latent state from the latent transition function
-        next_latent_state_prime = tf.concat(
+        next_transition_latent_state = tf.concat(
             self.relaxed_latent_transition(
                 latent_state,
                 latent_action,
@@ -765,25 +773,31 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         # Wasserstein regularizers
         steady_state_regularizer = (
-                self.steady_state_lipschitz_network(next_latent_state_prime) -
+                self.steady_state_lipschitz_network(next_transition_latent_state) -
                 self.steady_state_lipschitz_network(next_stationary_latent_state))
         transition_loss_regularizer = (
                 self.transition_loss_lipschitz_network([state, action, next_latent_state]) -
-                self.transition_loss_lipschitz_network([state, action, next_latent_state_prime]))
+                self.transition_loss_lipschitz_network([state, action, next_transition_latent_state]))
 
         _action_successor_regularizers = self.marginal_encoder_wasserstein_action_successor_regularizer(
-            state, label, action, next_state, next_label, latent_state, next_latent_state)
+            state=state,
+            label=label,
+            action=action,
+            next_state=next_state,
+            next_label=next_label,
+            latent_state=latent_state,
+            next_latent_state=next_latent_state)
         action_successor_regularizer = _action_successor_regularizers['regularizer']
         action_successor_gradient_penalty = _action_successor_regularizers['gradient_penalty']
 
         # Lipschitz constraints
         steady_state_gradient_penalty = self.compute_gradient_penalty(
-            x=next_latent_state_prime,
+            x=next_transition_latent_state,
             y=next_stationary_latent_state,
             lipschitz_function=self.steady_state_lipschitz_network)
         transition_loss_gradient_penalty = self.compute_gradient_penalty(
             x=next_latent_state,
-            y=next_latent_state_prime,
+            y=next_transition_latent_state,
             lipschitz_function=lambda _x: self.transition_loss_lipschitz_network([state, action, _x]))
 
         # priority support
@@ -865,21 +879,21 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     latent_state, _latent_action, temperature=self.state_prior_temperature)
             ]).sample()
             regularizer = (
-                is_weights * self.action_successor_lipschitz_network(
-                    [latent_state,
-                     _latent_action,
-                     _next_latent_state]
-                ) * self.relaxed_state_encoding(
-                    state=_state, temperature=self.state_encoder_temperature, label=_label
-                ).prob(latent_state) /
-                self.marginal_state_encoder_distribution(
-                    states=state,
-                    labels=label,
-                    temperature=self.state_encoder_temperature,
-                    reparameterize=False
-                ).prob(latent_state) -
-                self.action_successor_lipschitz_network([
-                    latent_state, latent_action, next_latent_state])
+                    is_weights * self.action_successor_lipschitz_network(
+                [latent_state,
+                 _latent_action,
+                 _next_latent_state]
+            ) * self.relaxed_state_encoding(
+                state=_state, temperature=self.state_encoder_temperature, label=_label
+            ).prob(latent_state) /
+                    self.marginal_state_encoder_distribution(
+                        states=state,
+                        labels=label,
+                        temperature=self.state_encoder_temperature,
+                        reparameterize=False
+                    ).prob(latent_state) -
+                    self.action_successor_lipschitz_network([
+                        latent_state, latent_action, next_latent_state])
             )
             x = tf.concat([_latent_action, _next_latent_state], axis=-1),
             y = tf.concat([latent_action, next_latent_state], axis=-1),
@@ -983,29 +997,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 self.transition_loss_lipschitz_network([state, action, next_latent_state]) -
                 self.transition_loss_lipschitz_network([state, action, next_latent_state_prime]))
 
-        if not self.marginal_encoder_sampling:
-            _latent_action = self.encode_action(stationary_latent_state, action).sample()
-            action_successor_regularizer = (
-                    self.action_successor_lipschitz_network(
-                        [stationary_latent_state,
-                         _latent_action,
-                         next_latent_state]
-                    ) * latent_state_distribution.prob(stationary_latent_state) /
-                    self.marginal_state_encoder_distribution(
-                        states=tf.concat([state, next_state], axis=0),
-                        labels=tf.concat([label, next_label], axis=0),
-                        temperature=0.,
-                        reparameterize=False
-                    ).prob(stationary_latent_state) -
-                    self.action_successor_lipschitz_network([
-                        stationary_latent_state,
-                        stationary_latent_action,
-                        next_stationary_latent_state]))
-        else:
-            _action_successor_regularizers = self.marginal_encoder_wasserstein_action_successor_regularizer(
-                state, label, action, next_state, next_label, latent_state_distribution, next_latent_state,
-                discrete=True)
-            action_successor_regularizer = _action_successor_regularizers['regularizer']
+        _action_successor_regularizers = self.marginal_encoder_wasserstein_action_successor_regularizer(
+            state, label, action, next_state, next_label, latent_state_distribution, next_latent_state,
+            discrete=True)
+        action_successor_regularizer = _action_successor_regularizers['regularizer']
 
         return {
             'reconstruction_loss': reconstruction_loss,

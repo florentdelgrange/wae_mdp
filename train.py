@@ -27,19 +27,24 @@ import variational_action_discretizer
 import wasserstein_mdp
 import reinforcement_learning.environments
 
+FLAGS = flags.FLAGS
+
 
 def generate_network_components(params, name='', wasserstein_networks=False):
     activation = getattr(tf.nn, params["activation"])
     component_names = ['encoder', 'transition', 'label_transition', 'reward', 'decoder', 'discrete_policy',
                        'state_encoder_pre_processing', 'state_decoder_pre_processing']
     if wasserstein_networks:
-        component_names += ['steady_state', 'local_loss', 'action_successor']
+        component_names += ['steady_state', 'local_transition_loss', 'action_successor']
     network_components = []
 
+    if name != '':
+        name += '_'
+
     for component_name in component_names:
-        x = Sequential(name="{}{}_network_body".format(name + '_', component_name))
+        x = Sequential(name="{}{}_network_body".format(name, component_name))
         for i, units in enumerate(params[component_name + '_layers']):
-            x.add(Dense(units, activation=activation, name="{}{}_{}".format(name+'_', component_name, i)))
+            x.add(Dense(units, activation=activation, name="{}{}_{}".format(name, component_name, i)))
         network_components.append(x)
 
     return namedtuple("{}AEArchitecture".format('V' if not wasserstein_networks else 'W'),
@@ -72,8 +77,8 @@ def generate_vae_name(params):
             params['entropy_regularizer_scale_factor_min_value'],
             params['kl_annealing_scale_factor'],
             params['kl_annealing_growth_rate'],
-            params['relaxed_state_encoder_temperature'],
-            params['relaxed_state_prior_temperature'],
+            params['state_encoder_temperature'],
+            params['state_prior_temperature'],
             params['activation'],
             params['learning_rate'],
             int(params['seed']))
@@ -91,8 +96,8 @@ def generate_vae_name(params):
                 params['entropy_regularizer_scale_factor_min_value'],
                 params['kl_annealing_scale_factor'],
                 params['kl_annealing_growth_rate'],
-                params['encoder_temperature'],
-                params['prior_temperature'],
+                params['action_encoder_temperature'],
+                params['latent_policy_temperature'],
             )
         )
     if params['prioritized_experience_replay']:
@@ -143,8 +148,8 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
                '_WSR={:g}_TLR={:g}_WASR={:g}' \
                '_SGP={:g}_TLGP={:g}_ASGP={:g}_marginal_encoder_sampling={}'.format(
         params['latent_size'],
-        params['relaxed_state_encoder_temperature'],
-        params['relaxed_state_prior_temperature'],
+        params['state_encoder_temperature'],
+        params['state_prior_temperature'],
         params['activation'],
         params['learning_rate'],
         int(params['seed']),
@@ -164,8 +169,8 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
             'action_discretizer',
             'LA{}_TD{:.2f}-{:.2f}'.format(
                 params['number_of_discrete_actions'],
-                params['encoder_temperature'],
-                params['prior_temperature'])
+                params['action_encoder_temperature'],
+                params['latent_policy_temperature'])
         )
 
     if params['prioritized_experience_replay']:
@@ -205,6 +210,7 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
 
     return wae_name
 
+
 def get_environment_specs(
         environment_suite,
         environment_name: str,
@@ -231,10 +237,10 @@ def get_environment_specs(
 
     state_shape, action_shape, reward_shape, label_shape = (
         shape if shape != () else (1,) for shape in [
-            environment.observation_spec().shape,
-            environment.action_spec().shape,
-            environment.time_step_spec().reward.shape,
-            label_shape])
+        environment.observation_spec().shape,
+        environment.action_spec().shape,
+        environment.time_step_spec().reward.shape,
+        label_shape])
 
     time_step_spec = tensor_spec.from_spec(environment.time_step_spec())
     if time_stacked_states > 1:
@@ -291,22 +297,22 @@ def main(argv):
     if params['collect_steps_per_iteration'] <= 0:
         params['collect_steps_per_iteration'] = params['batch_size'] // 8
 
-    relaxed_state_encoder_temperature = params['relaxed_state_encoder_temperature']
-    relaxed_state_prior_temperature = params['relaxed_state_prior_temperature']
-    if params['encoder_temperature'] < 0.:
+    state_encoder_temperature = params['state_encoder_temperature']
+    state_prior_temperature = params['state_prior_temperature']
+    if params['action_encoder_temperature'] < 0.:
         if params['action_discretizer']:
-            params['encoder_temperature'] = 1. / (params['number_of_discrete_actions'] - 1)
+            params['action_encoder_temperature'] = 1. / (params['number_of_discrete_actions'] - 1)
         else:
-            params['encoder_temperature'] = 0.99
-    if params['prior_temperature'] < 0.:
+            params['action_encoder_temperature'] = 0.99
+    if params['latent_policy_temperature'] < 0.:
         if params['action_discretizer']:
-            params['prior_temperature'] = params['encoder_temperature'] / 1.5
+            params['latent_policy_temperature'] = params['action_encoder_temperature'] / 1.5
         else:
-            params['prior_temperature'] = 0.95
-    if relaxed_state_encoder_temperature < 0:
-        params['relaxed_state_encoder_temperature'] = params['encoder_temperature']
-    if relaxed_state_prior_temperature < 0:
-        params['relaxed_state_prior_temperature'] = params['prior_temperature']
+            params['latent_policy_temperature'] = 0.95
+    if state_encoder_temperature < 0:
+        params['state_encoder_temperature'] = 2. / 3.
+    if state_prior_temperature < 0:
+        params['state_prior_temperature'] = 1. / 2.
 
     environment_name = params['environment']
 
@@ -358,8 +364,8 @@ def main(argv):
                 time_stacked_states=params['time_stacked_states'] > 1,
                 latent_state_size=latent_state_size,
                 mixture_components=mixture_components,
-                encoder_temperature=relaxed_state_encoder_temperature,
-                prior_temperature=relaxed_state_prior_temperature,
+                encoder_temperature=state_encoder_temperature,
+                prior_temperature=state_prior_temperature,
                 encoder_temperature_decay_rate=params['encoder_temperature_decay_rate'],
                 prior_temperature_decay_rate=params['prior_temperature_decay_rate'],
                 entropy_regularizer_scale_factor=params['entropy_regularizer_scale_factor'],
@@ -376,11 +382,11 @@ def main(argv):
                 importance_sampling_exponent=params['importance_sampling_exponent'],
                 importance_sampling_exponent_growth_rate=params['importance_sampling_exponent_growth_rate'],
                 evaluation_window_size=params['evaluation_window_size'],
-                reward_bounds=reward_bounds,)
+                reward_bounds=reward_bounds, )
         else:
             vae = variational_mdp.load(params['load_vae'])
-            vae.encoder_temperature = relaxed_state_encoder_temperature
-            vae.prior_temperature = relaxed_state_prior_temperature
+            vae.encoder_temperature = state_encoder_temperature
+            vae.prior_temperature = state_prior_temperature
             return vae
 
     def build_action_discretizer_vae_model(vae_mdp_model, full_optimization=True):
@@ -397,8 +403,8 @@ def main(argv):
                     network.label_transition if params['label_transition_function'] else None),
                 reward_network=network.reward, action_decoder_network=network.decoder,
                 latent_policy_network=network.discrete_policy,
-                encoder_temperature=params['encoder_temperature'],
-                prior_temperature=params['prior_temperature'],
+                encoder_temperature=params['action_encoder_temperature'],
+                prior_temperature=params['latent_policy_temperature'],
                 encoder_temperature_decay_rate=params['encoder_temperature_decay_rate'],
                 prior_temperature_decay_rate=params['prior_temperature_decay_rate'],
                 one_output_per_action=params['one_output_per_action'],
@@ -420,7 +426,8 @@ def main(argv):
         models = [build_vae_model()]
         if params['action_discretizer']:
             if not params['decompose_training']:
-                models[0] = build_action_discretizer_vae_model(models[0], full_optimization=params['full_vae_optimization'])
+                models[0] = build_action_discretizer_vae_model(
+                    models[0], full_optimization=params['full_vae_optimization'])
             else:
                 models.append(build_action_discretizer_vae_model(models[0], full_optimization=False))
         else:
@@ -440,11 +447,17 @@ def main(argv):
             action_successor_scaling=params["action_successor_gradient_penalty_multiplier"],
             action_successor_gradient_penalty_multiplier=params["action_successor_gradient_penalty_multiplier"]
         )
-        wasserstein_optimizer = getattr(tf.optimizers, params['optimizer'])(learning_rate=params['learning_rate'])
+        autoencoder_optimizer = getattr(tf.optimizers, params['optimizer'])(learning_rate=params['learning_rate'])
+        wasserstein_optimizer = getattr(tf.optimizers, params['wasserstein_optimizer'])(
+            learning_rate=params['wasserstein_learning_rate'])
+        optimizer = [autoencoder_optimizer, wasserstein_optimizer]
         network = generate_network_components(params, wasserstein_networks=True)
         action_network = generate_network_components(params, name='action')
-        model = wasserstein_mdp.WassersteinMarkovDecisionProcess(
-            state_shape=state_shape, action_shape=action_shape, reward_shape=reward_shape, label_shape=label_shape,
+        wae_mdp = wasserstein_mdp.WassersteinMarkovDecisionProcess(
+            state_shape=state_shape,
+            action_shape=action_shape,
+            reward_shape=reward_shape,
+            label_shape=label_shape,
             discretize_action_space=params['action_discretizer'],
             state_encoder_network=network.encoder,
             action_encoder_network=action_network.encoder,
@@ -453,8 +466,28 @@ def main(argv):
             reward_network=network.reward,
             decoder_network=network.decoder,
             latent_policy_network=network.discrete_policy,
-
-        )
+            steady_state_lipschitz_network=network.steady_state,
+            transition_loss_lipschitz_network=network.local_transition_loss,
+            action_successor_lipschitz_network=network.action_successor,
+            latent_state_size=latent_state_size,
+            number_of_discrete_actions=params['number_of_discrete_actions'],
+            state_encoder_pre_processing_network=(network.state_encoder_pre_processing
+                                                  if params['state_encoder_pre_processing_network'] else None),
+            state_decoder_pre_processing_network=(network.state_decoder_pre_processing
+                                                  if params['state_decoder_pre_processing_network'] else None),
+            time_stacked_states=params['time_stacked_states'] > 1,
+            state_encoder_temperature=state_encoder_temperature,
+            state_prior_temperature=state_prior_temperature,
+            action_encoder_temperature=params['action_encoder_temperature'],
+            latent_policy_temperature=params['latent_policy_temperature'],
+            wasserstein_regularizer_scale_factor=wasserstein_regularizer_scale_factor,
+            encoder_temperature_decay_rate=params['encoder_temperature_decay_rate'],
+            prior_temperature_decay_rate=params['prior_temperature_decay_rate'],
+            importance_sampling_exponent=params['importance_sampling_exponent'],
+            importance_sampling_exponent_growth_rate=params['importance_sampling_exponent_growth_rate'],
+            evaluation_window_size=params['evaluation_window_size'],
+            reward_bounds=reward_bounds, )
+        models = [wae_mdp]
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
 
     if params['logs']:
@@ -572,22 +605,23 @@ if __name__ == '__main__':
         help='Maximum variance allowed for the state decoder.'
     )
     flags.DEFINE_float(
-        "encoder_temperature",
+        "action_encoder_temperature",
         default=-1.,
         help="Temperature of the relaxation of the discrete encoder distribution."
     )
     flags.DEFINE_float(
-        "prior_temperature",
+        "latent_policy_temperature",
         default=-1.,
-        help="Temperature of relaxation of the discrete prior distribution over latent variables."
+        help="Temperature of relaxation of the discrete prior distribution over latent actions "
+             "(i.e., the latent policy to be distilled)."
     )
     flags.DEFINE_float(
-        "relaxed_state_encoder_temperature",
+        "state_encoder_temperature",
         default=-1.,
         help="Temperature of the binary concrete relaxation encoder distribution over latent states."
     )
     flags.DEFINE_float(
-        "relaxed_state_prior_temperature",
+        "state_prior_temperature",
         default=-1.,
         help="Temperature of the binary concrete relaxation prior distribution over latent states."
     )
@@ -952,7 +986,7 @@ if __name__ == '__main__':
     flags.DEFINE_bool(
         "wae",
         default=False,
-        help='abstract the environment via a Wasserstein Autoencoder.'
+        help='abstract the environment and distill the input policy via a Wasserstein Autoencoder.'
     ),
     flags.DEFINE_float(
         "global_wasserstein_regularizer_scale_factor",
@@ -976,6 +1010,12 @@ if __name__ == '__main__':
         required=False,
         help="Multiplier of the gradient penalty for the steady-state Lipschitz function."
     )
+    flags.DEFINE_multi_integer(
+        "steady_state_layers",
+        default=[256, 256],
+        help="Number of units to use for each layer of the network representing the Lipschitz function for the "
+             "steady-state Wasserstein regularizer."
+    )
     flags.DEFINE_float(
         "local_transition_loss_regularizer_scale_factor",
         default=None,
@@ -987,6 +1027,12 @@ if __name__ == '__main__':
         default=None,
         required=False,
         help="Multiplier of the gradient penalty for the local loss Lipschitz function."
+    )
+    flags.DEFINE_multi_integer(
+        "local_transition_loss_layers",
+        default=[256, 256],
+        help="Number of units to use for each layer of the network representing the Lipschitz function for the "
+             "local loss regularizer."
     )
     flags.DEFINE_float(
         "action_successor_wasserstein_regularizer_scale_factor",
@@ -1000,11 +1046,23 @@ if __name__ == '__main__':
         required=False,
         help="Multiplier of the gradient penalty for the action-successor Lipschitz function."
     )
-    flags.DEFINE_bool(
-        'marginal_encoder_sampling',
-        default=False,
-        help="whether to sample from the marginal encoder to minimize the action-successor regularizer."
+    flags.DEFINE_multi_integer(
+        "action_successor_layers",
+        default=[256, 256],
+        help="Number of units to use for each layer of the network representing the Lipschitz function for the "
+             "action-successor Wasserstein regularizer."
     )
+    flags.DEFINE_string(
+        "wasserstein_optimizer",
+        default='Adam',
+        help='Optimizer name for the Wasserstein regularizers (see tf.optimizers).'
+    )
+    flags.DEFINE_float(
+        'wasserstein_learning_rate',
+        default=1e-4,
+        help='Learning rate for the optimizer of the Wasserstein regularizers.'
+    )
+
     FLAGS = flags.FLAGS
 
     tf_agents.system.multiprocessing.handle_main(functools.partial(app.run, main))

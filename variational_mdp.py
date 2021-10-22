@@ -1747,9 +1747,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 tf.debugging.disable_check_numerics()
 
             _priority_handler = self.priority_handler
-            _optimizer = self._optimizer
+            _optimizer = self.detach_optimizer()
             self.priority_handler = None
-            self._optimizer = None
 
             state, label, action, reward, next_state, next_label = next(dataset_iterator)[:6]
             call = self.__call__.get_concrete_function(
@@ -1765,7 +1764,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 print("The following exception occured while attempting to save the model:", e)
 
             self.priority_handler = _priority_handler
-            self._optimizer = _optimizer
+            self.attach_optimizer(_optimizer)
             if check_numerics:
                 tf.debugging.enable_check_numerics()
 
@@ -1959,10 +1958,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
         """
 
         def _checkpoint():
-            optimizer = self._optimizer
+            optimizer = self.detach_optimizer()
             priority_handler = self.priority_handler
-
-            self._optimizer = None
             self.priority_handler = None
 
             eval_checkpoint = tf.train.Checkpoint(model=self)
