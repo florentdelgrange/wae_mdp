@@ -320,7 +320,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
     def _initialize_latent_steady_state_logits(self):
         return tf.Variable(
-            initial_value=tf.zeros(shape=(self.latent_state_size,)),
+            initial_value=tf.zeros(shape=(self.latent_state_size,), dtype=tf.float32),
             trainable=True,
             name='latent_steady_state_distribution_logits')
 
@@ -585,27 +585,33 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             return tfd.Independent(
                 tfd.RelaxedBernoulli(
                     logits=next_latent_state_logits,
-                    temperature=temperature) if temperature > 0. else
-                tfd.Bernoulli(logits=next_latent_state_logits))
+                    temperature=temperature))
         else:
             return tfd.JointDistributionSequential([
                 tfd.Independent(
                     tfd.RelaxedBernoulli(
                         logits=next_label_logits,
-                        temperature=temperature) if temperature > 0. else
-                    tfd.Bernoulli(logits=next_label_logits)),
+                        temperature=temperature)),
                 lambda _next_label: tfd.Independent(
                     tfd.RelaxedBernoulli(
                         logits=next_latent_state_logits,
-                        temperature=temperature) if temperature > 0. else
-                    tfd.Bernoulli(logits=next_latent_state_logits))
+                        temperature=temperature))
             ])
 
     def discrete_latent_transition(
             self, latent_state: tf.Tensor, latent_action: tf.Tensor, next_label: Optional[tf.Tensor] = None
     ) -> tfd.Distribution:
-        return self.relaxed_latent_transition(
-            latent_state, latent_action, next_label, temperature=0.)
+        next_label_logits, next_latent_state_logits = self.transition_network([latent_state, latent_action])
+        if next_label is not None:
+            return tfd.Independent(
+                tfd.Bernoulli(logits=next_latent_state_logits))
+        else:
+            return tfd.JointDistributionSequential([
+                tfd.Independent(
+                    tfd.Bernoulli(logits=next_label_logits)),
+                lambda _next_label: tfd.Independent(
+                    tfd.Bernoulli(logits=next_latent_state_logits))
+            ])
 
     def relaxed_markov_chain_latent_transition(
             self, latent_state: tf.Tensor, temperature: float = 1e-5, reparamaterize: bool = True
@@ -653,28 +659,41 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             latent_state: tf.Tensor,
             temperature: Float = 1e-5,
     ) -> tfd.Distribution:
-        if temperature > 0:
-            return tfd.RelaxedOneHotCategorical(
-                logits=self.latent_policy_network(latent_state),
-                temperature=temperature)
-        else:
-            return tfd.OneHotCategorical(logits=self.latent_policy_network(latent_state))
+        return tfd.RelaxedOneHotCategorical(
+            logits=self.latent_policy_network(latent_state),
+            temperature=temperature)
 
     def discrete_latent_policy(self, latent_state: tf.Tensor):
-        return self.relaxed_latent_policy(latent_state, temperature=0.)
+        return tfd.OneHotCategorical(logits=self.latent_policy_network(latent_state))
 
     def reward_distribution(
             self, latent_state: tf.Tensor, latent_action: tf.Tensor, *args, **kwargs
     ) -> tfd.Distribution:
         return tfd.Deterministic(loc=self.reward_network([latent_state, latent_action]))
 
-    def latent_steady_state_distribution(self, temperature=0.) -> tfd.Distribution:
-        if temperature > 0.:
-            return tfd.RelaxedOneHotCategorical(logits=self.latent_steady_state_logits, temperature=temperature)
-        else:
-            return tfd.OneHotCategorical(logits=self.latent_steady_state_logits)
+    def discrete_latent_steady_state_distribution(self) -> tfd.Distribution:
+        return tfd.OneHotCategorical(logits=self.latent_steady_state_logits)
 
-    def marginal_state_encoder_distribution(
+    def relaxed_latent_steady_state_distribution(self, temperature) -> tfd.Distribution:
+        return tfd.RelaxedOneHotCategorical(logits=self.latent_steady_state_logits, temperature=temperature)
+
+    def discrete_marginal_state_encoder_distribution(
+            self,
+            states: tf.Tensor,
+            labels: tf.Tensor,
+    ):
+        logits = self.state_encoder_network(states)
+        logits = tf.concat([(labels * 2. - 1.) * 10., logits], axis=-1)
+        batch_size = tf.shape(logits)[0]
+        return tfd.MixtureSameFamily(
+            mixture_distribution=tfd.Categorical(
+                logits=tf.ones(shape=(batch_size, batch_size))),
+            components_distribution=tfd.Independent(
+                tfd.Bernoulli(
+                    logits=tf.tile(tf.expand_dims(logits, axis=0), [batch_size, 1, 1]),
+                ), reinterpreted_batch_ndims=1),)
+
+    def relaxed_marginal_state_encoder_distribution(
             self,
             states: tf.Tensor,
             labels: tf.Tensor,
@@ -691,11 +710,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 tfd.RelaxedBernoulli(
                     logits=tf.tile(tf.expand_dims(logits, axis=0), [batch_size, 1, 1]),
                     temperature=temperature,
-                ) if temperature > 0. else
-                tfd.Bernoulli(
-                    logits=tf.tile(tf.expand_dims(logits, axis=0), [batch_size, 1, 1]),
                 ), reinterpreted_batch_ndims=1),
-            reparameterize=reparameterize and temperature > 0.)
+            reparameterize=reparameterize)
 
     def action_embedding_function(
             self,
@@ -746,11 +762,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         # latent steady-state distribution
         stationary_latent_state, stationary_latent_action = tfd.JointDistributionSequential([
-            self.latent_steady_state_distribution(temperature=self.encoder_temperature),
+            self.relaxed_latent_steady_state_distribution(temperature=self.encoder_temperature),
             lambda _latent_state: self.relaxed_latent_policy(
-                _latent_state,
+                latent_state=_latent_state,
                 temperature=self.latent_policy_temperature)
-        ]).sample(sample_shape=batch_size)
+        ]).sample(sample_shape=(batch_size,))
         next_stationary_latent_state = tf.concat(
             self.relaxed_latent_transition(
                 stationary_latent_state,
@@ -852,6 +868,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     ):
         noise = tf.random.uniform(shape=(tf.shape(x)[0], 1), minval=0., maxval=1.)
         straight_lines = noise * x + (1. - noise) * y
+        print("straight lines", straight_lines)
+        print("x", x)
+        print("y", y)
         gradients = tf.gradients(lipschitz_function(straight_lines), straight_lines)[0]
         return tf.square(tf.norm(gradients, ord=2, axis=1) - 1.)
 
@@ -868,7 +887,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             discrete: bool = False
     ):
         if self._dataset_iterator is not None:
-            _batch = tf.stop_gradient(next(self._dataset_iterator))
+            _batch = next(self._dataset_iterator)
             _state, _label, _action, _next_state, _next_label = _batch[0], _batch[1], _batch[2], _batch[4], _batch[5]
             if len(_batch) >= 8:
                 is_weights = tf.stop_gradient(tf.reduce_min(_batch[7])) / _batch[7]
@@ -887,15 +906,17 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 lambda _latent_action: self.relaxed_latent_transition(
                     latent_state, _latent_action, temperature=self.state_prior_temperature)
             ]).sample()
+            # the next latent state sampled is divided into label and next state Bernoulli without labels
+            next_latent_state = tf.concat(next_latent_state, axis=-1)
             regularizer = (
-                    is_weights * self.action_successor_lipschitz_network(
-                [latent_state,
-                 _latent_action,
-                 _next_latent_state]
-            ) * self.relaxed_state_encoding(
-                state=_state, temperature=self.state_encoder_temperature, label=_label
-            ).prob(latent_state) /
-                    self.marginal_state_encoder_distribution(
+                    is_weights * self.action_successor_lipschitz_network([
+                        latent_state,
+                        _latent_action,
+                        _next_latent_state
+                    ]) * self.relaxed_state_encoding(
+                        state=_state, temperature=self.state_encoder_temperature, label=_label
+                    ).prob(latent_state) /
+                    self.relaxed_marginal_state_encoder_distribution(
                         states=state,
                         labels=label,
                         temperature=self.state_encoder_temperature,
@@ -907,17 +928,21 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             x = tf.concat([_latent_action, _next_latent_state], axis=-1),
             y = tf.concat([latent_action, next_latent_state], axis=-1),
         else:
-            marginal_state_encoder = self.marginal_state_encoder_distribution(
-                states=tf.concat([state, next_state], axis=0),
-                labels=tf.concat([label, next_label], axis=0),
-                temperature=self.state_encoder_temperature if not discrete else 0.,
-                reparameterize=not discrete)
-            latent_state = marginal_state_encoder.sample(sample_shape=tf.shape(state)[0])
             if discrete:
+                marginal_state_encoder = self.discrete_marginal_state_encoder_distribution(
+                    states=tf.concat([state, next_state], axis=0),
+                    labels=tf.concat([label, next_label], axis=0),)
+                latent_state = marginal_state_encoder.sample(sample_shape=(tf.shape(state)[0],))
                 latent_action = self.discrete_action_encoding(
                     latent_state,
                     action)
             else:
+                marginal_state_encoder = self.relaxed_marginal_state_encoder_distribution(
+                    states=tf.concat([state, next_state], axis=0),
+                    labels=tf.concat([label, next_label], axis=0),
+                    temperature=self.state_encoder_temperature,
+                    reparameterize=True)
+                latent_state = marginal_state_encoder.sample(sample_shape=(tf.shape(state)[0],))
                 latent_action = self.relaxed_action_encoding(
                     latent_state,
                     action,
@@ -930,17 +955,26 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     marginal_state_encoder.prob(latent_state))
             x = tf.concat([latent_action, next_latent_state], axis=-1)
 
-            latent_action = self.relaxed_latent_policy(
-                latent_state,
-                temperature=self.latent_policy_temperature if not discrete else 0.,
-            ).sample()
-            next_latent_state = tf.concat(
-                self.relaxed_latent_transition(
+            if discrete:
+                latent_action = self.discrete_latent_policy(latent_state).sample()
+                next_latent_state = tf.concat(
+                    self.discrete_latent_transition(
+                        latent_state,
+                        latent_action,
+                    ).sample(),
+                    axis=-1)
+            else:
+                latent_action = self.relaxed_latent_policy(
                     latent_state,
-                    latent_action,
-                    temperature=self.state_prior_temperature if not discrete else 0.,
-                ).sample(),
-                axis=-1)
+                    temperature=self.latent_policy_temperature,
+                ).sample()
+                next_latent_state = tf.concat(
+                    self.relaxed_latent_transition(
+                        latent_state,
+                        latent_action,
+                        temperature=self.state_prior_temperature,
+                    ).sample(),
+                    axis=-1)
             regularizer -= self.action_successor_lipschitz_network(latent_state, latent_action, next_latent_state)
             y = tf.concat([latent_action, next_latent_state], axis=-1)
 
@@ -974,7 +1008,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         # latent steady-state distribution
         stationary_latent_state, stationary_latent_action = tfd.JointDistributionSequential([
-            self.latent_steady_state_distribution(temperature=0.),
+            self.discrete_latent_steady_state_distribution(),
             lambda _latent_state: self.discrete_latent_policy(_latent_state),
         ]).sample(sample_shape=batch_size)
         next_stationary_latent_state = tf.concat(
