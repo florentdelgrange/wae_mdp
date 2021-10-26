@@ -796,10 +796,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 tf.norm(next_state - _next_state, ord=1, axis=1))
 
         # Wasserstein regularizers
-        steady_state_regularizer = (
+        steady_state_regularizer = tf.squeeze(
                 self.steady_state_lipschitz_network(next_transition_latent_state) -
                 self.steady_state_lipschitz_network(next_stationary_latent_state))
-        transition_loss_regularizer = (
+        transition_loss_regularizer = tf.squeeze(
                 self.transition_loss_lipschitz_network([state, action, next_latent_state]) -
                 self.transition_loss_lipschitz_network([state, action, next_transition_latent_state]))
 
@@ -811,7 +811,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             next_label=next_label,
             latent_state=latent_state,
             next_latent_state=next_latent_state)
-        action_successor_regularizer = _action_successor_regularizers['regularizer']
+        action_successor_regularizer = tf.squeeze(_action_successor_regularizers['regularizer'])
         action_successor_gradient_penalty = _action_successor_regularizers['gradient_penalty']
         tf.print("action_successor_regularizer", action_successor_regularizer)
         tf.print("action_successor_gradient_penalty", action_successor_gradient_penalty)
@@ -826,6 +826,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             y=next_transition_latent_state,
             lipschitz_function=lambda _x: self.transition_loss_lipschitz_network([state, action, _x]))
 
+        tf.print("LOSS", tf.stop_gradient(reconstruction_loss +
+                                          steady_state_regularizer +
+                                          transition_loss_regularizer +
+                                          action_successor_regularizer))
         # priority support
         if self.priority_handler is not None and sample_key is not None:
             tf.stop_gradient(
@@ -836,7 +840,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                                           steady_state_regularizer +
                                           transition_loss_regularizer +
                                           action_successor_regularizer)))
-
+        
         # loss metrics
         self.loss_metrics['reconstruction_loss'](reconstruction_loss)
         self.loss_metrics['state_mse'](next_state, _next_state)
@@ -897,7 +901,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 is_weights = 1.
 
             tf.print(_state, _label, _action, _next_state, _next_label, "   >> sampled transition")
-
+            tf.print(is_weights, "  >> is_weights")
             _latent_action = self.relaxed_action_encoding(
                 latent_state, _action, temperature=self.action_encoder_temperature
             ).sample()
@@ -916,12 +920,15 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             # the next latent state sampled is divided into label and next state Bernoulli without labels
             next_latent_state = tf.concat(next_latent_state, axis=-1)
             tf.print("next_latent_state", next_latent_state)
-            action_successor_lipschitz_1 = is_weights * self.action_successor_lipschitz_network([
-                latent_state,
-                _latent_action,
-                _next_latent_state
-            ])
+            action_successor_lipschitz_1 = tf.squeeze(
+                    self.action_successor_lipschitz_network([
+                        latent_state,
+                        _latent_action,
+                        _next_latent_state
+                    ])
+            )
             tf.print("action_successor_lipschitz_1", action_successor_lipschitz_1)
+            tf.print("is_weights * action_successor_lipschitz_1", is_weights * action_successor_lipschitz_1)
             p_latent_state = self.relaxed_state_encoding(
                 state=_state, temperature=self.state_encoder_temperature, label=_label
             ).prob(
@@ -943,10 +950,12 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     clip_value_max=1. - 1e-7)
             )
             tf.print("q_latent_state", q_latent_state)
-            action_successor_lipschitz_2 = self.action_successor_lipschitz_network([
-                latent_state, latent_action, next_latent_state])
+            action_successor_lipschitz_2 = tf.squeeze(
+                    self.action_successor_lipschitz_network([
+                        latent_state, latent_action, next_latent_state]))
             tf.print("action_successor_lipschitz_2", action_successor_lipschitz_2)
             regularizer = (
+                    is_weights *
                     action_successor_lipschitz_1 * p_latent_state / q_latent_state -
                     action_successor_lipschitz_2
             )
@@ -1101,6 +1110,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             sample_probability: Optional[tf.Tensor] = None,
     ):
         output = self(state, label, action, reward, next_state, next_label, sample_key)
+        tf.print('loss', output)
 
         # Importance sampling weights (is) for prioritized experience replay
         if sample_probability is not None:
@@ -1247,6 +1257,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             sample_key: Optional[tf.Tensor] = None,
             sample_probability: Optional[tf.Tensor] = None,
     ):
+        tf.print("sample_key", sample_key)
+        tf.print("sample_probability", sample_probability)
         return self._compute_apply_gradients(
             state, label, action, reward, next_state, next_label,
             autoencoder_variables=self.inference_variables + self.generator_variables,
