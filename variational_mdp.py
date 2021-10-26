@@ -1525,6 +1525,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             prioritized_replay_buffer=use_prioritized_replay_buffer)
 
         dataset = dataset_generator(transition_generator)
+        self.attach_dataset(dataset)
         dataset_iterator = iter(
             dataset.batch(batch_size=batch_size, drop_remainder=True).prefetch(tf.data.experimental.AUTOTUNE))
 
@@ -1539,7 +1540,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             dataset_iterator=dataset_iterator,
             epsilon_greedy=epsilon_greedy)
 
-    def attach_dataset_iterator(self, dataset_iterator):
+    def attach_dataset(self, dataset):
         pass
 
     def train_from_policy(
@@ -1720,7 +1721,6 @@ class VariationalMarkovDecisionProcess(tf.Module):
         replay_buffer_num_frames = dataset_components.replay_buffer_num_frames_fn
         manager = dataset_components.wrapped_manager
         dataset_iterator = dataset_components.dataset_iterator
-        self.attach_dataset_iterator(dataset_iterator)
         dataset = dataset_components.dataset
 
         if replay_buffer_num_frames() < batch_size:
@@ -1785,7 +1785,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             if tf.logical_and(tf.equal(global_step, 0), save_directory is not None):
                 _time = time.time()
                 print("Saving base model")
-                save(os.path.join(log_name, 'base'))
+                # save(os.path.join(log_name, 'base'))
                 save_time = time.time() - _time
                 save_time += 10.  # epsilon
 
