@@ -813,6 +813,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             next_latent_state=next_latent_state)
         action_successor_regularizer = _action_successor_regularizers['regularizer']
         action_successor_gradient_penalty = _action_successor_regularizers['gradient_penalty']
+        tf.print("action_successor_regularizer", action_successor_regularizer)
+        tf.print("action_successor_gradient_penalty", action_successor_gradient_penalty)
 
         # Lipschitz constraints
         steady_state_gradient_penalty = self.compute_gradient_penalty(
@@ -894,20 +896,26 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             else:
                 is_weights = 1.
 
+            tf.print(_state, _label, _action, _next_state, _next_label, "   >> sampled transition")
+
             _latent_action = self.relaxed_action_encoding(
                 latent_state, _action, temperature=self.action_encoder_temperature
             ).sample()
+            tf.print(_latent_action, "  >> _latent_action")
             _next_latent_state = tf.concat(
                 [_next_label,
                  self.relaxed_state_encoding(_next_state, temperature=self.state_encoder_temperature).sample()],
                 axis=-1)
+            tf.print(_next_latent_state, "  >> _next_latent_state")
             latent_action, next_latent_state = tfd.JointDistributionSequential([
                 self.relaxed_latent_policy(latent_state, temperature=self.latent_policy_temperature),
                 lambda _latent_action: self.relaxed_latent_transition(
                     latent_state, _latent_action, temperature=self.state_prior_temperature)
             ]).sample()
+            tf.print("latent_action", latent_action)
             # the next latent state sampled is divided into label and next state Bernoulli without labels
             next_latent_state = tf.concat(next_latent_state, axis=-1)
+            tf.print("next_latent_state", next_latent_state)
             regularizer = (
                     is_weights * self.action_successor_lipschitz_network([
                 latent_state,
@@ -925,8 +933,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     self.action_successor_lipschitz_network([
                         latent_state, latent_action, next_latent_state])
             )
+            tf.print("regularizer", regularizer)
             x = tf.concat([_latent_action, _next_latent_state], axis=-1)
             y = tf.concat([latent_action, next_latent_state], axis=-1)
+            tf.print("x", x)
+            tf.print("y", y)
         else:
             if discrete:
                 marginal_state_encoder = self.discrete_marginal_state_encoder_distribution(
@@ -1171,9 +1182,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
     @property
     def wasserstein_variables(self):
-        return [self.steady_state_lipschitz_network.trainable_variables,
-                self.transition_loss_lipschitz_network.trainable_variables,
-                self.action_successor_lipschitz_network.trainable_variables]
+        return (self.steady_state_lipschitz_network.trainable_variables +
+                self.transition_loss_lipschitz_network.trainable_variables +
+                self.action_successor_lipschitz_network.trainable_variables)
 
     def _compute_apply_gradients(
             self, state, label, action, reward, next_state, next_label,
