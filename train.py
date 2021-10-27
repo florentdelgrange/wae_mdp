@@ -144,22 +144,21 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
     if params['policy_path'][-1] == os.path.sep:
         params['policy_path'] = params['policy_path'][:-1]
 
-    wae_name = 'vae_LS{}_TD{:.2f}-{:.2f}_activation={}_lr={:g}_seed={:d}' \
+    wae_name = 'wae_LS{}_TD{:.2f}-{:.2f}_activation={}_lr={:g}_seed={:d}' \
                '_WSR={:g}_TLR={:g}_WASR={:g}' \
-               '_SGP={:g}_TLGP={:g}_ASGP={:g}_marginal_encoder_sampling={}'.format(
+               '_SGP={:g}_TLGP={:g}_ASGP={:g}'.format(
         params['latent_size'],
         params['state_encoder_temperature'],
         params['state_prior_temperature'],
         params['activation'],
         params['learning_rate'],
         int(params['seed']),
-        wasserstein_regularizer.steady_state_scaling,
-        wasserstein_regularizer.local_transition_loss_scaling,
-        wasserstein_regularizer.action_successor_scaling,
-        wasserstein_regularizer.steady_state_gradient_penalty_multiplier,
-        wasserstein_regularizer.local_transition_loss_gradient_penalty_multiplier,
-        wasserstein_regularizer.action_successor_gradient_penalty_multiplier,
-        params['marginal_encoder_sampling'])
+        wasserstein_regularizer.stationary.scaling,
+        wasserstein_regularizer.local_transition_loss.scaling,
+        wasserstein_regularizer.action_successor_loss.scaling,
+        wasserstein_regularizer.stationary.gradient_penalty_multiplier,
+        wasserstein_regularizer.local_transition_loss.gradient_penalty_multiplier,
+        wasserstein_regularizer.action_successor_loss.gradient_penalty_multiplier)
     if params['action_discretizer']:
         if wae_name != '':
             base_model_name = wae_name
@@ -447,6 +446,7 @@ def main(argv):
             action_successor_scaling=params["action_successor_gradient_penalty_multiplier"],
             action_successor_gradient_penalty_multiplier=params["action_successor_gradient_penalty_multiplier"]
         )
+        vae_name = generate_wae_name(params=params, wasserstein_regularizer=wasserstein_regularizer_scale_factor)
         autoencoder_optimizer = getattr(tf.optimizers, params['optimizer'])(learning_rate=params['learning_rate'])
         wasserstein_optimizer = getattr(tf.optimizers, params['wasserstein_optimizer'])(
             learning_rate=params['wasserstein_learning_rate'])
