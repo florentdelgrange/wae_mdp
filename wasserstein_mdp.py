@@ -1111,8 +1111,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             next_label: tf.Tensor,
             sample_key: Optional[tf.Tensor] = None,
             sample_probability: Optional[tf.Tensor] = None,
+            additional_transition_batch: Optional[Tuple[Float]] = None,
+            *args, **kwargs
     ):
-        output = self(state, label, action, reward, next_state, next_label, sample_key)
+        output = self(state, label, action, reward, next_state, next_label, sample_key,
+                      additional_transition_batch=additional_transition_batch)
 
         if debug:
             tf.print('call output', output)
@@ -1231,7 +1234,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             loss = self.compute_loss(
                 state, label, action, reward, next_state, next_label,
                 sample_key=sample_key, sample_probability=sample_probability,
-                additional_transition_batch=None)
+                additional_transition_batch=additional_transition_batch)
 
         for optimization_direction, variables in {
             'min': autoencoder_variables, 'max': wasserstein_regularizer_variables
