@@ -156,13 +156,16 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         else:
             self.latent_policy_temperature = latent_policy_temperature
 
-        state = Input(shape=state_shape, name="state")
-        action = Input(shape=action_shape, name="action")
-        latent_state = Input(shape=(self.latent_state_size,), name="latent_state")
-        latent_action = Input(shape=(self.number_of_discrete_actions,), name="latent_action")
-        next_latent_state = Input(shape=(self.latent_state_size,), name='next_latent_state')
+        self._sample_additional_transition = True
 
         if not pre_loaded_model:
+
+            state = Input(shape=state_shape, name="state")
+            action = Input(shape=action_shape, name="action")
+            latent_state = Input(shape=(self.latent_state_size,), name="latent_state")
+            latent_action = Input(shape=(self.number_of_discrete_actions,), name="latent_action")
+            next_latent_state = Input(shape=(self.latent_state_size,), name='next_latent_state')
+
             # state encoder network
             self.state_encoder_network = self._initialize_state_encoder_network(
                 state, state_encoder_network, state_encoder_pre_processing_network)
@@ -226,7 +229,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             'state_encoder_entropy': Mean('state_encoder_entropy'),
             'action_encoder_entropy': Mean('action_encoder_entropy')
         }
-        self._dataset = None
 
     def _initialize_state_encoder_network(
             self,
@@ -508,9 +510,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self._wasserstein_regularizer_optimizer = None
         return autoencoder_optimizer, wasserstein_regularizer_optimizer
 
-    def attach_dataset(self, dataset):
-        self._dataset = dataset
-
     def binary_encode_state(
             self,
             state: tf.Tensor,
@@ -748,6 +747,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             next_state: tf.Tensor,
             next_label: tf.Tensor,
             sample_key: Optional[tf.Tensor] = None,
+            additional_transition_batch: Optional[Tuple[Float, ...]] = None,
             *args, **kwargs
     ):
         batch_size = tf.shape(state)[0]
@@ -810,7 +810,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             next_state=next_state,
             next_label=next_label,
             latent_state=latent_state,
-            next_latent_state=next_latent_state)
+            next_latent_state=next_latent_state,
+            additional_transition_batch=additional_transition_batch)
         action_successor_regularizer = tf.squeeze(_action_successor_regularizers['regularizer'])
         action_successor_gradient_penalty = _action_successor_regularizers['gradient_penalty']
 
@@ -889,13 +890,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             next_label: tf.Tensor,
             latent_state: tf.Tensor,
             next_latent_state: tf.Tensor,
-            discrete: bool = False
+            discrete: bool = False,
+            additional_transition_batch: Optional[Tuple[Float, ...]] = None
     ):
-        if self._dataset is not None:
-            _batch = next(iter(
-                self._dataset.batch(
-                    batch_size=tf.cast(tf.shape(state)[0], dtype=tf.int64), drop_remainder=True
-                ).prefetch(tf.data.experimental.AUTOTUNE)))
+        if additional_transition_batch is not None:
+            _batch = additional_transition_batch
             _state, _label, _action, _next_state, _next_label = _batch[0], _batch[1], _batch[2], _batch[4], _batch[5]
             if len(_batch) >= 8:
                 is_weights = tf.stop_gradient(tf.reduce_min(_batch[7])) / _batch[7]
@@ -1223,6 +1222,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self, state, label, action, reward, next_state, next_label,
             autoencoder_variables=None, wasserstein_regularizer_variables=None,
             sample_key=None, sample_probability=None,
+            additional_transition_batch=None,
             *args, **kwargs
     ):
         if autoencoder_variables is None and wasserstein_regularizer_variables is None:
@@ -1230,7 +1230,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         with tf.GradientTape(persistent=True) as tape:
             loss = self.compute_loss(
                 state, label, action, reward, next_state, next_label,
-                sample_key=sample_key, sample_probability=sample_probability)
+                sample_key=sample_key, sample_probability=sample_probability,
+                additional_transition_batch=None)
 
         for optimization_direction, variables in {
             'min': autoencoder_variables, 'max': wasserstein_regularizer_variables
@@ -1254,14 +1255,15 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     @tf.function
     def compute_apply_gradients(
             self,
-            state: tf.Tensor,
-            label: tf.Tensor,
-            action: tf.Tensor,
-            reward: tf.Tensor,
-            next_state: tf.Tensor,
-            next_label: tf.Tensor,
-            sample_key: Optional[tf.Tensor] = None,
-            sample_probability: Optional[tf.Tensor] = None,
+            state: Float,
+            label: Float,
+            action: Float,
+            reward: Float,
+            next_state: Float,
+            next_label: Float,
+            sample_key: Optional[Float] = None,
+            sample_probability: Optional[Float] = None,
+            additional_transition_batch: Optional[Tuple[Float]] = None
     ):
         if debug:
             tf.print("sample_key", sample_key)
@@ -1271,7 +1273,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             state, label, action, reward, next_state, next_label,
             autoencoder_variables=self.inference_variables + self.generator_variables,
             wasserstein_regularizer_variables=self.wasserstein_variables,
-            sample_key=sample_key, sample_probability=sample_probability)
+            sample_key=sample_key, sample_probability=sample_probability,
+            additional_transition_batch=additional_transition_batch)
 
     @tf.function
     def inference_update(

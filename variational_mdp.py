@@ -188,6 +188,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             trainable=False,
             name='evaluation_window')
 
+        self._sample_additional_transition = False
         self.priority_handler = None
 
         if not pre_loaded_model:
@@ -784,7 +785,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
             reward: tf.Tensor,
             next_state: tf.Tensor,
             next_label: tf.Tensor,
-            sample_key: Optional[tf.Tensor] = None
+            sample_key: Optional[tf.Tensor] = None,
+            *args, **kwargs
     ):
         if self.latent_policy_training_phase:
             return self.latent_policy_training(state, label, action, reward, next_state, next_label)
@@ -1193,6 +1195,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             next_label: tf.Tensor,
             sample_key: Optional[tf.Tensor] = None,
             sample_probability: Optional[tf.Tensor] = None,
+            *args, **kwargs
     ):
         return self._compute_apply_gradients(
             state, label, action, reward, next_state, next_label, self.trainable_variables,
@@ -1525,7 +1528,6 @@ class VariationalMarkovDecisionProcess(tf.Module):
             prioritized_replay_buffer=use_prioritized_replay_buffer)
 
         dataset = dataset_generator(transition_generator)
-        self.attach_dataset(dataset)
         dataset_iterator = iter(
             dataset.batch(batch_size=batch_size, drop_remainder=True).prefetch(tf.data.experimental.AUTOTUNE))
 
@@ -1539,9 +1541,6 @@ class VariationalMarkovDecisionProcess(tf.Module):
             dataset=dataset,
             dataset_iterator=dataset_iterator,
             epsilon_greedy=epsilon_greedy)
-
-    def attach_dataset(self, dataset):
-        pass
 
     def train_from_policy(
             self,
@@ -1890,11 +1889,16 @@ class VariationalMarkovDecisionProcess(tf.Module):
     ):
         dataset_batch = next(dataset_iterator)
 
+        if self._sample_additional_transition:
+            extra_batch = next(dataset_iterator)
+        else:
+            extra_batch = None
+
         if additional_metrics is None:
             additional_metrics = {}
 
         if not aggressive_training and not self.latent_policy_training_phase:
-            gradients = self.compute_apply_gradients(*dataset_batch)
+            gradients = self.compute_apply_gradients(*dataset_batch, additional_transition_batch=extra_batch)
         elif not aggressive_training and self.latent_policy_training_phase:
             gradients = self.latent_policy_update(*dataset_batch)
         elif aggressive_update:
