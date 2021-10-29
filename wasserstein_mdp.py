@@ -694,23 +694,53 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
     def relaxed_marginal_state_encoder_distribution(
             self,
-            states: tf.Tensor,
-            labels: tf.Tensor,
+            states: Float,
+            labels: Optional[Float] = None,
             temperature: Float = 1e-5,
-            reparameterize: bool = True
+            reparameterize: bool = True,
+            logistic: bool = True,
+            is_weights: Optional[Float] = None,
     ) -> tfd.Distribution:
         logits = self.state_encoder_network(states)
-        logits = tf.concat([(labels * 2. - 1.) * 10., logits], axis=-1)
         batch_size = tf.shape(logits)[0]
-        return tfd.MixtureSameFamily(
-            mixture_distribution=tfd.Categorical(
-                logits=tf.ones(shape=(batch_size, batch_size))),
-            components_distribution=tfd.Independent(
-                tfd.RelaxedBernoulli(
-                    logits=tf.tile(tf.expand_dims(logits, axis=0), [batch_size, 1, 1]),
-                    temperature=temperature,
-                ), reinterpreted_batch_ndims=1),
-            reparameterize=reparameterize)
+        reparameterize = reparameterize and labels is None
+
+        if is_weights is None:
+            mixture_distribution = tfd.Categorical(logits=tf.ones(shape=(batch_size,)))
+        else:
+            mixture_distribution = tfd.Categorical(probs=tf.pow(tf.cast(batch_size, tf.float32), -1.) * is_weights)
+
+        if logistic:
+            latent_state_distribution = tfd.MixtureSameFamily(
+                mixture_distribution=mixture_distribution,
+                components_distribution=tfd.Independent(
+                    tfd.Logistic(
+                        loc=logits / temperature,
+                        scale=1. / temperature)
+                ), reparameterize=reparameterize)
+        else:
+            latent_state_distribution = tfd.MixtureSameFamily(
+                mixture_distribution=mixture_distribution,
+                components_distribution=tfd.Independent(
+                    tfd.RelaxedBernoulli(
+                        logits=logits,
+                        temperature=temperature,)
+                ), reparameterize=reparameterize)
+
+        if labels is not None:
+            return tfd.JointDistributionSequential([
+                tfd.MixtureSameFamily(
+                    mixture_distribution=mixture_distribution,
+                    components_distribution=tfd.Independent(
+                        tfd.Bernoulli(
+                            logits=(labels * 2. - 1) * 1e2,
+                            allow_nan_stats=False)
+                    ),
+                ),
+                latent_state_distribution
+            ])
+        else:
+            return latent_state_distribution
 
     def action_embedding_function(
             self,
@@ -747,6 +777,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             next_state: tf.Tensor,
             next_label: tf.Tensor,
             sample_key: Optional[tf.Tensor] = None,
+            sample_probability: Optional[Float] = None,
             additional_transition_batch: Optional[Tuple[Float, ...]] = None,
             *args, **kwargs
     ):
@@ -797,11 +828,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         # Wasserstein regularizers
         steady_state_regularizer = tf.squeeze(
-                self.steady_state_lipschitz_network(next_transition_latent_state) -
-                self.steady_state_lipschitz_network(next_stationary_latent_state))
+            self.steady_state_lipschitz_network(next_transition_latent_state) -
+            self.steady_state_lipschitz_network(next_stationary_latent_state))
         transition_loss_regularizer = tf.squeeze(
-                self.transition_loss_lipschitz_network([state, action, next_latent_state]) -
-                self.transition_loss_lipschitz_network([state, action, next_transition_latent_state]))
+            self.transition_loss_lipschitz_network([state, action, next_latent_state]) -
+            self.transition_loss_lipschitz_network([state, action, next_transition_latent_state]))
 
         _action_successor_regularizers = self.marginal_encoder_wasserstein_action_successor_regularizer(
             state=state,
@@ -811,6 +842,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             next_label=next_label,
             latent_state=latent_state,
             next_latent_state=next_latent_state,
+            sample_probability=sample_probability,
             additional_transition_batch=additional_transition_batch)
         action_successor_regularizer = tf.squeeze(_action_successor_regularizers['regularizer'])
         action_successor_gradient_penalty = _action_successor_regularizers['gradient_penalty']
@@ -835,7 +867,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                                           steady_state_regularizer +
                                           transition_loss_regularizer +
                                           action_successor_regularizer)))
-        
+
         # loss metrics
         self.loss_metrics['reconstruction_loss'](reconstruction_loss)
         self.loss_metrics['state_mse'](next_state, _next_state)
@@ -891,15 +923,28 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             latent_state: tf.Tensor,
             next_latent_state: tf.Tensor,
             discrete: bool = False,
+            sample_probability: Optional[Tuple[Float, ...]] = None,
             additional_transition_batch: Optional[Tuple[Float, ...]] = None
     ):
         if additional_transition_batch is not None:
             _batch = additional_transition_batch
             _state, _label, _action, _next_state, _next_label = _batch[0], _batch[1], _batch[2], _batch[4], _batch[5]
-            if len(_batch) >= 8:
-                is_weights = tf.stop_gradient(tf.reduce_min(_batch[7])) / _batch[7]
+
+            logistic_latent_state_without_label = super().relaxed_state_encoding(
+                state=state, temperature=self.state_encoder_temperature
+            ).sample()
+            latent_state = tf.concat([label, tf.sigmoid(logistic_latent_state_without_label)], axis=-1)
+
+            # importance sampling weights
+            if sample_probability is None:
+                sample_probability = tf.ones(shape=(tf.shape(state)[0],)) * tf.pow(1. * tf.shape(state)[0], -1.)
+            if len(_batch) < 8:
+                batch_sample_probability = tf.ones(shape=(tf.shape(_state)[0],)) * tf.pow(1. * tf.shape(_state)[0], -1.)
             else:
-                is_weights = 1.
+                batch_sample_probability = _batch[7]
+            marginal_sample_probability = tf.concat([sample_probability, batch_sample_probability], axis=0)
+            is_weights = tf.stop_gradient(tf.reduce_min(marginal_sample_probability)) / marginal_sample_probability
+            is_weights_batch = tf.stop_gradient(tf.reduce_min(batch_sample_probability)) / batch_sample_probability
 
             _latent_action = self.relaxed_action_encoding(
                 latent_state, _action, temperature=self.action_encoder_temperature
@@ -916,37 +961,38 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             # the next latent state sampled is divided into label and next state Bernoulli without labels
             next_latent_state = tf.concat(next_latent_state, axis=-1)
             action_successor_lipschitz_1 = tf.squeeze(
-                    self.action_successor_lipschitz_network([
-                        latent_state,
-                        _latent_action,
-                        _next_latent_state
-                    ])
-            )
-            p_latent_state = self.relaxed_state_encoding(
-                state=_state, temperature=self.state_encoder_temperature, label=_label
-            ).prob(
-                tf.clip_by_value(
+                self.action_successor_lipschitz_network([
                     latent_state,
-                    clip_value_min=1e-7,
-                    clip_value_max=1. - 1e-7)
+                    _latent_action,
+                    _next_latent_state
+                ])
             )
-            q_latent_state = self.relaxed_marginal_state_encoder_distribution(
-                states=state,
-                labels=label,
+            # use the logistic relaxed encoding to avoid underflow issues
+            log_p_latent_state_without_label = super().relaxed_state_encoding(
+                    state=_state, temperature=self.state_encoder_temperature,
+            ).log_prob(logistic_latent_state_without_label)
+            log_q_latent_state = self.relaxed_marginal_state_encoder_distribution(
+                states=tf.concat([state, _state], axis=0),
+                labels=tf.concat([label, _label], axis=0),
                 temperature=self.state_encoder_temperature,
-                reparameterize=False
-            ).prob(
-                tf.clip_by_value(
-                    latent_state,
-                    clip_value_min=1e-7,
-                    clip_value_max=1. - 1e-7)
+                reparameterize=False,
+                # use the logistic relaxed encoding to avoid underflow issues
+                logistic=True,
+                is_weights=is_weights,
+            ).log_prob(label, logistic_latent_state_without_label)
+            latent_state_prob_ratio = tf.where(
+                condition=tf.reduce_all(label == _label, axis=-1),
+                x=tf.exp(log_p_latent_state_without_label - log_q_latent_state),
+                y=0.
             )
             action_successor_lipschitz_2 = tf.squeeze(
-                    self.action_successor_lipschitz_network([
-                        latent_state, latent_action, next_latent_state]))
+                self.action_successor_lipschitz_network([
+                    latent_state, latent_action, next_latent_state])
+            )
             regularizer = (
-                    is_weights *
-                    action_successor_lipschitz_1 * p_latent_state / q_latent_state -
+                    is_weights_batch *
+                    action_successor_lipschitz_1 *
+                    latent_state_prob_ratio -
                     action_successor_lipschitz_2
             )
             x = tf.concat([_latent_action, _next_latent_state], axis=-1)
@@ -954,15 +1000,17 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
             if debug:
                 tf.print("sampled transition", (_state, _label, _action, _next_state, _next_label))
-                tf.print("sample_is_weights", is_weights)
+                tf.print("is_weights", is_weights)
+                tf.print("batch_sample_is_weights", is_weights_batch)
                 tf.print("ASL_fn_1", action_successor_lipschitz_1)
-                tf.print("sample_is_weights * ASL_fn_1", is_weights * action_successor_lipschitz_1)
+                tf.print("sample_is_weights * ASL_fn_1", is_weights_batch * action_successor_lipschitz_1)
                 tf.print("ASL__latent_action", _latent_action)
                 tf.print("ASL__next_latent_state", next_latent_state)
                 tf.print("ASL_latent_action", latent_action)
                 tf.print("ASL_next_latent_state", next_latent_state)
-                tf.print("ASL_p_latent_state", p_latent_state)
-                tf.print("ASL_q_latent_state", q_latent_state)
+                tf.print("ASL_log_p_latent_state_without_label", log_p_latent_state_without_label)
+                tf.print("ASL_log_q_latent_state", log_q_latent_state)
+                tf.print("ASL_latent_state_prob_ratio", latent_state_prob_ratio)
                 tf.print("ASL_fn_2", action_successor_lipschitz_2)
                 tf.print("ASL_regularizer", regularizer)
                 tf.print("ASL_x", x)
@@ -1114,7 +1162,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             additional_transition_batch: Optional[Tuple[Float]] = None,
             *args, **kwargs
     ):
-        output = self(state, label, action, reward, next_state, next_label, sample_key,
+        output = self(state, label, action, reward, next_state, next_label,
+                      sample_key=sample_key,
+                      sample_probability=sample_probability,
                       additional_transition_batch=additional_transition_batch)
 
         if debug:
@@ -1244,7 +1294,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 optimizer = {
                     'min': self._autoencoder_optimizer,
                     'max': self._wasserstein_regularizer_optimizer
-                 }[optimization_direction]
+                }[optimization_direction]
                 optimizer.apply_gradients(zip(gradients, variables))
 
                 if debug_gradients:

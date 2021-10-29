@@ -54,7 +54,7 @@ tfb = tfp.bijectors
 debug = False
 debug_verbosity = -1
 debug_gradients = False
-check_numerics = False
+check_numerics = True
 
 if check_numerics:
     tf.debugging.enable_check_numerics()
@@ -1796,7 +1796,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 additional_training_metrics['epsilon_greedy'] = epsilon_greedy
             if use_prioritized_replay_buffer and not buckets_based_priorities:
                 diff = (self.priority_handler.max_loss.result() - self.priority_handler.min_loss.result())
-                additional_training_metrics['priority_logistic_smoothness'] = self.priority_handler.max_priority / diff
+                if diff != 0:
+                    additional_training_metrics['priority_logistic_smoothness'] = self.priority_handler.max_priority / diff
                 additional_training_metrics['priority_logistic_mean'] = diff / 2
                 additional_training_metrics['priority_logistic_max'] = self.priority_handler.max_loss.result()
                 additional_training_metrics['priority_logistic_min'] = self.priority_handler.min_loss.result()
