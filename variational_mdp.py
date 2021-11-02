@@ -54,7 +54,7 @@ tfb = tfp.bijectors
 debug = False
 debug_verbosity = -1
 debug_gradients = False
-check_numerics = True
+check_numerics = False
 
 if check_numerics:
     tf.debugging.enable_check_numerics()
@@ -1784,7 +1784,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             if tf.logical_and(tf.equal(global_step, 0), save_directory is not None):
                 _time = time.time()
                 print("Saving base model")
-                # save(os.path.join(log_name, 'base'))
+                save(os.path.join(log_name, 'base'))
                 save_time = time.time() - _time
                 save_time += 10.  # epsilon
 

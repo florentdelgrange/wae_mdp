@@ -959,9 +959,15 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
             # importance sampling weights
             if sample_probability is None:
-                sample_probability = tf.ones(shape=(tf.shape(state)[0],)) * tf.pow(1. * tf.shape(state)[0], -1.)
+                sample_probability = (
+                        tf.ones(shape=(tf.shape(state)[0],)) *
+                        tf.pow(tf.cast(tf.shape(state)[0], tf.float32), -1.)
+                )
             if len(_batch) < 8:
-                batch_sample_probability = tf.ones(shape=(tf.shape(_state)[0],)) * tf.pow(1. * tf.shape(_state)[0], -1.)
+                batch_sample_probability = (
+                        tf.ones(shape=(tf.shape(_state)[0],)) *
+                        tf.pow(tf.cast(tf.shape(_state)[0], tf.float32), -1.)
+                )
             else:
                 batch_sample_probability = _batch[7]
             marginal_sample_probability = tf.concat([sample_probability, batch_sample_probability], axis=0)
@@ -1050,7 +1056,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 latent_state = tf.concat([latent_state_label, latent_state], axis=-1)
                 latent_action = self.discrete_action_encoding(
                     latent_state,
-                    action)
+                    action
+                ).sample()
                 log_p_latent_state_without_label = self.binary_encode_state(
                     state=state,
                 ).log_prob(latent_state_without_label)
@@ -1064,25 +1071,28 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     is_weights=is_weights)
                 latent_state_label, latent_state_without_label = marginal_state_encoder.sample(
                     sample_shape=(tf.shape(state)[0],))
-                latent_state = tf.concat([latent_state_label, tf.sigmoid(latent_state_without_label)], axis=-1)
+                latent_state = tf.concat(
+                    [tf.cast(latent_state_label, tf.float32), tf.sigmoid(latent_state_without_label)],
+                    axis=-1)
                 latent_action = self.relaxed_action_encoding(
                     latent_state,
                     action,
-                    temperature=self.action_encoder_temperature)
+                    temperature=self.action_encoder_temperature
+                ).sample()
                 log_p_latent_state_without_label = super().relaxed_state_encoding(
                     state=state, temperature=self.state_encoder_temperature,
                 ).log_prob(latent_state_without_label)
 
             log_q_latent_state = marginal_state_encoder.log_prob(latent_state_label, latent_state_without_label)
             latent_state_prob_ratio = tf.where(
-                condition=tf.reduce_all(label == latent_state_label, axis=-1),
+                condition=tf.reduce_all(label == tf.cast(latent_state_label, tf.float32), axis=-1),
                 x=tf.exp(log_p_latent_state_without_label - log_q_latent_state),
                 y=0.
             )
-            regularizer = (
-                    self.action_successor_lipschitz_network(latent_state, latent_action, next_latent_state) *
-                    latent_state_prob_ratio
-            )
+            regularizer = tf.squeeze(
+                        self.action_successor_lipschitz_network(
+                            [latent_state, latent_action, next_latent_state])
+            ) * latent_state_prob_ratio
             x = tf.concat([latent_action, next_latent_state], axis=-1)
 
             if discrete:
@@ -1105,7 +1115,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                         temperature=self.state_prior_temperature,
                     ).sample(),
                     axis=-1)
-            regularizer -= self.action_successor_lipschitz_network(latent_state, latent_action, next_latent_state)
+            regularizer -= tf.squeeze(self.action_successor_lipschitz_network(
+                [latent_state, latent_action, next_latent_state]))
             y = tf.concat([latent_action, next_latent_state], axis=-1)
 
         return {
