@@ -1033,7 +1033,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 tf.print("ASL_fn_1", action_successor_lipschitz_1)
                 tf.print("sample_is_weights * ASL_fn_1", is_weights_batch * action_successor_lipschitz_1)
                 tf.print("ASL__latent_action", _latent_action)
-                tf.print("ASL__next_latent_state", next_latent_state)
+                tf.print("ASL__next_latent_state", _next_latent_state)
                 tf.print("ASL_latent_action", latent_action)
                 tf.print("ASL_next_latent_state", next_latent_state)
                 tf.print("ASL_log_p_latent_state_without_label", log_p_latent_state_without_label)
@@ -1249,7 +1249,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         loss = lambda minimize: tf.reduce_mean(
             (-1.) ** (1. - minimize) * is_weights *
-            (minimize * reconstruction_loss + wasserstein_loss + (1. - minimize) * gradient_penalty)
+            (minimize * reconstruction_loss + wasserstein_loss + (minimize - 1.) * gradient_penalty)
         )
 
         return {'min': loss(1.), 'max': loss(0.)}
