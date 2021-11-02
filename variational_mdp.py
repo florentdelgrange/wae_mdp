@@ -2002,7 +2002,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
             log_name: Optional[str] = None,
             train_summary_writer: Optional[tf.summary.SummaryWriter] = None,
             eval_policy_driver: Optional[tf_agents.drivers.dynamic_episode_driver.DynamicEpisodeDriver] = None,
-            local_losses_estimator: Optional[Callable] = None
+            local_losses_estimator: Optional[Callable] = None,
+            *args, **kwargs,
     ):
 
         if (dataset is None) == (dataset_iterator is None or batch_size is None):
