@@ -114,6 +114,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             reset_state_label: bool = True,
             autoencoder_optimizer: Optional = None,
             wasserstein_regularizer_optimizer: Optional = None,
+            entropy_regularizer_scale_factor: float = 0.,
+            entropy_regularizer_decay_rate: float = 0.,
             evaluation_window_size: int = 1,
             evaluation_criterion: EvaluationCriterion = EvaluationCriterion.MAX,
             importance_sampling_exponent: Optional[Float] = 1.,
@@ -136,7 +138,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             importance_sampling_exponent=importance_sampling_exponent,
             importance_sampling_exponent_growth_rate=importance_sampling_exponent_growth_rate,
             time_stacked_lstm_units=time_stacked_lstm_units,
-            reward_bounds=reward_bounds)
+            reward_bounds=reward_bounds,
+            entropy_regularizer_scale_factor=entropy_regularizer_scale_factor,
+            entropy_regularizer_decay_rate=entropy_regularizer_decay_rate)
 
         self.wasserstein_regularizer_scale_factor = wasserstein_regularizer_scale_factor
         self.mixture_components = None
