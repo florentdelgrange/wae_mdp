@@ -486,7 +486,9 @@ def main(argv):
             importance_sampling_exponent=params['importance_sampling_exponent'],
             importance_sampling_exponent_growth_rate=params['importance_sampling_exponent_growth_rate'],
             evaluation_window_size=params['evaluation_window_size'],
-            reward_bounds=reward_bounds, )
+            reward_bounds=reward_bounds,
+            entropy_regularizer_scale_factor=params['entropy_regularizer_scale_factor'],
+            entropy_regularizer_decay_rate=params['entropy_regularizer_decay_rate'])
         models = [wae_mdp]
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
 
