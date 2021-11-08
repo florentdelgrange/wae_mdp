@@ -886,7 +886,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
     def entropy_regularizer(
             self, state: tf.Tensor,
             use_marginal_entropy: bool = False,
-            latent_states: Optional[tf.Tensor] = None
+            latent_states: Optional[tf.Tensor] = None,
+            *args, **kwargs
     ):
         logits = self.encoder_network(state)
 
