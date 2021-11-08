@@ -462,7 +462,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         )(_transition_loss_lipschitz_network)
 
         return Model(
-            inputs=[state, action, next_latent_state],
+            inputs=[state, action, latent_state, latent_action, next_latent_state],
             outputs=_transition_loss_lipschitz_network,
             name='transition_loss_lipschitz_network')
 
@@ -872,13 +872,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         ) ** 2.
 
         # marginal variance of the reconstruction
-        y = tf.concat([
-            tfd.JointDistributionSequential([
-                self.decode_action(latent_state, latent_action),
-                self.reward_distribution(latent_state, latent_action),
-            ]).sample(),
-            _next_state
-        ], axis=-1)
+        random_action, random_reward = tfd.JointDistributionSequential([
+            self.decode_action(latent_state, latent_action),
+            self.reward_distribution(latent_state, latent_action),
+        ]).sample()
+        y = tf.concat([random_action, random_reward, _next_state], axis=-1)
         mean = tf.concat([_action, _reward, _next_state], axis=-1)
         marginal_variance = tf.reduce_sum((y - mean) ** 2. + (mean - tf.reduce_mean(mean)) ** 2., axis=-1)
 
@@ -904,14 +902,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 [state, action, latent_state, latent_action, _x]))
 
         # entropy regularizer
-        if self.entropy_regularizer_scale_factor > epsilon:
-            entropy_regularizer = self.entropy_regularizer(
-                state=state,
-                latent_states=latent_state,
-                label=label,
-                sample_probability=sample_probability)
-        else:
-            entropy_regularizer = 0.
+        entropy_regularizer =  self.entropy_regularizer(
+            state=state,
+            latent_states=latent_state,
+            label=label,
+            sample_probability=sample_probability)
 
         # priority support
         if self.priority_handler is not None and sample_key is not None:
@@ -935,8 +930,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.loss_metrics['gradient_penalty'](
             steady_state_gradient_penalty + transition_loss_gradient_penalty)
         self.loss_metrics['state_encoder_entropy'](self.binary_encode_state(state).entropy())
-        self.loss_metrics['action_encoder_entropy'](
-            self.discrete_action_encoding(latent_state, action).entropy())
         self.loss_metrics['entropy_regularizer'](entropy_regularizer)
 
         if debug:
@@ -1284,13 +1277,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         ) ** 2.
 
         # marginal variance of the reconstruction
-        y = tf.concat([
-            tfd.JointDistributionSequential([
-                self.decode_action(latent_state, latent_action),
-                self.reward_distribution(latent_state, latent_action),
-            ]).sample(),
-            _next_state
-        ], axis=-1)
+        random_action, random_reward = tfd.JointDistributionSequential([
+            self.decode_action(latent_state, latent_action),
+            self.reward_distribution(latent_state, latent_action),
+        ]).sample()
+        y = tf.concat([random_action, random_reward, _next_state], axis=-1)
         mean = tf.concat([_action, _reward, _next_state], axis=-1)
         marginal_variance = tf.reduce_sum((y - mean) ** 2. + (mean - tf.reduce_mean(mean)) ** 2., axis=-1)
 
@@ -1392,22 +1383,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         if label is not None:
             return tf.reduce_mean(marginal_state_encoder_distribution.log_prob(
-                softclip(label), softclip(latent_states))
+                softclip(label), softclip(latent_states[:, self.atomic_props_dims:, ...]))
             )
         else:
             return tf.reduce_mean(marginal_state_encoder_distribution.log_prob(softclip(latent_states)))
-
-    def mean_latent_bits_used(self, inputs, eps=1e-3, deterministic=True):
-        state, label, action, reward, next_state, next_label = inputs[:6]
-        latent_state = tf.cast(self.binary_encode_state(state, label).sample(), tf.float32)
-        mean = tf.reduce_mean(self.discrete_action_encoding(latent_state, action).probs_parameter(),
-                              axis=0)
-        check = lambda x: 1 if 1 - eps > x > eps else 0
-        mean_bits_used = tf.reduce_sum(tf.map_fn(check, mean), axis=0).numpy()
-
-        mbu = {'mean_action_bits_used': mean_bits_used}
-        mbu.update(super().mean_latent_bits_used(inputs, eps, deterministic))
-        return mbu
 
     @property
     def state_encoder_temperature(self):
