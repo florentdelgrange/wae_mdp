@@ -57,7 +57,7 @@ debug_gradients = False
 check_numerics = False
 
 if check_numerics:
-    tf.debugging.enable_check_numerics()
+    tf.debugging.enable_check_numerics(stack_height_limit=150)
 
 epsilon = 1e-25
 

@@ -1,3 +1,4 @@
+import gc
 from collections import namedtuple
 
 import numpy as np
@@ -162,6 +163,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.action_encoder_temperature = 1. / (self.number_of_discrete_actions - 1)
         else:
             self.action_encoder_temperature = action_encoder_temperature
+
         self._latent_policy_temperature = None
         if latent_policy_temperature is None:
             self.latent_policy_temperature = self.action_encoder_temperature / 1.5
@@ -304,11 +306,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         _transition_network = transition_network(_transition_network)
         _next_label_logits = Dense(
             units=self.atomic_props_dims,
-            activation=None,
+            activation=lambda x: self._encoder_softclip(x),
             name='next_label_logits')(_transition_network)
         _next_latent_state_logits = Dense(
             units=self.latent_state_size - self.atomic_props_dims,
-            activation=None,
+            activation=lambda x: self._encoder_softclip(x),
             name='next_latent_state_logits')(_transition_network)
 
         return Model(
@@ -602,11 +604,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 tfd.Independent(
                     tfd.RelaxedBernoulli(
                         logits=next_label_logits,
-                        temperature=temperature)),
+                        temperature=temperature,
+                        allow_nan_stats=False)),
                 lambda _next_label: tfd.Independent(
                     tfd.RelaxedBernoulli(
                         logits=next_latent_state_logits,
-                        temperature=temperature))
+                        temperature=temperature,
+                        allow_nan_stats=False))
             ])
 
     def discrete_latent_transition(
@@ -672,7 +676,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     ) -> tfd.Distribution:
         return tfd.RelaxedOneHotCategorical(
             logits=self.latent_policy_network(latent_state),
-            temperature=temperature)
+            temperature=temperature,
+            allow_nan_stats=False)
 
     def discrete_latent_policy(self, latent_state: tf.Tensor):
         return tfd.OneHotCategorical(logits=self.latent_policy_network(latent_state))
@@ -686,7 +691,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         return tfd.OneHotCategorical(logits=self.latent_steady_state_logits)
 
     def relaxed_latent_steady_state_distribution(self, temperature) -> tfd.Distribution:
-        return tfd.RelaxedOneHotCategorical(logits=self.latent_steady_state_logits, temperature=temperature)
+        return tfd.RelaxedOneHotCategorical(
+                logits=self.latent_steady_state_logits,
+                temperature=temperature,
+                allow_nan_stats=False)
 
     def discrete_marginal_state_encoder_distribution(
             self,
@@ -736,9 +744,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         reparameterize = reparameterize and labels is None
 
         if is_weights is None:
-            mixture_distribution = tfd.Categorical(logits=tf.ones(shape=(batch_size,)))
+            mixture_distribution = tfd.Categorical(logits=tf.ones(shape=(batch_size,)), allow_nan_stats=False)
         else:
-            mixture_distribution = tfd.Categorical(probs=tf.pow(tf.cast(batch_size, tf.float32), -1.) * is_weights)
+            mixture_distribution = tfd.Categorical(probs=tf.pow(tf.cast(batch_size, tf.float32), -1.) * is_weights, allow_nan_stats=False)
 
         if logistic:
             latent_state_distribution = tfd.MixtureSameFamily(
@@ -746,16 +754,22 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 components_distribution=tfd.Independent(
                     tfd.Logistic(
                         loc=logits / temperature,
-                        scale=1. / temperature)
-                ), reparameterize=reparameterize)
+                        scale=1. / temperature,
+                        allow_nan_stats=False)
+                ),
+                reparameterize=reparameterize,
+                allow_nan_stats=False)
         else:
             latent_state_distribution = tfd.MixtureSameFamily(
                 mixture_distribution=mixture_distribution,
                 components_distribution=tfd.Independent(
                     tfd.RelaxedBernoulli(
                         logits=logits,
-                        temperature=temperature,)
-                ), reparameterize=reparameterize)
+                        temperature=temperature,
+                        allow_nan_stats=False)
+                ),
+                reparameterize=reparameterize,
+                allow_nan_stats=False)
 
         if labels is not None:
             return tfd.JointDistributionSequential([
@@ -766,6 +780,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                             logits=(labels * 2. - 1) * 1e2,
                             allow_nan_stats=False)
                     ),
+                    allow_nan_stats=False
                 ), latent_state_distribution
             ])
         else:
@@ -1374,11 +1389,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
     @property
     def latent_policy_temperature(self):
-        return self._action_encoder_temperature
+        return self._latent_policy_temperature
 
     @latent_policy_temperature.setter
     def latent_policy_temperature(self, value):
-        self._action_encoder_temperature = tf.Variable(
+        self._latent_policy_temperature = tf.Variable(
             value, dtype=tf.float32, trainable=False, name='latent_policy_temperature')
 
     @property
@@ -1557,7 +1572,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             log_name: Optional[str] = None,
             train_summary_writer: Optional[tf.summary.SummaryWriter] = None,
             eval_policy_driver: Optional[tf_agents.drivers.dynamic_episode_driver.DynamicEpisodeDriver] = None,
-            local_losses_estimator: Optional[Callable] = None
+            local_losses_estimator: Optional[Callable] = None,
+            *args, **kwargs
     ):
 
         if (dataset is None) == (dataset_iterator is None or batch_size is None):
@@ -1598,6 +1614,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     # we consider is_exponent=1 for evaluation
                     is_weights = tf.reduce_min(sample_probability) / sample_probability  
                 else:
+                    sample_probability = None
                     is_weights = 1.
 
                 evaluation = self.eval(
@@ -1637,15 +1654,15 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                                              step=global_step, buckets=32)
                 if local_losses_metrics is not None:
                     tf.summary.scalar('local_reward_loss', local_losses_metrics.local_reward_loss, step=global_step)
-                    if (local_losses_metrics.local_probability_loss_transition_function_estimation is not None and
-                            local_losses_metrics.local_probability_loss_transition_function_estimation <
-                            local_losses_metrics.local_probability_loss):
+                    if (local_losses_metrics.local_transition_loss_transition_function_estimation is not None and
+                            local_losses_metrics.local_transition_loss_transition_function_estimation <
+                            local_losses_metrics.local_transition_loss):
                         local_transition_loss = \
-                            local_losses_metrics.local_probability_loss_transition_function_estimation
+                            local_losses_metrics.local_transition_loss_transition_function_estimation
                         local_transition_loss_time = local_losses_metrics.time_metrics[
                             'local_transition_loss_transition_function_estimation']
                     else:
-                        local_transition_loss = local_losses_metrics.local_probability_loss
+                        local_transition_loss = local_losses_metrics.local_transition_loss
                         local_transition_loss_time = local_losses_metrics.time_metrics['local_transition_loss']
                     tf.summary.scalar('local_transition_loss', local_transition_loss, step=global_step)
                     tf.summary.scalar(
@@ -1653,11 +1670,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                         local_losses_metrics.time_metrics['local_reward_loss'] + local_transition_loss_time,
                         step=global_step)
                     tf.print('Local reward loss: {:.2f}'.format(local_losses_metrics.local_reward_loss))
-                    tf.print('Local transition loss: {:.2f}'.format(local_losses_metrics.local_probability_loss))
+                    tf.print('Local transition loss: {:.2f}'.format(local_losses_metrics.local_transition_loss))
                     tf.print('Local transition loss (empirical transition function): {:.2f}'
-                             ''.format(local_losses_metrics.local_probability_loss_transition_function_estimation))
+                             ''.format(local_losses_metrics.local_transition_loss_transition_function_estimation))
 
-            print('eval ELBO: ', metrics['eval_elbo'].result().numpy())
+            print('eval loss: ', metrics['eval_loss'].result().numpy())
 
         if eval_policy_driver is not None or eval_steps > 0:
             self.assign_score(
@@ -1669,4 +1686,4 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         gc.collect()
 
-        return metrics['eval_elbo'].result()
+        return metrics['eval_loss'].result()
