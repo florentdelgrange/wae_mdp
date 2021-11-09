@@ -1183,7 +1183,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
         if self._optimizer is not None:
             self._optimizer.apply_gradients(zip(gradients, trainable_variables))
-        return loss
+        return {'loss': loss}
 
     @tf.function
     def compute_apply_gradients(
@@ -1828,26 +1828,6 @@ class VariationalMarkovDecisionProcess(tf.Module):
             if checkpoint is not None and tf.equal(tf.math.mod(global_step, checkpoint_interval), 0):
                 manager.save()
 
-            if aggressive_training and global_step.numpy() < aggressive_training_steps:
-                if display_progressbar:
-                    progressbar.add(0, [('aggressive_updates_ratio', aggressive_inference_optimization)])
-                if best_loss is None:
-                    best_loss = loss
-                if prev_loss is not None:
-                    if tf.abs(loss - prev_loss) > convergence_error:  # and loss < best_loss:
-                        convergence_steps = approximate_convergence_steps
-                    else:
-                        convergence_steps -= 1
-                    best_loss = min(loss, best_loss)
-                prev_loss = loss
-                inference_update_steps += 1
-                if convergence_steps == 0 or inference_update_steps == max_inference_update_steps:
-                    aggressive_inference_optimization = not aggressive_inference_optimization
-                    convergence_steps = approximate_convergence_steps if aggressive_inference_optimization else 0
-                    best_loss = None
-                    prev_loss = None
-                    inference_update_steps = 0
-
             if wall_time is not None:
                 _loop_time = time.time() - _loop_time
                 training_loop_time = max(training_loop_time, _loop_time)
@@ -1868,8 +1848,9 @@ class VariationalMarkovDecisionProcess(tf.Module):
                             memory_used, memory_growth, memory_limit))
                         break
 
-            if tf.reduce_any(tf.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss))):
-                raise ValueError("Loss is NaN or Inf.")
+            for key, value in loss.items():
+                if tf.reduce_any(tf.logical_or(tf.math.is_nan(value), tf.math.is_inf(value))):
+                    raise ValueError("{} is NaN or Inf: {}".format(key, value))
 
         # save the final model
         if save_directory is not None:
@@ -1914,7 +1895,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
             self.anneal()
 
         # update progressbar
-        metrics_key_values = [('step', global_step.numpy()), ('loss', loss.numpy())] + \
+        metrics_key_values = [('step', global_step.numpy())] + \
+                             [(key, value) for key, value in loss.items()] + \
                              [(key, value.result()) for key, value in self.loss_metrics.items()] + \
                              [(key, value) for key, value in additional_metrics.items()] + \
                              [(key, value) for key, value in self.mean_latent_bits_used(dataset_batch).items()]
@@ -1922,7 +1904,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
             metrics_key_values.append(('t_1', self.encoder_temperature))
             metrics_key_values.append(('t_2', self.prior_temperature))
             metrics_key_values.append(('entropy_regularizer_scale_factor', self.entropy_regularizer_scale_factor))
-            metrics_key_values.append(('kl_annealing_scale_factor', self.kl_scale_factor))
+            if self.kl_scale_factor != 1.:
+                metrics_key_values.append(('kl_annealing_scale_factor', self.kl_scale_factor))
         if prioritized_experience_replay:
             metrics_key_values.append(('wis_exponent', self.is_exponent))
         if progressbar is not None and display_progressbar:
