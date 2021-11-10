@@ -513,7 +513,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
         return optimizer
 
     def relaxed_state_encoding(
-            self, state: tf.Tensor, temperature: float, label: Optional[tf.Tensor] = None
+            self, state: tf.Tensor, temperature: float, label: Optional[tf.Tensor] = None, *args, **kwargs
     ) -> tfd.Distribution:
         """
         Embed the input state and its label (if given) into a Binary Concrete probability distribution over
@@ -625,7 +625,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
     def relaxed_latent_transition(
             self, latent_state: tf.Tensor, action: tf.Tensor, next_label: Optional[tf.Tensor] = None,
-            temperature: float = 1e-5
+            temperature: float = 1e-5, *args, **kwargs
     ) -> tfd.Distribution:
         """
         Retrieves a Binary Concrete probability distribution P(z'|z, a) over successor latent states, given a latent
