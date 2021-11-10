@@ -232,14 +232,16 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             'state_mse': MeanSquaredError(name='state_mse'),
             'action_mse': MeanSquaredError(name='action_mse'),
             'reward_mse': MeanSquaredError(name='reward_loss'),
-            'marginal_variance': Mean(name='marginal_variance'),
             'transition_loss': Mean('transition_loss'),
             'steady_state_regularizer': Mean('steady_state_wasserstein_regularizer'),
             'gradient_penalty': Mean('gradient_penalty'),
             'state_encoder_entropy': Mean('state_encoder_entropy'),
-            'action_encoder_entropy': Mean('action_encoder_entropy'),
             'entropy_regularizer': Mean('entropy_regularizer'),
         }
+        if self.encode_action:
+            self.loss_metrics['action_encoder_entropy'] = Mean('action_encoder_entropy')
+        else:
+            self.loss_metrics['marginal_variance'] = Mean(name='marginal_variance')
 
     def _initialize_state_encoder_network(
             self,
@@ -892,7 +894,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     latent_state,
                     action,
                     temperature=self.action_encoder_temperature),
-                bijector=tfb.Exp())
+                bijector=tfb.Exp()
+            ).sample()
         else:
             latent_action = latent_policy.sample()
 
@@ -934,8 +937,12 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         # reconstruction loss
         # the reward as well as the state and action reconstruction functions are deterministic
         _reward, _action, _next_state = tfd.JointDistributionSequential([
-            self.decode_action(latent_state, mean_latent_action),
-            self.reward_distribution(latent_state, mean_latent_action),
+            self.decode_action(
+                latent_state,
+                latent_action if self.encode_action else mean_latent_action),
+            self.reward_distribution(
+                latent_state,
+                latent_action if self.encode_action else mean_latent_action),
             self.decode_state(next_latent_state)
         ]).sample()
 
@@ -957,6 +964,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             marginal_variance = tf.reduce_sum((y - mean) ** 2. + (mean - tf.reduce_mean(mean)) ** 2., axis=-1)
 
         else:
+            random_action = _action
+            random_reward = _reward
             marginal_variance = 0.
 
         # Wasserstein regularizers
@@ -1003,12 +1012,16 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.loss_metrics['state_mse'](next_state, _next_state)
         self.loss_metrics['action_mse'](action, random_action)
         self.loss_metrics['reward_mse'](reward, random_reward)
-        self.loss_metrics['marginal_variance'](marginal_variance)
         self.loss_metrics['transition_loss'](transition_loss_regularizer)
         self.loss_metrics['steady_state_regularizer'](steady_state_regularizer)
         self.loss_metrics['gradient_penalty'](
             steady_state_gradient_penalty + transition_loss_gradient_penalty)
         self.loss_metrics['state_encoder_entropy'](self.binary_encode_state(state).entropy())
+        if self.encode_action:
+            self.loss_metrics['action_encoder_entropy'](
+                    self.discrete_action_encoding(latent_state, action).entropy())
+        else:
+            self.loss_metrics['marginal_variance'](marginal_variance)
         self.loss_metrics['entropy_regularizer'](entropy_regularizer)
 
         if debug:
@@ -1042,263 +1055,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         straight_lines = noise * x + (1. - noise) * y
         gradients = tf.gradients(lipschitz_function(straight_lines), straight_lines)[0]
         return tf.square(tf.norm(gradients, ord=2, axis=1) - 1.)
-
-    @tf.function
-    def marginal_encoder_wasserstein_action_successor_regularizer(
-            self,
-            state: tf.Tensor,
-            label: tf.Tensor,
-            action: tf.Tensor,
-            next_state: tf.Tensor,
-            next_label: tf.Tensor,
-            latent_state: tf.Tensor,
-            next_latent_state: tf.Tensor,
-            discrete: bool = False,
-            sample_probability: Optional[Tuple[Float, ...]] = None,
-            additional_transition_batch: Optional[Tuple[Float, ...]] = None
-    ):
-
-        # limit of samples used for estimating the marginal encoder distribution
-        sample_limit = 5120
-
-        def _drop_samples_if_required(samples: List[Float]):
-            if discrete:
-                samples_processed = samples[:]
-                for i, sample in enumerate(samples):
-                    if tf.shape(sample)[0] > sample_limit:
-                        samples_processed[i] = sample[:sample_limit]
-                return samples_processed
-            else:
-                return samples
-
-        if sample_probability is None:
-            sample_probability = (
-                    tf.ones(shape=(tf.shape(state)[0],)) *
-                    tf.pow(tf.cast(tf.shape(state)[0], tf.float32), -1.)
-            )
-        if additional_transition_batch is not None:
-            _batch = additional_transition_batch
-            _state, _label, _action, _next_state, _next_label = _batch[0], _batch[1], _batch[2], _batch[4], _batch[5]
-
-            # importance sampling weights
-            if sample_probability is None:
-                sample_probability = (
-                        tf.ones(shape=(tf.shape(state)[0],)) *
-                        tf.pow(tf.cast(tf.shape(state)[0], tf.float32), -1.)
-                )
-            if len(_batch) < 8:
-                batch_sample_probability = (
-                        tf.ones(shape=(tf.shape(_state)[0],)) *
-                        tf.pow(tf.cast(tf.shape(_state)[0], tf.float32), -1.)
-                )
-            else:
-                batch_sample_probability = _batch[7]
-
-            # drop samples if there are too many for the estimation to be tractable
-            (state, label, action, next_state, next_label,
-             latent_state, next_latent_state, sample_probability) = _drop_samples_if_required(
-                [state, label, action, next_state, next_label,
-                 latent_state, next_latent_state, sample_probability])
-            (_state, _label, _action, _next_state, _next_label,
-             batch_sample_probability) = _drop_samples_if_required(
-                [_state, _label, _action, _next_state, _next_label, batch_sample_probability])
-
-            marginal_sample_probability = tf.concat([sample_probability, batch_sample_probability], axis=0)
-            is_weights = tf.stop_gradient(tf.reduce_min(marginal_sample_probability)) / marginal_sample_probability
-            is_weights_batch = tf.stop_gradient(tf.reduce_min(batch_sample_probability)) / batch_sample_probability
-
-            if discrete:
-                # note: in the discrete case, the sample is not logistic but Bernoulli
-                logistic_latent_state_without_label = latent_state[:, self.atomic_props_dims:, ...]
-            else:
-                logistic_latent_state_without_label = super().relaxed_state_encoding(
-                    state=state, temperature=self.state_encoder_temperature
-                ).sample()
-                latent_state = tf.concat([label, tf.sigmoid(logistic_latent_state_without_label)], axis=-1)
-
-            _latent_action = self.relaxed_action_encoding(
-                latent_state, _action, temperature=self.action_encoder_temperature
-            ).sample() if not discrete else tf.cast(
-                self.discrete_action_encoding(latent_state=latent_state, action=_action).sample(),
-                tf.float32)
-            _next_latent_state = tf.concat(
-                [_next_label,
-                 self.relaxed_state_encoding(
-                     _next_state,
-                     temperature=self.state_encoder_temperature
-                 ).sample() if not discrete else tf.cast(
-                     self.binary_encode_state(state=_next_state).sample(), tf.float32)
-                 ], axis=-1)
-            latent_action, next_latent_state = tfd.JointDistributionSequential([
-                self.relaxed_latent_policy(latent_state, temperature=self.latent_policy_temperature),
-                lambda _latent_action: (
-                    self.relaxed_latent_transition(
-                        latent_state, _latent_action, temperature=self.state_prior_temperature
-                    ) if not discrete else self.discrete_latent_transition(latent_state, _latent_action)
-                )
-            ]).sample()
-            # the next latent state sampled is divided into label and next state Bernoulli without labels
-            next_latent_state = tf.concat(next_latent_state, axis=-1)
-            if discrete:
-                next_latent_state = tf.cast(next_latent_state, tf.float32)
-
-            action_successor_lipschitz_1 = tf.squeeze(
-                self.action_successor_lipschitz_network([
-                    latent_state,
-                    _latent_action,
-                    _next_latent_state
-                ])
-            )
-
-            if discrete:
-                log_p_latent_state_without_label = self.binary_encode_state(
-                    state=_state,
-                ).log_prob(logistic_latent_state_without_label)
-                log_q_latent_state = self.discrete_marginal_state_encoder_distribution(
-                    states=tf.concat([state, _state], axis=0),
-                    labels=tf.concat([label, _label], axis=0),
-                    is_weights=is_weights,
-                ).log_prob(label, logistic_latent_state_without_label)
-                latent_state_prob_ratio = tf.where(
-                    condition=tf.reduce_all(label == _label, axis=-1),
-                    x=tf.exp(log_p_latent_state_without_label - log_q_latent_state),
-                    y=0.
-                )
-            else:
-                # use the logistic relaxed encoding to avoid underflow issues
-                log_p_latent_state_without_label = super().relaxed_state_encoding(
-                    state=_state, temperature=self.state_encoder_temperature,
-                ).log_prob(logistic_latent_state_without_label)
-                log_q_latent_state = self.relaxed_marginal_state_encoder_distribution(
-                    states=tf.concat([state, _state], axis=0),
-                    labels=tf.concat([label, _label], axis=0),
-                    temperature=self.state_encoder_temperature,
-                    reparameterize=False,
-                    # use the logistic relaxed encoding to avoid underflow issues
-                    logistic=True,
-                    is_weights=is_weights,
-                ).log_prob(label, logistic_latent_state_without_label)
-                latent_state_prob_ratio = tf.where(
-                    condition=tf.reduce_all(label == _label, axis=-1),
-                    x=tf.exp(log_p_latent_state_without_label - log_q_latent_state),
-                    y=0.
-                )
-            action_successor_lipschitz_2 = tf.squeeze(
-                self.action_successor_lipschitz_network([latent_state, latent_action, next_latent_state])
-            )
-            regularizer = (
-                    is_weights_batch *
-                    action_successor_lipschitz_1 *
-                    latent_state_prob_ratio -
-                    action_successor_lipschitz_2
-            )
-            x = tf.concat([_latent_action, _next_latent_state], axis=-1)
-            y = tf.concat([latent_action, next_latent_state], axis=-1)
-
-            if debug:
-                tf.print("sampled transition", (_state, _label, _action, _next_state, _next_label))
-                tf.print("is_weights", is_weights)
-                tf.print("batch_sample_is_weights", is_weights_batch)
-                tf.print("ASL_fn_1", action_successor_lipschitz_1)
-                tf.print("sample_is_weights * ASL_fn_1", is_weights_batch * action_successor_lipschitz_1)
-                tf.print("ASL__latent_action", _latent_action)
-                tf.print("ASL__next_latent_state", _next_latent_state)
-                tf.print("ASL_latent_action", latent_action)
-                tf.print("ASL_next_latent_state", next_latent_state)
-                tf.print("ASL_log_p_latent_state_without_label", log_p_latent_state_without_label)
-                tf.print("ASL_log_q_latent_state", log_q_latent_state)
-                tf.print("ASL_latent_state_prob_ratio", latent_state_prob_ratio)
-                tf.print("ASL_fn_2", action_successor_lipschitz_2)
-                tf.print("ASL_regularizer", regularizer)
-                tf.print("ASL_x", x)
-                tf.print("ASL_y", y)
-        else:
-            is_weights = tf.stop_gradient(tf.reduce_min(sample_probability)) / sample_probability
-
-            if discrete:
-                marginal_state_encoder = self.discrete_marginal_state_encoder_distribution(
-                    states=state,
-                    labels=label,
-                    is_weights=is_weights)
-                latent_state_label, latent_state_without_label = marginal_state_encoder.sample(
-                    sample_shape=(tf.shape(state)[0],))
-                latent_state = tf.concat([latent_state_label, latent_state_without_label], axis=-1)
-                latent_action = self.discrete_action_encoding(
-                    latent_state,
-                    action
-                ).sample()
-                log_p_latent_state_without_label = self.binary_encode_state(
-                    state=state,
-                ).log_prob(latent_state_without_label)
-            else:
-                marginal_state_encoder = self.relaxed_marginal_state_encoder_distribution(
-                    states=state,
-                    labels=label,
-                    temperature=self.state_encoder_temperature,
-                    reparameterize=True,
-                    logistic=True,
-                    is_weights=is_weights)
-                latent_state_label, latent_state_without_label = marginal_state_encoder.sample(
-                    sample_shape=(tf.shape(state)[0],))
-                latent_state = tf.concat(
-                    [tf.cast(latent_state_label, tf.float32), tf.sigmoid(latent_state_without_label)],
-                    axis=-1)
-                latent_action = self.relaxed_action_encoding(
-                    latent_state,
-                    action,
-                    temperature=self.action_encoder_temperature
-                ).sample()
-                log_p_latent_state_without_label = super().relaxed_state_encoding(
-                    state=state, temperature=self.state_encoder_temperature,
-                ).log_prob(latent_state_without_label)
-
-            log_q_latent_state = marginal_state_encoder.log_prob(latent_state_label, latent_state_without_label)
-            latent_state_prob_ratio = tf.where(
-                condition=tf.reduce_all(label == tf.cast(latent_state_label, tf.float32), axis=-1),
-                x=tf.exp(log_p_latent_state_without_label - log_q_latent_state),
-                y=0.
-            )
-            regularizer = tf.squeeze(
-                self.action_successor_lipschitz_network(
-                    [latent_state, latent_action, next_latent_state])
-            ) * latent_state_prob_ratio
-            x = tf.concat([latent_action, next_latent_state], axis=-1)
-
-            if discrete:
-                latent_action = self.discrete_latent_policy(latent_state).sample()
-                latent_action = tf.cast(latent_action, tf.float32)
-                next_latent_state = tf.concat(
-                    self.discrete_latent_transition(
-                        latent_state,
-                        latent_action,
-                    ).sample(),
-                    axis=-1)
-                next_latent_state = tf.cast(next_latent_state, tf.float32)
-            else:
-                latent_action = self.relaxed_latent_policy(
-                    latent_state,
-                    temperature=self.latent_policy_temperature,
-                ).sample()
-                next_latent_state = tf.concat(
-                    self.relaxed_latent_transition(
-                        latent_state,
-                        latent_action,
-                        temperature=self.state_prior_temperature,
-                    ).sample(),
-                    axis=-1)
-            regularizer -= tf.squeeze(self.action_successor_lipschitz_network(
-                [latent_state, latent_action, next_latent_state]))
-            y = tf.concat([latent_action, next_latent_state], axis=-1)
-
-        return {
-            'regularizer': regularizer,
-            'gradient_penalty': self.compute_gradient_penalty(
-                x, y, lipschitz_function=lambda _x: self.action_successor_lipschitz_network([
-                    latent_state,
-                    _x[:, :self.number_of_discrete_actions, ...],
-                    _x[:, self.number_of_discrete_actions:, ...]
-                ])) if not discrete else 0.
-        }
 
     def eval(
             self,
