@@ -1026,9 +1026,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 [state, action, latent_state, latent_action, _x]))
 
         entropy_regularizer = self.entropy_regularizer(
-            state=next_state,
+            state=state,
+            action=action if self.encode_action else None,
             sample_probability=sample_probability,
-            latent_states=next_latent_state,
+            latent_states=latent_state,
+            latent_actions=latent_action,
             discrete_distribution=False,
             logistic=False)
 
@@ -1293,14 +1295,14 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         regularizer = tf.reduce_mean(
                 -1. * marginal_state_encoder_distribution.log_prob(clip(latent_state)))
 
-        if action is not None:
+        if action is not None and latent_states is not None:
             marginal_action_encoder_distribution = self.relaxed_marginal_action_encoder_distribution(
-                latent_states=latent_state,
+                latent_states=latent_states,
                 actions=action,
                 temperature=self.action_encoder_temperature,
                 is_weights=is_weights)
 
-            regularizer += tf.reduce_mean(-1. * marginal_action_encoder_distribution.log_prob(latent_actions))
+            regularizer += tf.reduce_mean(-1. * marginal_action_encoder_distribution.log_prob(latent_action))
 
         return regularizer
 
