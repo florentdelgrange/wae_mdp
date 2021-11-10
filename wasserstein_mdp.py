@@ -1001,6 +1001,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         if debug:
             tf.print("latent_state", latent_state, summarize=-1)
             tf.print("next_latent_state", next_latent_state, summarize=-1)
+            tf.print("next_stationary_latent_state", next_stationary_latent_state, summarize=-1)
+            tf.print("next_transition_latent_state", next_transition_latent_state, summarize=-1)
+            tf.print("latent_action", latent_action, summarize=-1)
             tf.print("loss", tf.stop_gradient(reconstruction_loss +
                                               marginal_variance +
                                               steady_state_regularizer +
