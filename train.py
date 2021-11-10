@@ -145,20 +145,21 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
         params['policy_path'] = params['policy_path'][:-1]
 
     wae_name = 'wae_LS{}_TD{:.2f}-{:.2f}_activation={}_lr={:g}_seed={:d}' \
-               '_WSR={:g}_TLR={:g}_WASR={:g}' \
-               '_SGP={:g}_TLGP={:g}_ASGP={:g}'.format(
+               '_ER={:g}-decay={:g}' \
+               '_WSR={:g}_TLR={:g}' \
+               '_SGP={:g}_TLGP={:g}'.format(
         params['latent_size'],
         params['state_encoder_temperature'],
         params['state_prior_temperature'],
         params['activation'],
         params['learning_rate'],
         int(params['seed']),
+        params['entropy_regularizer_scale_factor'],
+        params['entropy_regularizer_decay_rate'],
         wasserstein_regularizer.stationary.scaling,
         wasserstein_regularizer.local_transition_loss.scaling,
-        wasserstein_regularizer.action_successor_loss.scaling,
         wasserstein_regularizer.stationary.gradient_penalty_multiplier,
-        wasserstein_regularizer.local_transition_loss.gradient_penalty_multiplier,
-        wasserstein_regularizer.action_successor_loss.gradient_penalty_multiplier)
+        wasserstein_regularizer.local_transition_loss.gradient_penalty_multiplier)
     if params['action_discretizer']:
         if wae_name != '':
             base_model_name = wae_name
@@ -448,8 +449,11 @@ def main(argv):
         )
         vae_name = generate_wae_name(params=params, wasserstein_regularizer=wasserstein_regularizer_scale_factor)
         autoencoder_optimizer = getattr(tf.optimizers, params['optimizer'])(learning_rate=params['learning_rate'])
-        wasserstein_optimizer = getattr(tf.optimizers, params['wasserstein_optimizer'])(
-            learning_rate=params['wasserstein_learning_rate'])
+        if params['wasserstein_optimizer'] is None:
+            wasserstein_optimizer = autoencoder_optimizer
+        else:
+            wasserstein_optimizer = getattr(tf.optimizers, params['wasserstein_optimizer'])(
+                learning_rate=params['wasserstein_learning_rate'])
         optimizer = [autoencoder_optimizer, wasserstein_optimizer]
         network = generate_network_components(params, wasserstein_networks=True)
         action_network = generate_network_components(params, name='action')
@@ -468,7 +472,6 @@ def main(argv):
             latent_policy_network=network.discrete_policy,
             steady_state_lipschitz_network=network.steady_state,
             transition_loss_lipschitz_network=network.local_transition_loss,
-            action_successor_lipschitz_network=network.action_successor,
             latent_state_size=latent_state_size,
             number_of_discrete_actions=params['number_of_discrete_actions'],
             state_encoder_pre_processing_network=(network.state_encoder_pre_processing
@@ -488,7 +491,8 @@ def main(argv):
             evaluation_window_size=params['evaluation_window_size'],
             reward_bounds=reward_bounds,
             entropy_regularizer_scale_factor=params['entropy_regularizer_scale_factor'],
-            entropy_regularizer_decay_rate=params['entropy_regularizer_decay_rate'])
+            entropy_regularizer_decay_rate=params['entropy_regularizer_decay_rate'],
+            relaxed_exp_one_hot_action_encoding=True)
         models = [wae_mdp]
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
 
@@ -1056,7 +1060,7 @@ if __name__ == '__main__':
     )
     flags.DEFINE_string(
         "wasserstein_optimizer",
-        default='Adam',
+        default=None,
         help='Optimizer name for the Wasserstein regularizers (see tf.optimizers).'
     )
     flags.DEFINE_float(
