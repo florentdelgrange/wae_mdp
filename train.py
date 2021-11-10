@@ -464,7 +464,7 @@ def main(argv):
             label_shape=label_shape,
             discretize_action_space=params['action_discretizer'],
             state_encoder_network=network.encoder,
-            action_encoder_network=action_network.encoder,
+            action_encoder_network=action_network.encoder if params['encode_actions'] else None,
             action_decoder_network=action_network.decoder,
             transition_network=network.transition,
             reward_network=network.reward,
@@ -1067,6 +1067,12 @@ if __name__ == '__main__':
         'wasserstein_learning_rate',
         default=1e-4,
         help='Learning rate for the optimizer of the Wasserstein regularizers.'
+    )
+    flags.DEFINE_bool(
+        'encode_actions',
+        default=True,
+        help='Whether to use an action encoder or not to learn a latent action space.'
+             'If not, the latent policy alone will be used.'
     )
 
     FLAGS = flags.FLAGS
