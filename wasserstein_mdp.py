@@ -1287,11 +1287,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
     @property
     def inference_variables(self):
-        #  if self.action_discretizer:
-        #      return self.state_encoder_network.trainable_variables + self.action_encoder_network.trainable_variables
-        #  else:
-        #      return self.state_encoder_network.trainable_variables
-        return self.state_encoder_network.trainable_variables
+        if self.action_discretizer and self.encode_action:
+            return self.state_encoder_network.trainable_variables + self.action_encoder_network.trainable_variables
+        else:
+            return self.state_encoder_network.trainable_variables
 
     @property
     def generator_variables(self):
@@ -1309,7 +1308,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     def wasserstein_variables(self):
         return (self.steady_state_lipschitz_network.trainable_variables +
                 self.transition_loss_lipschitz_network.trainable_variables)  # +
-        #  self.action_successor_lipschitz_network.trainable_variables)
 
     def _compute_apply_gradients(
             self, state, label, action, reward, next_state, next_label,
