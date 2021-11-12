@@ -167,10 +167,11 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
             base_model_name,
             os.path.split(params['policy_path'])[-1],
             'action_discretizer',
-            'LA{}_TD{:.2f}-{:.2f}'.format(
+            'LA{}_TD{:.2f}-{:.2f}_encode_actions={}'.format(
                 params['number_of_discrete_actions'],
                 params['action_encoder_temperature'],
-                params['latent_policy_temperature'])
+                params['latent_policy_temperature'],
+                str(params['encode_actions']))
         )
 
     if params['prioritized_experience_replay']:
