@@ -626,6 +626,22 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self,
             latent_state: Float
     ) -> tfd.Distribution:
+        if self.action_discretizer:
+            batch_size = tf.shape(latent_state)[0]
+            loc = self.action_reconstruction_network([
+                    tf.repeat(latent_state, self.number_of_discrete_actions, axis=0),
+                    tf.tile(tf.eye(self.number_of_discrete_actions), [batch_size, 1])
+            ])
+            loc = tf.reshape(loc, tf.concat([[batch_size], [self.number_of_discrete_actions], self.action_shape], axis=-1))
+            return tfd.MixtureSameFamily(
+                mixture_distribution=tfd.Categorical(
+                    logits=self.discrete_latent_policy(latent_state).logits_parameter()),
+                components_distribution=tfd.MultivariateNormalDiag(
+                    loc=loc,
+                    scale_diag=tf.ones(tf.shape(loc)) * 1e-6))
+        else:
+            return self.discrete_latent_policy(latent_state)
+        
         def _ground_action_per_latent_action(latent_state: Float):
             return self.action_reconstruction_network(
                 [tf.tile(tf.expand_dims(latent_state, 0), multiples=[self.number_of_discrete_actions, 1]),
@@ -745,14 +761,18 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self,
             latent_state: Float
     ) -> tfd.Distribution:
-        def _reward_per_action(latent_state: Float):
-            return self.reward_network(
-                [tf.tile(tf.expand_dims(latent_state, 0), multiples=[self.number_of_discrete_actions, 1]),
-                 tf.eye(num_rows=self.number_of_discrete_actions)])
-        x = tf.map_fn(fn=_reward_per_action, elems=latent_state)
+        batch_size = tf.shape(latent_state)[0]
+        loc = self.reward_network([
+                tf.repeat(latent_state, self.number_of_discrete_actions, axis=0),
+                tf.tile(tf.eye(self.number_of_discrete_actions), [batch_size, 1])
+        ])
+        loc = tf.reshape(loc, tf.concat([[batch_size], [self.number_of_discrete_actions], self.reward_shape], axis=-1))
         return tfd.MixtureSameFamily(
-            mixture_distribution=tfd.Categorical(logits=self.discrete_latent_policy(latent_state).logits_parameter()),
-            components_distribution=tfd.MultivariateNormalDiag(loc=x, scale_diag=tf.ones(tf.shape(x)) * 1e-6))
+            mixture_distribution=tfd.Categorical(
+                logits=self.discrete_latent_policy(latent_state).logits_parameter()),
+            components_distribution=tfd.MultivariateNormalDiag(
+                loc=loc,
+                scale_diag=tf.ones(tf.shape(loc)) * 1e-6))
 
     def discrete_latent_steady_state_distribution(self) -> tfd.Distribution:
         return tfd.Independent(
@@ -1026,17 +1046,23 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         # reconstruction loss
         # the reward as well as the state and action reconstruction functions are deterministic
-        _action, _reward, _next_state = tfd.JointDistributionSequential([
-            self.decode_action(
-                latent_state,
-                latent_action) if self.encode_action else
-            tfd.Deterministic(loc=self.action_generator(latent_state).mean()),
-            self.reward_distribution(
-                latent_state,
-                latent_action) if self.encode_action else
-            tfd.Deterministic(loc=self.markov_chain_reward_distribution(latent_state).mean()),
-            self.decode_state(next_latent_state)
-        ]).sample()
+        # if self.encode_action:
+        if self.encode_action:
+            _action, _reward, _next_state = tfd.JointDistributionSequential([
+                self.decode_action(
+                    latent_state,
+                    latent_action),
+                self.reward_distribution(
+                    latent_state,
+                    latent_action),
+                self.decode_state(next_latent_state)
+            ]).sample()
+        else:
+            _action, _reward, _next_state = tfd.JointDistributionSequential([
+                self.action_generator(latent_state),
+                self.markov_chain_reward_distribution(latent_state),
+                self.decode_state(next_latent_state)
+            ]).mean()
 
         reconstruction_loss = (
             tf.norm(action - _action, ord=1, axis=1) +
