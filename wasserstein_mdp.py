@@ -1163,7 +1163,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             'steady_state_gradient_penalty': steady_state_gradient_penalty,
             'transition_loss_regularizer': transition_loss_regularizer,
             'transition_loss_gradient_penalty': transition_loss_gradient_penalty,
-            'entropy_regularizer': -1. * entropy_regularizer if self.entropy_regularizer_scale_factor > epsilon else 0.,
+            'entropy_regularizer': entropy_regularizer if self.entropy_regularizer_scale_factor > epsilon else 0.,
         }
 
     @tf.function
@@ -1192,7 +1192,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             latent_state = latent_states[:, self.atomic_props_dims:, ...]
 
         if not use_marginal_encoder_entropy:
-            regularizer = tf.reduce_mean(-1. * self.discrete_latent_steady_state_distribution().entropy())
+            regularizer = tf.reduce_mean(self.discrete_latent_steady_state_distribution().entropy())
         else:
             if discrete:
                 marginal_state_encoder_distribution = self.discrete_marginal_state_encoder_distribution(
@@ -1216,7 +1216,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 tf.print("regularizer:", -1. * tf.math.log(marginal_state_encoder_distribution.prob(clip(latent_state))),
                          summarize=-1)
 
-            regularizer = tf.reduce_mean(marginal_state_encoder_distribution.log_prob(clip(latent_state)))
+            regularizer = tf.reduce_mean(-1. * marginal_state_encoder_distribution.log_prob(clip(latent_state)))
 
         if action is not None and latent_actions is None:
             if self.encode_action:
@@ -1234,18 +1234,20 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         else:
             latent_action = latent_actions
 
-        if latent_states is not None:
+        if latent_states is not None and False:
             if action is not None and use_marginal_encoder_entropy:
                 marginal_action_encoder_distribution = self.relaxed_marginal_action_encoder_distribution(
                     latent_states=latent_states,
                     actions=action,
                     temperature=self.action_encoder_temperature,
                     is_weights=is_weights)
-                regularizer += (self.action_entropy_regularizer_scaling *
-                                tf.reduce_mean(marginal_action_encoder_distribution.log_prob(latent_action)))
+                regularizer += tf.reduce_mean(
+                        self.action_entropy_regularizer_scaling *
+                        tf.reduce_mean(marginal_action_encoder_distribution.log_prob(latent_action)))
             else:
-                regularizer += (-1. * self.action_entropy_regularizer_scaling *
-                                self.discrete_latent_policy(latent_states).entropy())
+                regularizer += tf.reduce_mean(
+                        self.action_entropy_regularizer_scaling *
+                        self.discrete_latent_policy(latent_states).entropy())
 
         return regularizer
 
@@ -1414,7 +1416,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             (-1.) ** (1. - minimize) * is_weights * (
                     minimize * reconstruction_loss +
                     wasserstein_loss +
-                    (minimize - 1.) * gradient_penalty +
+                    (minimize - 1.) * gradient_penalty -
                     minimize * entropy_regularizer
             )
         )
