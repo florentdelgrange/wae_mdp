@@ -214,6 +214,23 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 state, action, latent_state, latent_action, next_latent_state, transition_loss_lipschitz_network)
             # action-successor Lipschitz function
 
+            if debug:
+                self.state_encoder_network.summary()
+                if self.action_discretizer and self.encode_action:
+                    self.action_encoder_network.summary()
+                else:
+                    print("No action encoder")
+                self.transition_network.summary()
+                print("latent state stationary logits")
+                tf.print(self.latent_steady_state_logits, tf.shape(self.latent_steady_state_logits), summarize=-1)
+                self.reward_network.summary()
+                self.reconstruction_network.summary()
+                if self.action_discretizer:
+                    self.action_reconstruction_network.summary()
+                self.steady_state_lipschitz_network.summary()
+                self.transition_loss_lipschitz_network.summary()
+
+
         else:
             self.state_encoder_network = state_encoder_network
             self.action_encoder_network = action_encoder_network
@@ -350,7 +367,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         _reward_network = reward_network(_reward_network)
         _reward_network = Dense(
             units=np.prod(self.reward_shape),
-            activation=None if self._reward_softclip is None else lambda x: self._reward_softclip(x),
+            activation=None,
             name='reward_network_raw_output'
         )(_reward_network)
         _reward_network = Reshape(self.reward_shape, name='reward')(_reward_network)
@@ -1189,6 +1206,12 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 [state, action, latent_state, latent_action, next_latent_state]) -
             self.transition_loss_lipschitz_network(
                 [state, action, latent_state, latent_action, next_transition_latent_state]))
+
+        if debug:
+            tf.print("latent policy", latent_policy,
+                    '\n latent policy: probs parameter', latent_policy.probs_parameter())
+            tf.print("latent action ~ latent policy", latent_policy.sample())
+            tf.print("latent_action hist:", tf.cast(tf.argmax(latent_action, axis=1), tf.int64))
 
         return {
             'reconstruction_loss': reconstruction_loss + marginal_variance,
