@@ -627,13 +627,14 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             latent_state: Float
     ) -> tfd.Distribution:
         def _ground_action_per_latent_action(latent_state: Float):
-            action = self.action_reconstruction_network(
+            return self.action_reconstruction_network(
                 [tf.tile(tf.expand_dims(latent_state, 0), multiples=[self.number_of_discrete_actions, 1]),
                  tf.eye(num_rows=self.number_of_discrete_actions)])
-            return tf.transpose(action)
+        x = tf.map_fn(fn=_ground_action_per_latent_action, elems=latent_state)
         return tfd.MixtureSameFamily(
             mixture_distribution=tfd.Categorical(logits=self.discrete_latent_policy(latent_state).logits_parameter()),
-            components_distribution=tfd.Deterministic(loc=tf.map_fn(fn=_ground_action_per_latent_action)))
+            components_distribution=tfd.MultivariateNormalDiag(
+                loc=x, scale_diag=tf.ones(tf.shape(x)) * 1e-6))
 
     def relaxed_latent_transition(
             self,
@@ -745,13 +746,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             latent_state: Float
     ) -> tfd.Distribution:
         def _reward_per_action(latent_state: Float):
-            reward = self.reward_network(
+            return self.reward_network(
                 [tf.tile(tf.expand_dims(latent_state, 0), multiples=[self.number_of_discrete_actions, 1]),
                  tf.eye(num_rows=self.number_of_discrete_actions)])
-            return tf.transpose(reward)
+        x = tf.map_fn(fn=_reward_per_action, elems=latent_state)
         return tfd.MixtureSameFamily(
             mixture_distribution=tfd.Categorical(logits=self.discrete_latent_policy(latent_state).logits_parameter()),
-            components_distribution=tfd.Deterministic(loc=tf.map_fn(fn=_reward_per_action)))
+            components_distribution=tfd.MultivariateNormalDiag(loc=x, scale_diag=tf.ones(tf.shape(x)) * 1e-6))
 
     def discrete_latent_steady_state_distribution(self) -> tfd.Distribution:
         return tfd.Independent(
@@ -1029,11 +1030,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.decode_action(
                 latent_state,
                 latent_action) if self.encode_action else
-            self.action_generator(latent_state).mean(),
+            tfd.Deterministic(loc=self.action_generator(latent_state).mean()),
             self.reward_distribution(
                 latent_state,
                 latent_action) if self.encode_action else
-            self.markov_chain_reward_distribution(latent_state).mean(),
+            tfd.Deterministic(loc=self.markov_chain_reward_distribution(latent_state).mean()),
             self.decode_state(next_latent_state)
         ]).sample()
 
@@ -1079,7 +1080,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             y=next_transition_latent_state,
             lipschitz_function=lambda _x: self.transition_loss_lipschitz_network(
                 [state, action, latent_state, latent_action, _x]))
-
+        
+        # entropy_regularizer = 0.
         entropy_regularizer = self.entropy_regularizer(
             state=state,
             use_marginal_encoder_entropy=True,
@@ -1287,11 +1289,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.decode_action(
                 latent_state,
                 latent_action) if self.encode_action else
-            self.action_generator(latent_state).mean(),
+            tfd.Deterministic(loc=self.action_generator(latent_state).mean()),
             self.reward_distribution(
                 latent_state,
                 latent_action) if self.encode_action else
-            self.markov_chain_reward_distribution(latent_state).mean(),
+            tfd.Deterministic(loc=self.markov_chain_reward_distribution(latent_state).mean()),
             self.decode_state(next_latent_state)
         ]).sample()
 
@@ -1534,16 +1536,16 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             sample_key=sample_key, sample_probability=sample_probability)
 
     def mean_latent_bits_used(self, inputs, eps=1e-3, deterministic=True):
-        if self.encode_action:
-            state, label, action, reward, next_state, next_label = inputs[:6]
-            latent_state = tf.cast(self.binary_encode_state(state, label).sample(), tf.float32)
-            mean = tf.reduce_mean(self.discrete_action_encoding(latent_state, action).probs_parameter(), axis=0)
-            check = lambda x: 1 if 1 - eps > x > eps else 0
-            mean_bits_used = tf.reduce_sum(tf.map_fn(check, mean), axis=0).numpy()
+        state, label, action, reward, next_state, next_label = inputs[:6]
+        latent_state = tf.cast(self.binary_encode_state(state, label).sample(), tf.float32)
+        mean = tf.reduce_mean(
+                self.discrete_action_encoding(latent_state, action).probs_parameter() if self.encode_action else
+                self.discrete_latent_policy(latent_state).probs_parameter(),
+                axis=0)
+        check = lambda x: 1 if 1 - eps > x > eps else 0
+        mean_bits_used = tf.reduce_sum(tf.map_fn(check, mean), axis=0).numpy()
 
-            mbu = {'mean_action_bits_used': mean_bits_used}
-        else:
-            mbu = dict()
+        mbu = {'mean_action_bits_used': mean_bits_used}
         mbu.update(super().mean_latent_bits_used(inputs, eps, deterministic))
         return mbu
 
