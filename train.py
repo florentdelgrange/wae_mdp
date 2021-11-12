@@ -167,8 +167,9 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
             base_model_name,
             os.path.split(params['policy_path'])[-1],
             'action_discretizer',
-            'LA{}_TD{:.2f}-{:.2f}_encode_actions={}'.format(
+            'LA{}_ER{}_TD{:.2f}-{:.2f}_encode_actions={}'.format(
                 params['number_of_discrete_actions'],
+                params['entropy_regularizer_scale_factor'] * params['action_entropy_regularizer_scaling'],
                 params['action_encoder_temperature'],
                 params['latent_policy_temperature'],
                 str(params['encode_actions']))
@@ -493,7 +494,9 @@ def main(argv):
             reward_bounds=reward_bounds,
             entropy_regularizer_scale_factor=params['entropy_regularizer_scale_factor'],
             entropy_regularizer_decay_rate=params['entropy_regularizer_decay_rate'],
-            relaxed_exp_one_hot_action_encoding=True)
+            relaxed_exp_one_hot_action_encoding=True,
+            action_entropy_regularizer_scaling = params["action_entropy_regularizer_scaling"],
+        )
         models = [wae_mdp]
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
 

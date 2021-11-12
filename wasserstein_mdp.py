@@ -123,6 +123,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             reward_bounds: Optional[Tuple[float, float]] = None,
             steady_state_logits: Optional[tf.Variable] = None,
             relaxed_exp_one_hot_action_encoding: bool = True,
+            action_entropy_regularizer_scaling: float = 1.,
     ):
         super(WassersteinMarkovDecisionProcess, self).__init__(
             state_shape=state_shape, action_shape=action_shape, reward_shape=reward_shape, label_shape=label_shape,
@@ -149,6 +150,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.action_discretizer = discretize_action_space
         self.relaxed_exp_one_hot_action_encoding = relaxed_exp_one_hot_action_encoding
         self.encode_action = action_encoder_network is not None
+        self.action_entropy_regularizer_scaling = action_entropy_regularizer_scaling
 
         if not self.action_discretizer:
             assert len(action_shape) == 1
@@ -620,6 +622,19 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         else:
             return tfd.Deterministic(loc=latent_action)
 
+    def action_generator(
+            self,
+            latent_state: Float
+    ) -> tfd.Distribution:
+        def _ground_action_per_latent_action(latent_state: Float):
+            action = self.action_reconstruction_network(
+                [tf.tile(tf.expand_dims(latent_state, 0), multiples=[self.number_of_discrete_actions, 1]),
+                 tf.eye(num_rows=self.number_of_discrete_actions)])
+            return tf.transpose(action)
+        return tfd.MixtureSameFamily(
+            mixture_distribution=tfd.Categorical(logits=self.discrete_latent_policy(latent_state).logits_parameter()),
+            components_distribution=tfd.Deterministic(loc=tf.map_fn(fn=_ground_action_per_latent_action)))
+
     def relaxed_latent_transition(
             self,
             latent_state: Float,
@@ -725,6 +740,19 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     ) -> tfd.Distribution:
         return tfd.Deterministic(loc=self.reward_network([latent_state, latent_action]))
 
+    def markov_chain_reward_distribution(
+            self,
+            latent_state: Float
+    ) -> tfd.Distribution:
+        def _reward_per_action(latent_state: Float):
+            reward = self.reward_network(
+                [tf.tile(tf.expand_dims(latent_state, 0), multiples=[self.number_of_discrete_actions, 1]),
+                 tf.eye(num_rows=self.number_of_discrete_actions)])
+            return tf.transpose(reward)
+        return tfd.MixtureSameFamily(
+            mixture_distribution=tfd.Categorical(logits=self.discrete_latent_policy(latent_state).logits_parameter()),
+            components_distribution=tfd.Deterministic(loc=tf.map_fn(fn=_reward_per_action)))
+
     def discrete_latent_steady_state_distribution(self) -> tfd.Distribution:
         return tfd.Independent(
             tfd.Bernoulli(logits=self.softclip(self.latent_steady_state_logits)))
@@ -821,7 +849,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 temperature=temperature,
                 allow_nan_stats=False),
             allow_nan_stats=False)
-
 
     def relaxed_marginal_state_encoder_distribution(
             self,
@@ -941,13 +968,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             ).sample()
         ], axis=-1)
 
-        latent_policy = self.relaxed_latent_policy(latent_state, temperature=self.latent_policy_temperature)
-        mean_latent_action = latent_policy.probs_parameter()
-        if self.relaxed_exp_one_hot_action_encoding:
-            latent_policy = tfd.TransformedDistribution(
-                distribution=latent_policy,
-                bijector=tfb.Exp())
-        if self.encode_action and self.relaxed_exp_one_hot_action_encoding:
+        if self.encode_action:
             latent_action = tfd.TransformedDistribution(
                 distribution=self.relaxed_action_encoding(
                     latent_state,
@@ -957,7 +978,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                           tfb.Identity())
             ).sample()
         else:
-            latent_action = latent_policy.sample()
+            latent_action = tfd.TransformedDistribution(
+                distribution=self.relaxed_latent_policy(
+                    latent_state,
+                    temperature=self.latent_policy_temperature),
+                bijector=(tfb.Exp() if self.relaxed_exp_one_hot_action_encoding else
+                          tfb.Identity())
+            ).sample()
 
         # latent steady-state distribution
         (stationary_latent_state,
@@ -1001,10 +1028,12 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         _action, _reward, _next_state = tfd.JointDistributionSequential([
             self.decode_action(
                 latent_state,
-                latent_action if self.encode_action else mean_latent_action),
+                latent_action) if self.encode_action else
+            self.action_generator(latent_state).mean(),
             self.reward_distribution(
                 latent_state,
-                latent_action if self.encode_action else mean_latent_action),
+                latent_action) if self.encode_action else
+            self.markov_chain_reward_distribution(latent_state).mean(),
             self.decode_state(next_latent_state)
         ]).sample()
 
@@ -1053,7 +1082,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         entropy_regularizer = self.entropy_regularizer(
             state=state,
-            use_marginal_encoder_entropy=False,
+            use_marginal_encoder_entropy=True,
             action=action if self.encode_action else None,
             sample_probability=sample_probability,
             latent_states=latent_state,
@@ -1106,8 +1135,91 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             'steady_state_gradient_penalty': steady_state_gradient_penalty,
             'transition_loss_regularizer': transition_loss_regularizer,
             'transition_loss_gradient_penalty': transition_loss_gradient_penalty,
-            'entropy_regularizer': entropy_regularizer if self.entropy_regularizer_scale_factor > epsilon else 0.,
+            'entropy_regularizer': -1. * entropy_regularizer if self.entropy_regularizer_scale_factor > epsilon else 0.,
         }
+
+    @tf.function
+    def entropy_regularizer(
+            self,
+            state: tf.Tensor,
+            use_marginal_encoder_entropy: bool = True,
+            action: Optional[Float] = None,
+            latent_states: Optional[Float] = None,
+            latent_actions: Optional[Float] = None,
+            sample_probability: Optional[Float] = None,
+            logistic: bool = False,
+            discrete: bool = False,
+            *args, **kwargs
+    ):
+        if sample_probability is None or not use_marginal_encoder_entropy:
+            is_weights = None
+        else:
+            is_weights = tf.stop_gradient(tf.reduce_min(sample_probability)) / sample_probability
+
+        if logistic:
+            latent_state = super().relaxed_state_encoding(state, self.state_encoder_temperature).sample()
+        elif latent_states is None:
+            latent_state = self.relaxed_state_encoding(state, self.state_encoder_temperature).sample()
+        else:
+            latent_state = latent_states[:, self.atomic_props_dims:, ...]
+
+        if not use_marginal_encoder_entropy:
+            regularizer = tf.reduce_mean(-1. * self.discrete_latent_steady_state_distribution().entropy())
+        else:
+            if discrete:
+                marginal_state_encoder_distribution = self.discrete_marginal_state_encoder_distribution(
+                    states=state,
+                    is_weights=is_weights)
+            else:
+                marginal_state_encoder_distribution = self.relaxed_marginal_state_encoder_distribution(
+                    states=state,
+                    temperature=self.encoder_temperature,
+                    reparameterize=False,
+                    logistic=logistic,
+                    is_weights=is_weights)
+
+            clip = lambda x: tf.clip_by_value(
+                x,
+                clip_value_min=-10. if logistic else 1e-6,
+                clip_value_max=10. if logistic else 1. - 1e-6)
+
+            if debug:
+                tf.print("clipped_latent_state: ", clip(latent_state), summarize=-1)
+                tf.print("regularizer:", -1. * tf.math.log(marginal_state_encoder_distribution.prob(clip(latent_state))),
+                         summarize=-1)
+
+            regularizer = tf.reduce_mean(marginal_state_encoder_distribution.log_prob(clip(latent_state)))
+
+        if action is not None and latent_actions is None:
+            if self.encode_action:
+                latent_action = tfd.TransformedDistribution(
+                    distribution=self.relaxed_action_encoding(
+                        latent_state, action, temperature=self.action_encoder_temperature),
+                    bijector=tfb.Exp() if self.relaxed_exp_one_hot_action_encoding else tfb.Identity()
+                ).sample()
+            else:
+                latent_action = tfd.TransformedDistribution(
+                    distribution=self.relaxed_latent_policy(
+                        latent_state, temperature=self.latent_policy_temperature),
+                    bijector=tfb.Exp() if self.relaxed_exp_one_hot_action_encoding else tfb.Identity()
+                ).sample()
+        else:
+            latent_action = latent_actions
+
+        if latent_states is not None:
+            if action is not None and use_marginal_encoder_entropy:
+                marginal_action_encoder_distribution = self.relaxed_marginal_action_encoder_distribution(
+                    latent_states=latent_states,
+                    actions=action,
+                    temperature=self.action_encoder_temperature,
+                    is_weights=is_weights)
+                regularizer += (self.action_entropy_regularizer_scaling *
+                                tf.reduce_mean(marginal_action_encoder_distribution.log_prob(latent_action)))
+            else:
+                regularizer += (-1. * self.action_entropy_regularizer_scaling *
+                                self.discrete_latent_policy(latent_states).entropy())
+
+        return regularizer
 
     @tf.function
     def compute_gradient_penalty(
@@ -1143,12 +1255,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         next_latent_state = tf.concat([
             next_label, tf.cast(self.binary_encode_state(next_state).sample(), tf.float32)
         ], axis=-1)
-        latent_policy = self.discrete_latent_policy(latent_state)
-        mean_latent_action = latent_policy.probs_parameter()
         if self.encode_action:
             latent_action = self.discrete_action_encoding(latent_state, action).sample()
         else:
-            latent_action = tf.cast(latent_policy.sample(), tf.float32)
+            latent_action = tf.cast(self.discrete_latent_policy(latent_state).sample(), tf.float32)
 
         # latent steady-state distribution
         (stationary_latent_state,
@@ -1174,8 +1284,14 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         # reconstruction loss
         # the reward as well as the state and action reconstruction functions are deterministic
         _action, _reward, _next_state = tfd.JointDistributionSequential([
-            self.decode_action(latent_state, latent_action if self.encode_action else mean_latent_action),
-            self.reward_distribution(latent_state, latent_action if self.encode_action else mean_latent_action),
+            self.decode_action(
+                latent_state,
+                latent_action) if self.encode_action else
+            self.action_generator(latent_state).mean(),
+            self.reward_distribution(
+                latent_state,
+                latent_action) if self.encode_action else
+            self.markov_chain_reward_distribution(latent_state).mean(),
             self.decode_state(next_latent_state)
         ]).sample()
 
@@ -1208,6 +1324,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 [state, action, latent_state, latent_action, next_transition_latent_state]))
 
         if debug:
+            latent_policy = self.discrete_latent_policy(latent_state)
             tf.print("latent policy", latent_policy,
                     '\n latent policy: probs parameter', latent_policy.probs_parameter())
             tf.print("latent action ~ latent policy", latent_policy.sample())
@@ -1269,86 +1386,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             (-1.) ** (1. - minimize) * is_weights * (
                     minimize * reconstruction_loss +
                     wasserstein_loss +
-                    (minimize - 1.) * gradient_penalty -
+                    (minimize - 1.) * gradient_penalty +
                     minimize * entropy_regularizer
             )
         )
 
         return {'min': loss(1.), 'max': loss(0.)}
     
-    @tf.function
-    def entropy_regularizer(
-            self,
-            state: tf.Tensor,
-            use_marginal_encoder_entropy: bool = True,
-            action: Optional[Float] = None,
-            latent_states: Optional[Float] = None,
-            latent_actions: Optional[Float] = None,
-            sample_probability: Optional[Float] = None,
-            logistic: bool = False,
-            discrete: bool = False,
-            *args, **kwargs
-    ):
-        if not use_marginal_encoder_entropy:
-            return tf.reduce_mean(self.discrete_latent_steady_state_distribution().entropy())
-
-        if sample_probability is None:
-            is_weights = None
-        else:
-            is_weights = tf.stop_gradient(tf.reduce_min(sample_probability)) / sample_probability
-
-        if logistic:
-            latent_state = super().relaxed_state_encoding(state, self.state_encoder_temperature).sample()
-        elif latent_states is None:
-            latent_state = self.relaxed_state_encoding(state, self.state_encoder_temperature).sample()
-        else:
-            latent_state = latent_states[:, self.atomic_props_dims:, ...]
-
-        if action is not None and latent_actions is None:
-            latent_action = tfd.TransformedDistribution(
-                distribution=self.relaxed_action_encoding(
-                    latent_state, action, temperature=self.action_encoder_temperature),
-                bijector=tfb.Exp() if self.relaxed_exp_one_hot_action_encoding else tfb.Identity()
-            ).sample()
-        else:
-            latent_action = latent_actions
-
-        if discrete:
-            marginal_state_encoder_distribution = self.discrete_marginal_state_encoder_distribution(
-                states=state,
-                is_weights=is_weights)
-        else:
-            marginal_state_encoder_distribution = self.relaxed_marginal_state_encoder_distribution(
-                states=state,
-                temperature=self.encoder_temperature,
-                reparameterize=False,
-                logistic=logistic,
-                is_weights=is_weights)
-
-        clip = lambda x: tf.clip_by_value(
-            x,
-            clip_value_min=-10. if logistic else 1e-6,
-            clip_value_max=10. if logistic else 1. - 1e-6)
-        #  clip = lambda x: x
-        
-        if debug:
-            tf.print("clipped_latent_state: ", clip(latent_state), summarize=-1)
-            tf.print("regularizer:", -1. * tf.math.log(marginal_state_encoder_distribution.prob(clip(latent_state))), summarize=-1)
-
-        regularizer = tf.reduce_mean(
-                -1. * marginal_state_encoder_distribution.log_prob(clip(latent_state)))
-
-        if action is not None and latent_states is not None:
-            marginal_action_encoder_distribution = self.relaxed_marginal_action_encoder_distribution(
-                latent_states=latent_states,
-                actions=action,
-                temperature=self.action_encoder_temperature,
-                is_weights=is_weights)
-
-            regularizer += tf.reduce_mean(-1. * marginal_action_encoder_distribution.log_prob(latent_action))
-
-        return regularizer
-
     @property
     def state_encoder_temperature(self):
         return self.encoder_temperature
