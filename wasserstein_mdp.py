@@ -198,7 +198,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             # latent policy
             self.latent_policy_network = self._initialize_latent_policy_network(latent_state, latent_policy_network)
             # reward function
-            self.reward_network = self._initialize_reward_network(latent_state, latent_action, reward_network)
+            self.reward_network = self._initialize_reward_network(
+                latent_state, latent_action, next_latent_state, reward_network)
             # state reconstruction function
             self.reconstruction_network = self._initialize_state_reconstruction_network(
                 next_latent_state, decoder_network, state_decoder_pre_processing_network)
@@ -365,9 +366,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self,
             latent_state: Input,
             latent_action: Input,
+            next_latent_state: Input,
             reward_network: Model,
     ):
-        _reward_network = Concatenate(name='reward_function_input')([latent_state, latent_action])
+        _reward_network = Concatenate(name='reward_function_input')([latent_state, latent_action, next_latent_state])
         _reward_network = reward_network(_reward_network)
         _reward_network = Dense(
             units=np.prod(self.reward_shape),
@@ -376,7 +378,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         )(_reward_network)
         _reward_network = Reshape(self.reward_shape, name='reward')(_reward_network)
         return Model(
-            inputs=[latent_state, latent_action],
+            inputs=[latent_state, latent_action, next_latent_state],
             outputs=_reward_network,
             name='reward_network')
 
@@ -755,18 +757,24 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             return tfd.OneHotCategorical(logits=self.latent_policy_network(latent_state))
 
     def reward_distribution(
-            self, latent_state: tf.Tensor, latent_action: tf.Tensor, *args, **kwargs
+            self,
+            latent_state: Float,
+            latent_action: Float,
+            next_latent_state: Float,
+            *args, **kwargs
     ) -> tfd.Distribution:
-        return tfd.Deterministic(loc=self.reward_network([latent_state, latent_action]))
+        return tfd.Deterministic(loc=self.reward_network([latent_state, latent_action, next_latent_state]))
 
     def markov_chain_reward_distribution(
             self,
-            latent_state: Float
+            latent_state: Float,
+            next_latent_state: Float,
     ) -> tfd.Distribution:
         batch_size = tf.shape(latent_state)[0]
         loc = self.reward_network([
                 tf.repeat(latent_state, self.number_of_discrete_actions, axis=0),
-                tf.tile(tf.eye(self.number_of_discrete_actions), [batch_size, 1])
+                tf.tile(tf.eye(self.number_of_discrete_actions), [batch_size, 1]),
+                tf.repeat(next_latent_state, self.number_of_discrete_actions, axis=0),
         ])
         loc = tf.reshape(loc, tf.concat([[batch_size], [self.number_of_discrete_actions], self.reward_shape], axis=-1))
         return tfd.MixtureSameFamily(
@@ -1056,13 +1064,14 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     latent_action),
                 self.reward_distribution(
                     latent_state,
-                    latent_action),
+                    latent_action,
+                    next_latent_state),
                 self.decode_state(next_latent_state)
             ]).sample()
         else:
             _action, _reward, _next_state = tfd.JointDistributionSequential([
                 self.action_generator(latent_state),
-                self.markov_chain_reward_distribution(latent_state),
+                self.markov_chain_reward_distribution(latent_state, next_latent_state),
                 self.decode_state(next_latent_state)
             ]).mean()
 
@@ -1077,7 +1086,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             # marginal variance of the reconstruction
             random_action, random_reward = tfd.JointDistributionSequential([
                 self.decode_action(latent_state, latent_action),
-                self.reward_distribution(latent_state, latent_action),
+                self.reward_distribution(latent_state, latent_action, next_latent_state),
             ]).sample()
             y = tf.concat([random_action, random_reward, _next_state], axis=-1)
             mean = tf.concat([_action, _reward, _next_state], axis=-1)
@@ -1262,9 +1271,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     @tf.function
     def compute_gradient_penalty(
             self,
-            x: tf.Tensor,
-            y: tf.Tensor,
-            lipschitz_function: Callable[[tf.Tensor], tf.Tensor],
+            x: Float,
+            y: Float,
+            lipschitz_function: Callable[[Float], Float],
     ):
         noise = tf.random.uniform(shape=(tf.shape(x)[0], 1), minval=0., maxval=1.)
         straight_lines = noise * x + (1. - noise) * y
@@ -1328,8 +1337,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             tfd.Deterministic(loc=self.action_generator(latent_state).mean()),
             self.reward_distribution(
                 latent_state,
-                latent_action) if self.encode_action else
-            tfd.Deterministic(loc=self.markov_chain_reward_distribution(latent_state).mean()),
+                latent_action,
+                next_latent_state) if self.encode_action else
+            tfd.Deterministic(loc=self.markov_chain_reward_distribution(latent_state, next_latent_state).mean()),
             self.decode_state(next_latent_state)
         ]).sample()
 
@@ -1345,7 +1355,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             reconstruction_loss = reconstruction_loss ** 2.
             random_action, random_reward = tfd.JointDistributionSequential([
                 self.decode_action(latent_state, latent_action),
-                self.reward_distribution(latent_state, latent_action),
+                self.reward_distribution(latent_state, latent_action, next_latent_state),
             ]).sample()
             y = tf.concat([random_action, random_reward, _next_state], axis=-1)
             mean = tf.concat([_action, _reward, _next_state], axis=-1)
