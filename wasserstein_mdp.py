@@ -252,6 +252,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             'action_mse': MeanSquaredError(name='action_mse'),
             'reward_mse': MeanSquaredError(name='reward_loss'),
             'transition_loss': Mean('transition_loss'),
+            'latent_policy_entropy': Mean('latent_policy_entropy'),
             'steady_state_regularizer': Mean('steady_state_wasserstein_regularizer'),
             'gradient_penalty': Mean('gradient_penalty'),
             'state_encoder_entropy': Mean('state_encoder_entropy'),
@@ -1108,7 +1109,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             lipschitz_function=lambda _x: self.transition_loss_lipschitz_network(
                 [state, action, latent_state, latent_action, _x]))
         
-        # entropy_regularizer = 0.
         entropy_regularizer = self.entropy_regularizer(
             state=state,
             use_marginal_encoder_entropy=True,
@@ -1142,6 +1142,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.loss_metrics['state_encoder_entropy'](self.binary_encode_state(state).entropy())
         self.loss_metrics['latent_sationary_distribution_entropy'](
                 self.discrete_latent_steady_state_distribution().entropy())
+        self.loss_metrics['latent_policy_entropy'](
+                self.discrete_latent_policy(latent_state).entropy())
         if self.encode_action:
             self.loss_metrics['action_encoder_entropy'](
                     self.discrete_action_encoding(latent_state, action).entropy())
@@ -1214,17 +1216,15 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 clip_value_min=-10. if logistic else 1e-6,
                 clip_value_max=10. if logistic else 1. - 1e-6)
 
+            regularizer = tf.reduce_mean(-1. * marginal_state_encoder_distribution.log_prob(clip(latent_state)))
+            if tf.logical_or(
+                    tf.math.is_nan(regularizer),
+                    tf.math.is_inf(regularizer)):
+                regularizer = tf.reduce_mean(self.binary_encode_state(state).entropy())
+
             if debug:
                 tf.print("clipped_latent_state: ", clip(latent_state), summarize=-1)
-                tf.print("regularizer:", -1. * tf.math.log(marginal_state_encoder_distribution.prob(clip(latent_state))),
-                         summarize=-1)
-
-            regularizer = tf.reduce_mean(-1. * marginal_state_encoder_distribution.log_prob(clip(latent_state)))
-            if tf.reduce_any(tf.logical_or(
-                    tf.math.is_nan(regularizer),
-                    tf.math.is_inf(regularizer))):
-                tf.print("Inf or NaN detected in marginal_encoder_entropy")
-                regularizer = tf.reduce_mean(self.binary_encode_state(state).entropy())
+                tf.print("regularizer:", regularizer, summarize=-1)
 
         if action is not None and latent_actions is None:
             if self.encode_action:
@@ -1242,7 +1242,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         else:
             latent_action = latent_actions
 
-        if latent_states is not None and False:
+        if latent_states is not None:
             if action is not None and use_marginal_encoder_entropy:
                 marginal_action_encoder_distribution = self.relaxed_marginal_action_encoder_distribution(
                     latent_states=latent_states,
