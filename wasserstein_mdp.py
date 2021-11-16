@@ -1629,10 +1629,12 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             state_embedding_function=self.state_embedding_function,
             action_embedding_function=lambda state, latent_action: self.action_embedding_function(
                 state, latent_action, labeling_function=_labeling_function),
-            latent_reward_function=lambda latent_state, latent_action, _: (
+            latent_reward_function=lambda latent_state, latent_action, next_latent_state: (
                 self.reward_distribution(
                     latent_state=tf.cast(latent_state, dtype=tf.float32),
-                    latent_action=tf.cast(latent_action, dtype=tf.float32)).mode()),
+                    latent_action=tf.cast(latent_action, dtype=tf.float32),
+                    next_latent_state=tf.cast(next_latent_state, dtype=tf.float32),
+                ).mode()),
             labeling_function=labeling_function,
             latent_transition_function=lambda latent_state, latent_action: self.discrete_latent_transition(
                 latent_state=tf.cast(latent_state, tf.float32),
