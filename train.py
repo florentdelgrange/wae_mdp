@@ -160,6 +160,9 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
         wasserstein_regularizer.local_transition_loss.scaling,
         wasserstein_regularizer.stationary.gradient_penalty_multiplier,
         wasserstein_regularizer.local_transition_loss.gradient_penalty_multiplier)
+    if params['wasserstein_optimizer'] is not None:
+        wae_name += '_wasserstein_optimizer={}-lr={:g}'.format(
+                params['wasserstein_optimizer'], params['wasserstein_learning_rate'])
     if params['action_discretizer']:
         if wae_name != '':
             base_model_name = wae_name
