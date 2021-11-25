@@ -115,6 +115,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             wasserstein_regularizer_optimizer: Optional = None,
             entropy_regularizer_scale_factor: float = 0.,
             entropy_regularizer_decay_rate: float = 0.,
+            entropy_regularizer_scale_factor_min_value: float = 0.,
             evaluation_window_size: int = 1,
             evaluation_criterion: EvaluationCriterion = EvaluationCriterion.MAX,
             importance_sampling_exponent: Optional[Float] = 1.,
@@ -141,6 +142,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             time_stacked_lstm_units=time_stacked_lstm_units,
             reward_bounds=reward_bounds,
             entropy_regularizer_scale_factor=entropy_regularizer_scale_factor,
+            entropy_regularizer_scale_factor_min_value=entropy_regularizer_scale_factor_min_value,
             entropy_regularizer_decay_rate=entropy_regularizer_decay_rate)
 
         self.wasserstein_regularizer_scale_factor = wasserstein_regularizer_scale_factor
@@ -171,6 +173,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.latent_policy_temperature = latent_policy_temperature
 
         self._sample_additional_transition = False
+        # softclipping for latent states logits
         self.softclip = lambda x: 10. * tf.nn.tanh(x / 10.)
 
         if not pre_loaded_model:
