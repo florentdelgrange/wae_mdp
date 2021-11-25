@@ -497,6 +497,7 @@ def main(argv):
             reward_bounds=reward_bounds,
             entropy_regularizer_scale_factor=params['entropy_regularizer_scale_factor'],
             entropy_regularizer_decay_rate=params['entropy_regularizer_decay_rate'],
+            entropy_regularizer_scale_factor_min_value=params["entropy_regularizer_scale_factor_min_value"],
             relaxed_exp_one_hot_action_encoding=True,
             action_entropy_regularizer_scaling = params["action_entropy_regularizer_scaling"],
         )
