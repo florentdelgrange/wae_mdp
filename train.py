@@ -500,6 +500,7 @@ def main(argv):
             entropy_regularizer_scale_factor_min_value=params["entropy_regularizer_scale_factor_min_value"],
             relaxed_exp_one_hot_action_encoding=True,
             action_entropy_regularizer_scaling = params["action_entropy_regularizer_scaling"],
+            squared_local_reward_loss_upper_bound=params['squared_reward_loss_upper_bound'],
         )
         models = [wae_mdp]
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
@@ -1081,6 +1082,11 @@ if __name__ == '__main__':
         default=True,
         help='Whether to use an action encoder or not to learn a latent action space.'
              'If not, the latent policy alone will be used.'
+    )
+    flags.DEFINE_bool(
+        'squared_reward_loss_upper_bound',
+        default=False,
+        help="Whether to set an upper bound on the reward loss or not when using a nondeterministic decoder"
     )
 
     FLAGS = flags.FLAGS

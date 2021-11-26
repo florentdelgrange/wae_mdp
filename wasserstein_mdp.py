@@ -125,6 +125,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             steady_state_logits: Optional[tf.Variable] = None,
             relaxed_exp_one_hot_action_encoding: bool = True,
             action_entropy_regularizer_scaling: float = 1.,
+            squared_local_reward_loss_upper_bound: bool = False,
     ):
         super(WassersteinMarkovDecisionProcess, self).__init__(
             state_shape=state_shape, action_shape=action_shape, reward_shape=reward_shape, label_shape=label_shape,
@@ -153,6 +154,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.relaxed_exp_one_hot_action_encoding = relaxed_exp_one_hot_action_encoding
         self.encode_action = action_encoder_network is not None
         self.action_entropy_regularizer_scaling = action_entropy_regularizer_scaling
+        self.squared_reward_loss_upper_bound = squared_local_reward_loss_upper_bound
 
         if not self.action_discretizer:
             assert len(action_shape) == 1
@@ -1069,8 +1071,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         # reconstruction loss
         # the reward as well as the state and action reconstruction functions are deterministic
-        # if self.encode_action:
-        if self.encode_action:
+        mean_decoder = tfd.JointDistributionSequential([
+            self.action_generator(latent_state),
+            self.markov_chain_reward_distribution(latent_state, next_latent_state),
+            self.decode_state(next_latent_state)
+        ]).mean
+
+        if self.encode_action or self.squared_reward_loss_upper_bound:
             _action, _reward, _next_state = tfd.JointDistributionSequential([
                 self.decode_action(
                     latent_state,
@@ -1082,11 +1089,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 self.decode_state(next_latent_state)
             ]).sample()
         else:
-            _action, _reward, _next_state = tfd.JointDistributionSequential([
-                self.action_generator(latent_state),
-                self.markov_chain_reward_distribution(latent_state, next_latent_state),
-                self.decode_state(next_latent_state)
-            ]).mean()
+            _action, _reward, _next_state = mean_decoder()
 
         reconstruction_loss = (
             tf.norm(action - _action, ord=1, axis=1) +
@@ -1095,12 +1098,15 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         if not self.encode_action:
             reconstruction_loss = reconstruction_loss ** 2
-
             # marginal variance of the reconstruction
-            random_action, random_reward = tfd.JointDistributionSequential([
-                self.decode_action(latent_state, latent_action),
-                self.reward_distribution(latent_state, latent_action, next_latent_state),
-            ]).sample()
+            if self.squared_reward_loss_upper_bound:
+                random_action, random_reward = _action, _reward
+                _action, _reward, _ = mean_decoder()
+            else:
+                random_action, random_reward = tfd.JointDistributionSequential([
+                        self.decode_action(latent_state, latent_action),
+                        self.reward_distribution(latent_state, latent_action, next_latent_state),
+                ]).sample()
             y = tf.concat([random_action, random_reward, _next_state], axis=-1)
             mean = tf.concat([_action, _reward, _next_state], axis=-1)
             marginal_variance = tf.reduce_sum((y - mean) ** 2. + (mean - tf.reduce_mean(mean)) ** 2., axis=-1)
