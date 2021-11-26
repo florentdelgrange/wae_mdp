@@ -214,7 +214,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 self.action_reconstruction_network = None
             # steady state Lipschitz function
             self.steady_state_lipschitz_network = self._initialize_steady_state_lipschitz_function(
-                latent_state, steady_state_lipschitz_network)
+                latent_state,
+                steady_state_lipschitz_network,
+                latent_action=latent_action if self.encode_action else None,
+                next_latent_state=next_latent_state if self.encode_action else None)
             # transition loss Lipschitz function
             self.transition_loss_lipschitz_network = self._initialize_transition_loss_lipschitz_function(
                 state, action, latent_state, latent_action, next_latent_state, transition_loss_lipschitz_network)
@@ -465,8 +468,15 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self,
             latent_state: Input,
             steady_state_lipschitz_network: Model,
+            latent_action: Optional[Input] = None,
+            next_latent_state: Optional[Input] = None,
     ):
-        _steady_state_lipschitz_network = steady_state_lipschitz_network(latent_state)
+        if self.encode_action and (latent_action is None or next_latent_state is None):
+            raise ValueError("The WAE is built to encode actions, so latent actions and next latent states are"
+                             "required as input of the steady-state Lipschitz function.")
+        net_input = latent_state if not self.encode_action else Concatenate('steady-state-lipschitz-fun-input')(
+            [latent_state, latent_action, next_latent_state])
+        _steady_state_lipschitz_network = steady_state_lipschitz_network(net_input)
         _steady_state_lipschitz_network = Dense(
             units=1,
             activation=None,
@@ -474,7 +484,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         )(_steady_state_lipschitz_network)
 
         return Model(
-            inputs=latent_state,
+            inputs=net_input,
             outputs=_steady_state_lipschitz_network,
             name='steady_state_lipschitz_network')
 
@@ -1101,9 +1111,16 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             marginal_variance = 0.
 
         # Wasserstein regularizers
-        steady_state_regularizer = tf.squeeze(
-            self.steady_state_lipschitz_network(next_transition_latent_state) -
-            self.steady_state_lipschitz_network(next_stationary_latent_state))
+        if self.encode_action:
+            steady_state_regularizer = tf.squeeze(
+                self.steady_state_lipschitz_network([
+                    latent_state, latent_action, next_transition_latent_state]) -
+                self.steady_state_lipschitz_network([
+                    stationary_latent_state, stationary_latent_action, next_stationary_latent_state]))
+        else:
+            steady_state_regularizer = tf.squeeze(
+                self.steady_state_lipschitz_network(next_transition_latent_state) -
+                self.steady_state_lipschitz_network(next_stationary_latent_state))
         transition_loss_regularizer = tf.squeeze(
             self.transition_loss_lipschitz_network(
                 [state, action, latent_state, latent_action, next_latent_state]) -
@@ -1111,10 +1128,21 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 [state, action, latent_state, latent_action, next_transition_latent_state]))
 
         # Lipschitz constraints
-        steady_state_gradient_penalty = self.compute_gradient_penalty(
-            x=next_transition_latent_state,
-            y=next_stationary_latent_state,
-            lipschitz_function=self.steady_state_lipschitz_network)
+        if self.encode_action:
+            steady_state_gradient_penalty = self.compute_gradient_penalty(
+                x=tf.concat([latent_state, latent_action, next_transition_latent_state], axis=-1),
+                y=tf.concat([stationary_latent_state, stationary_latent_action, next_stationary_latent_state], axis=-1),
+                lipschitz_function=lambda _x: self.steady_state_lipschitz_network([
+                    _x[:, :self.latent_state_size, ...],
+                    _x[:, self.latent_state_size: self.latent_state_size + self.number_of_discrete_actions, ...],
+                    _x[:, self.latent_state_size + self.number_of_discrete_actions:, ...]
+                ]))
+        else:
+            steady_state_gradient_penalty = self.compute_gradient_penalty(
+                x=next_transition_latent_state,
+                y=next_stationary_latent_state,
+                lipschitz_function=self.steady_state_lipschitz_network)
+
         transition_loss_gradient_penalty = self.compute_gradient_penalty(
             x=next_latent_state,
             y=next_transition_latent_state,
