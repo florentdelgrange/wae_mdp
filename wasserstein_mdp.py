@@ -1262,6 +1262,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     temperature=self.action_encoder_temperature,
                     is_weights=is_weights)
                 regularizer += tf.reduce_mean(
+                        -1. * 
                         self.action_entropy_regularizer_scaling *
                         tf.reduce_mean(marginal_action_encoder_distribution.log_prob(latent_action)))
             else:
