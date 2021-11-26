@@ -474,7 +474,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         if self.encode_action and (latent_action is None or next_latent_state is None):
             raise ValueError("The WAE is built to encode actions, so latent actions and next latent states are"
                              "required as input of the steady-state Lipschitz function.")
-        net_input = latent_state if not self.encode_action else Concatenate('steady-state-lipschitz-fun-input')(
+        net_input = latent_state if not self.encode_action else Concatenate(name='steady-state-lipschitz-fun-input')(
             [latent_state, latent_action, next_latent_state])
         _steady_state_lipschitz_network = steady_state_lipschitz_network(net_input)
         _steady_state_lipschitz_network = Dense(
@@ -484,7 +484,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         )(_steady_state_lipschitz_network)
 
         return Model(
-            inputs=net_input,
+            inputs=[latent_state, latent_action, next_latent_state] if self.encode_action else latent_state,
             outputs=_steady_state_lipschitz_network,
             name='steady_state_lipschitz_network')
 
@@ -1394,9 +1394,17 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             marginal_variance = tf.reduce_sum((y - mean) ** 2. + (mean - tf.reduce_mean(mean)) ** 2., axis=-1)
 
         # Wasserstein regularizers
-        steady_state_regularizer = tf.squeeze(
-            self.steady_state_lipschitz_network(next_transition_latent_state) -
-            self.steady_state_lipschitz_network(next_stationary_latent_state))
+        if self.encode_action:
+            steady_state_regularizer = tf.squeeze(
+                self.steady_state_lipschitz_network([
+                    latent_state, latent_action, next_transition_latent_state]) -
+                self.steady_state_lipschitz_network([
+                    stationary_latent_state, stationary_latent_action, next_stationary_latent_state]))
+        else:
+            steady_state_regularizer = tf.squeeze(
+                self.steady_state_lipschitz_network(next_transition_latent_state) -
+                self.steady_state_lipschitz_network(next_stationary_latent_state))
+
         transition_loss_regularizer = tf.squeeze(
             self.transition_loss_lipschitz_network(
                 [state, action, latent_state, latent_action, next_latent_state]) -
