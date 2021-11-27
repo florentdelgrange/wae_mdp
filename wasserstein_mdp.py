@@ -473,8 +473,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             steady_state_lipschitz_network: Model,
             latent_action: Optional[Input] = None,
     ):
-        if self.encode_action and latent_action is None:
-            raise ValueError("The WAE is built to encode actions, so latent actions are"
+        if self.encode_action and (latent_action is None or next_latent_state is None):
+            raise ValueError("The WAE is built to encode actions, so latent actions and next latent states are"
                              "required as input of the steady-state Lipschitz function.")
         if self.encode_action:
             network_input = Concatenate('steady-state-lipschitz-fun-input')(
