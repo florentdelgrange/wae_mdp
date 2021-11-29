@@ -1077,13 +1077,15 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         # reconstruction loss
         # the reward as well as the state and action reconstruction functions are deterministic
         mean_decoder = tfd.JointDistributionSequential([
+            self.decode_state(latent_state),
             self.action_generator(latent_state),
             self.markov_chain_reward_distribution(latent_state, next_latent_state),
             self.decode_state(next_latent_state)
         ]).mean
 
         if self.encode_action or self.squared_reward_loss_upper_bound:
-            _action, _reward, _next_state = tfd.JointDistributionSequential([
+            _state, _action, _reward, _next_state = tfd.JointDistributionSequential([
+                self.decode_state(latent_state),
                 self.decode_action(
                     latent_state,
                     latent_action),
@@ -1094,11 +1096,12 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 self.decode_state(next_latent_state)
             ]).sample()
         else:
-            _action, _reward, _next_state = mean_decoder()
+            _state, _action, _reward, _next_state = mean_decoder()
 
         reconstruction_loss = (
+            tf.norm(state - _state, ord=1, axis=1) +
             tf.norm(action - _action, ord=1, axis=1) +
-            tf.norm(reward - _reward, ord=1, axis=1) +  # local reward loss
+            tf.norm(reward - _reward, ord=1, axis=1) +
             tf.norm(next_state - _next_state, ord=1, axis=1))
 
         if not self.encode_action:
@@ -1112,8 +1115,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                         self.decode_action(latent_state, latent_action),
                         self.reward_distribution(latent_state, latent_action, next_latent_state),
                 ]).sample()
-            y = tf.concat([random_action, random_reward, _next_state], axis=-1)
-            mean = tf.concat([_action, _reward, _next_state], axis=-1)
+            y = tf.concat([_state, random_action, random_reward, _next_state], axis=-1)
+            mean = tf.concat([_state, _action, _reward, _next_state], axis=-1)
             marginal_variance = tf.reduce_sum((y - mean) ** 2. + (mean - tf.reduce_mean(mean)) ** 2., axis=-1)
 
         else:
@@ -1186,6 +1189,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         # loss metrics
         self.loss_metrics['reconstruction_loss'](reconstruction_loss)
+        self.loss_metrics['state_mse'](state, _state)
         self.loss_metrics['state_mse'](next_state, _next_state)
         self.loss_metrics['action_mse'](action, random_action)
         self.loss_metrics['reward_mse'](reward, random_reward)
