@@ -1109,7 +1109,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             # marginal variance of the reconstruction
             if self.squared_reward_loss_upper_bound:
                 random_action, random_reward = _action, _reward
-                _action, _reward, _ = mean_decoder()
+                _, _action, _reward, _ = mean_decoder()
             else:
                 random_action, random_reward = tfd.JointDistributionSequential([
                         self.decode_action(latent_state, latent_action),
