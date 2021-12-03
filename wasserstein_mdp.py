@@ -1099,10 +1099,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             _state, _action, _reward, _next_state = mean_decoder()
 
         reconstruction_loss = (
-            tf.norm(state - _state, ord=1, axis=1) +
-            tf.norm(action - _action, ord=1, axis=1) +
-            tf.norm(reward - _reward, ord=1, axis=1) +
-            tf.norm(next_state - _next_state, ord=1, axis=1))
+            tf.norm(state - _state, ord=2, axis=1) +
+            tf.norm(action - _action, ord=2, axis=1) +
+            tf.norm(reward - _reward, ord=2, axis=1) +
+            tf.norm(next_state - _next_state, ord=2, axis=1))
 
         if not self.encode_action:
             reconstruction_loss = reconstruction_loss ** 2
@@ -1117,7 +1117,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 ]).sample()
             y = tf.concat([_state, random_action, random_reward, _next_state], axis=-1)
             mean = tf.concat([_state, _action, _reward, _next_state], axis=-1)
-            marginal_variance = tf.reduce_sum((y - mean) ** 2. + (mean - tf.reduce_mean(mean)) ** 2., axis=-1)
+            marginal_variance = (tf.norm(y - mean, ord=2, axis=1) ** 2. +
+                                 tf.norm(mean - tf.reduce_mean(mean), ord=2, axis=1) ** 2)
 
         else:
             random_action = _action
