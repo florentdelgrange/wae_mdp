@@ -611,8 +611,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             action: tf.Tensor,
             temperature: Optional[Float] = 0.
     ) -> tfd.Distribution:
-        logits = self.action_encoder_network([latent_state, action])
         if self.action_discretizer:
+            logits = self.action_encoder_network([latent_state, action])
             if self.relaxed_exp_one_hot_action_encoding:
                 return tfd.ExpRelaxedOneHotCategorical(
                     temperature=temperature,
@@ -1105,6 +1105,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             tf.norm(next_state - _next_state, ord=2, axis=1))
 
         if not self.encode_action:
+            # l_2 loss; note: leads to a 2-Wasserstein distance
             reconstruction_loss = reconstruction_loss ** 2
             # marginal variance of the reconstruction
             if self.squared_reward_loss_upper_bound:
@@ -1301,7 +1302,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         else:
             latent_action = latent_actions
 
-        if latent_states is not None:
+        if latent_states is not None and (self.action_discretizer or not self.encode_action):
             if action is not None and use_marginal_encoder_entropy:
                 marginal_action_encoder_distribution = self.relaxed_marginal_action_encoder_distribution(
                     latent_states=latent_states,
@@ -1394,9 +1395,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         ]).sample()
 
         reconstruction_loss = (
-            tf.norm(action - _action, ord=1, axis=1) +
-            tf.norm(reward - _reward, ord=1, axis=1) +  # local reward loss
-            tf.norm(next_state - _next_state, ord=1, axis=1))
+            tf.norm(action - _action, ord=2, axis=1) +
+            tf.norm(reward - _reward, ord=2, axis=1) +  # local reward loss
+            tf.norm(next_state - _next_state, ord=2, axis=1))
 
         # marginal variance of the reconstruction
         if self.encode_action:
@@ -1640,16 +1641,19 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             sample_key=sample_key, sample_probability=sample_probability)
 
     def mean_latent_bits_used(self, inputs, eps=1e-3, deterministic=True):
-        state, label, action, reward, next_state, next_label = inputs[:6]
-        latent_state = tf.cast(self.binary_encode_state(state, label).sample(), tf.float32)
-        mean = tf.reduce_mean(
-                self.discrete_action_encoding(latent_state, action).probs_parameter() if self.encode_action else
-                self.discrete_latent_policy(latent_state).probs_parameter(),
-                axis=0)
-        check = lambda x: 1 if 1 - eps > x > eps else 0
-        mean_bits_used = tf.reduce_sum(tf.map_fn(check, mean), axis=0).numpy()
+        if self.action_discretizer:
+            state, label, action, reward, next_state, next_label = inputs[:6]
+            latent_state = tf.cast(self.binary_encode_state(state, label).sample(), tf.float32)
+            mean = tf.reduce_mean(
+                    self.discrete_action_encoding(latent_state, action).probs_parameter() if self.encode_action else
+                    self.discrete_latent_policy(latent_state).probs_parameter(),
+                    axis=0)
+            check = lambda x: 1 if 1 - eps > x > eps else 0
+            mean_bits_used = tf.reduce_sum(tf.map_fn(check, mean), axis=0).numpy()
 
-        mbu = {'mean_action_bits_used': mean_bits_used}
+            mbu = {'mean_action_bits_used': mean_bits_used}
+        else:
+            mbu = dict()
         mbu.update(super().mean_latent_bits_used(inputs, eps, deterministic))
         return mbu
 
