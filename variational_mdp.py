@@ -1881,7 +1881,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
             additional_metrics = {}
 
         if not aggressive_training and not self.latent_policy_training_phase:
-            gradients = self.compute_apply_gradients(*dataset_batch, additional_transition_batch=extra_batch)
+            gradients = self.compute_apply_gradients(
+                *dataset_batch, additional_transition_batch=extra_batch, step=global_step)
         elif not aggressive_training and self.latent_policy_training_phase:
             gradients = self.latent_policy_update(*dataset_batch)
         elif aggressive_update:
