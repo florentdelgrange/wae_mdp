@@ -1069,7 +1069,7 @@ if __name__ == '__main__':
     )
     flags.DEFINE_string(
         "wasserstein_optimizer",
-        default=None,
+        default='Adam',
         help='Optimizer name for the Wasserstein regularizers (see tf.optimizers).'
     )
     flags.DEFINE_float(
