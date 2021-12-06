@@ -500,7 +500,9 @@ def main(argv):
             entropy_regularizer_scale_factor_min_value=params["entropy_regularizer_scale_factor_min_value"],
             relaxed_exp_one_hot_action_encoding=True,
             action_entropy_regularizer_scaling = params["action_entropy_regularizer_scaling"],
-            squared_local_reward_loss_upper_bound=params['squared_reward_loss_upper_bound'],
+            enforce_upper_bound=params['enforce_upper_bound'],
+            squared_wasserstein=params['squared_wasserstein'],
+            n_critics=params['n_critics'],
         )
         models = [wae_mdp]
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
@@ -1084,9 +1086,20 @@ if __name__ == '__main__':
              'If not, the latent policy alone will be used.'
     )
     flags.DEFINE_bool(
-        'squared_reward_loss_upper_bound',
+        'enforce_upper_bound',
         default=False,
-        help="Whether to set an upper bound on the reward loss or not when using a nondeterministic decoder"
+        help="Whether to set an upper bound on the (2-)Wasserstein distance "
+             "or not when using a nondeterministic decoder."
+    )
+    flags.DEFINE_bool(
+        'squared_wasserstein',
+        default=False,
+        help='Whether to optimize the squared instead of the simple Wasserstein distance or not.'
+    )
+    flags.DEFINE_integer(
+        'n_critics',
+        default=5,
+        help='Number of critic (Wasserstein networks) updates to perform before updating the autoencoders components.'
     )
 
     FLAGS = flags.FLAGS
