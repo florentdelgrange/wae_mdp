@@ -31,11 +31,20 @@ FLAGS = flags.FLAGS
 
 
 def generate_network_components(params, name='', wasserstein_networks=False):
-    activation = getattr(tf.nn, params["activation"])
+    try:
+        activation = getattr(tf.nn, params["activation"])
+    except AttributeError:
+        other_activations = {
+                'smooth_elu': lambda x: tf.nn.softplus(2. * x + 2.) / 2. - 1.,
+        }
+        activation = other_activations[params["activation"]]
+
     component_names = ['encoder', 'transition', 'label_transition', 'reward', 'decoder', 'discrete_policy',
                        'state_encoder_pre_processing', 'state_decoder_pre_processing']
+    wasserstein_component_names = ['steady_state', 'local_transition_loss']
+
     if wasserstein_networks:
-        component_names += ['steady_state', 'local_transition_loss', 'action_successor']
+        component_names += wasserstein_component_names
     network_components = []
 
     if name != '':
@@ -43,8 +52,15 @@ def generate_network_components(params, name='', wasserstein_networks=False):
 
     for component_name in component_names:
         x = Sequential(name="{}{}_network_body".format(name, component_name))
+        
+        if params["global_network_layers"] is not None:
+            params[component_name + "_layers"] = params["global_network_layers"]
+
         for i, units in enumerate(params[component_name + '_layers']):
-            x.add(Dense(units, activation=activation, name="{}{}_{}".format(name, component_name, i)))
+            x.add(Dense(
+                units,
+                activation=activation,
+                name="{}{}_{}".format(name, component_name, i)))
         network_components.append(x)
 
     return namedtuple("{}AEArchitecture".format('V' if not wasserstein_networks else 'W'),
@@ -144,25 +160,29 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
     if params['policy_path'][-1] == os.path.sep:
         params['policy_path'] = params['policy_path'][:-1]
 
-    wae_name = 'wae_LS{}_TD{:.2f}-{:.2f}_activation={}_lr={:g}_seed={:d}' \
-               '_ER={:g}-decay={:g}' \
-               '_WSR={:g}_TLR={:g}' \
-               '_SGP={:g}_TLGP={:g}'.format(
+    wae_name = 'wae_LS{}_TD{:.2f}-{:.2f}_activ={}_opt={}_lr={:g}_seed={:d}' \
+               '_ER={:g}_decay={:g}' \
+               '_SR={:g}_GP={:g}' \
+               '_TL={:g}_GP={:g}_n_critic={:d}'.format(
         params['latent_size'],
         params['state_encoder_temperature'],
         params['state_prior_temperature'],
         params['activation'],
+        params['optimizer'],
         params['learning_rate'],
         int(params['seed']),
         params['entropy_regularizer_scale_factor'],
         params['entropy_regularizer_decay_rate'],
         wasserstein_regularizer.stationary.scaling,
-        wasserstein_regularizer.local_transition_loss.scaling,
         wasserstein_regularizer.stationary.gradient_penalty_multiplier,
-        wasserstein_regularizer.local_transition_loss.gradient_penalty_multiplier)
+        wasserstein_regularizer.local_transition_loss.scaling,
+        wasserstein_regularizer.local_transition_loss.gradient_penalty_multiplier,
+        params['n_critic'])
     if params['wasserstein_optimizer'] is not None:
-        wae_name += '_wasserstein_optimizer={}-lr={:g}'.format(
+        wae_name += '_wopt={}_lr={:g}'.format(
                 params['wasserstein_optimizer'], params['wasserstein_learning_rate'])
+    if params['squared_wasserstein']:
+        wae_name += '_2W'
     if params['action_discretizer']:
         if wae_name != '':
             base_model_name = wae_name
@@ -170,13 +190,15 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
             base_model_name,
             os.path.split(params['policy_path'])[-1],
             'action_discretizer',
-            'LA{}_ER{}_TD{:.2f}-{:.2f}_encode_actions={}'.format(
+            'LA{}_ER{}_TD{:.2f}-{:.2f}_encode={}'.format(
                 params['number_of_discrete_actions'],
                 params['entropy_regularizer_scale_factor'] * params['action_entropy_regularizer_scaling'],
                 params['action_encoder_temperature'],
                 params['latent_policy_temperature'],
                 str(params['encode_actions']))
         )
+    if not params['encode_actions'] and params['enforce_upper_bound']:
+        wae_name += '_UB'
 
     if params['prioritized_experience_replay']:
         wae_name += '_PER-P_exp={:g}-WIS_exponent={:g}-WIS_growth={:g}'.format(
@@ -201,9 +223,7 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
         'one_output_per_action',
         # 'full_vae_optimization',
         # 'relaxed_state_encoding',
-        'full_covariance',
         'latent_policy',
-        'decompose_training',
     ]
     nb_additional_params = sum(
         map(lambda x: params[x], additional_parameters))
@@ -449,8 +469,6 @@ def main(argv):
             local_transition_loss_scaling=params["local_transition_loss_regularizer_scale_factor"],
             local_transition_loss_gradient_penalty_multiplier=params[
                 "local_transition_loss_gradient_penalty_multiplier"],
-            action_successor_scaling=params["action_successor_gradient_penalty_multiplier"],
-            action_successor_gradient_penalty_multiplier=params["action_successor_gradient_penalty_multiplier"]
         )
         vae_name = generate_wae_name(params=params, wasserstein_regularizer=wasserstein_regularizer_scale_factor)
         autoencoder_optimizer = getattr(tf.optimizers, params['optimizer'])(learning_rate=params['learning_rate'])
@@ -502,7 +520,7 @@ def main(argv):
             action_entropy_regularizer_scaling = params["action_entropy_regularizer_scaling"],
             enforce_upper_bound=params['enforce_upper_bound'],
             squared_wasserstein=params['squared_wasserstein'],
-            n_critics=params['n_critics'],
+            n_critic=params['n_critic'],
         )
         models = [wae_mdp]
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
@@ -612,6 +630,11 @@ if __name__ == '__main__':
         "activation",
         default="relu",
         help="Activation function for all hidden layers.")
+    flags.DEFINE_multi_integer(
+        "global_network_layers",
+        default=None,
+        help="If provided, set the number of units per layer of all neural networks components."
+    )
     flags.DEFINE_integer(
         "latent_size",
         default=12,
@@ -1018,13 +1041,13 @@ if __name__ == '__main__':
     flags.DEFINE_float(
         "steady_state_wasserstein_regularizer_scale_factor",
         default=None,
-        required=False,
+        # required=False,
         help='Scale factor of the Wasserstein regularizer of the steady state distribution.'
     )
     flags.DEFINE_float(
         "steady_state_gradient_penalty_multiplier",
         default=None,
-        required=False,
+        # required=False,
         help="Multiplier of the gradient penalty for the steady-state Lipschitz function."
     )
     flags.DEFINE_multi_integer(
@@ -1036,13 +1059,13 @@ if __name__ == '__main__':
     flags.DEFINE_float(
         "local_transition_loss_regularizer_scale_factor",
         default=None,
-        required=False,
+        # required=False,
         help='Scale factor of the local loss regularizer.'
     )
     flags.DEFINE_float(
         "local_transition_loss_gradient_penalty_multiplier",
         default=None,
-        required=False,
+        # required=False,
         help="Multiplier of the gradient penalty for the local loss Lipschitz function."
     )
     flags.DEFINE_multi_integer(
@@ -1050,24 +1073,6 @@ if __name__ == '__main__':
         default=[256, 256],
         help="Number of units to use for each layer of the network representing the Lipschitz function for the "
              "local loss regularizer."
-    )
-    flags.DEFINE_float(
-        "action_successor_wasserstein_regularizer_scale_factor",
-        default=None,
-        required=False,
-        help='Scale factor of the Wasserstein regularizer of the action-successor distribution.'
-    )
-    flags.DEFINE_float(
-        "action_successor_gradient_penalty_multiplier",
-        default=None,
-        required=False,
-        help="Multiplier of the gradient penalty for the action-successor Lipschitz function."
-    )
-    flags.DEFINE_multi_integer(
-        "action_successor_layers",
-        default=[256, 256],
-        help="Number of units to use for each layer of the network representing the Lipschitz function for the "
-             "action-successor Wasserstein regularizer."
     )
     flags.DEFINE_string(
         "wasserstein_optimizer",
@@ -1097,7 +1102,7 @@ if __name__ == '__main__':
         help='Whether to optimize the squared instead of the simple Wasserstein distance or not.'
     )
     flags.DEFINE_integer(
-        'n_critics',
+        'n_critic',
         default=5,
         help='Number of critic (Wasserstein networks) updates to perform before updating the autoencoders components.'
     )

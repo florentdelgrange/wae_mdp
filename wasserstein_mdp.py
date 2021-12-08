@@ -112,7 +112,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             action_entropy_regularizer_scaling: float = 1.,
             enforce_upper_bound: bool = False,
             squared_wasserstein: bool = False,
-            n_critics: int = 5,
+            n_critic: int = 5,
     ):
         super(WassersteinMarkovDecisionProcess, self).__init__(
             state_shape=state_shape, action_shape=action_shape, reward_shape=reward_shape, label_shape=label_shape,
@@ -143,7 +143,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.action_entropy_regularizer_scaling = action_entropy_regularizer_scaling
         self.enforce_upper_bound = enforce_upper_bound
         self.squared_wasserstein = squared_wasserstein
-        self.n_critics = n_critics
+        self.n_critic = n_critic
 
         if not self.action_discretizer:
             assert len(action_shape) == 1
@@ -1173,10 +1173,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             tf.print("next_stationary_latent_state", next_stationary_latent_state, summarize=-1)
             tf.print("next_transition_latent_state", next_transition_latent_state, summarize=-1)
             tf.print("latent_action", latent_action, summarize=-1)
-            tf.print("loss", tf.stop_gradient(reconstruction_loss +
-                                              marginal_variance +
-                                              steady_state_regularizer +
-                                              transition_loss_regularizer))
+            tf.print("loss", tf.stop_gradient(
+                reconstruction_loss + marginal_variance +
+                self.wasserstein_regularizer_scale_factor.stationary.scaling * steady_state_regularizer +
+                self.wasserstein_regularizer_scale_factor.local_transition_loss.scaling * transition_loss_regularizer))
 
         return {
             'reconstruction_loss': reconstruction_loss + marginal_variance,
@@ -1466,7 +1466,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         if autoencoder_variables is None and wasserstein_regularizer_variables is None:
             raise ValueError("Must pass autoencoder and/or wasserstein regularizer variables")
         if step is None:
-            step = self.n_critics
+            step = self.n_critic
 
         with tf.GradientTape(persistent=True) as tape:
             loss = self.compute_loss(
@@ -1479,7 +1479,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         }.items():
             if variables is not None and (
                     optimization_direction == 'max' or
-                    (step % self.n_critics == 0 and optimization_direction == 'min')
+                    (step % self.n_critic == 0 and optimization_direction == 'min')
             ):
                 gradients = tape.gradient(loss[optimization_direction], variables)
                 optimizer = {
