@@ -9,6 +9,7 @@ import tensorflow as tf
 import optuna
 import importlib
 
+import wasserstein_mdp
 from policies.saved_policy import SavedTFPolicy
 import reinforcement_learning
 import reinforcement_learning.environments
@@ -60,17 +61,37 @@ def search(
     def suggest_hyperparameters(trial):
 
         defaults = {}
-        optimizer = trial.suggest_categorical('optimizer', ['Adam', 'SGD', 'RMSprop'])
+        optimizer = trial.suggest_categorical('optimizer', ['Adam', 'RMSprop'])
         learning_rate = trial.suggest_float('learning_rate', 1e-4, 1e-3, log=True)
         batch_size = trial.suggest_categorical('batch_size', [64, 128, 256])
         neurons = trial.suggest_categorical('neurons', [64, 128, 256, 512])
         hidden = trial.suggest_int('hidden', 1, 3)
-        activation = trial.suggest_categorical('activation', ['relu', 'leaky_relu'])
-        kl_annealing_growth_rate = trial.suggest_float('kl_annealing_growth_rate', 1e-6, 1e-4, log=True)
+        activation = trial.suggest_categorical('activation', ['relu', 'leaky_relu', 'elu', 'gelu', 'smooth_elu'])
+        entropy_regularizer_scale_factor = trial.suggest_float('entropy_regularizer_scale_factor', 1e-2, 10., log=True)
+        action_entropy_regularizer_scaling = trial.suggest_float(
+            'action_entropy_regularizer_scaling', 1e-1, entropy_regularizer_scale_factor, log=True)
         entropy_regularizer_decay_rate = trial.suggest_float('entropy_regularizer_decay_rate', 1e-6, 1e-4, log=True)
-        epsilon_greedy = trial.suggest_float('epsilon_greedy', 0., 0.5)
+        if fixed_parameters['epsilon_greedy'] > 0.:
+            epsilon_greedy = trial.suggest_float('epsilon_greedy', 0., fixed_parameters['epsilon_greedy'])
         epsilon_greedy_decay_rate = trial.suggest_float('epsilon_greedy_decay_rate', 1e-6, 1e-4, log=True)
-        label_transition_function = trial.suggest_categorical('label_transition_function', [True, False])
+
+        if fixed_parameters['wae']:
+            wasserstein_optimizer = optimizer
+            wasserstein_learning_rate = trial.suggest_float('learning_rate', 1e-4, 1e-3, log=True)
+            encode_actions = trial.suggest_categorical('encode_actions', [True, False])
+            global_wasserstein_regularizer_scale_factor = trial.suggest_float(
+                'regularizer_scale_factor', 1., 100.)
+            global_gradient_penalty_scale_factor = 10.
+            n_critic = trial.suggest_int('n_critic', 1, 10)
+            if encode_actions:
+                squared_wasserstein = trial.suggest_categorical('squared_wasserstein', [True, False])
+                enforce_upper_bound = False
+            else:
+                squared_wasserstein = True
+                enforce_upper_bound = trial.suggest_categorical('enforce_upper_bound', [True, False])
+        else:
+            label_transition_function = trial.suggest_categorical('label_transition_function', [True, False])
+            kl_annealing_growth_rate = trial.suggest_float('kl_annealing_growth_rate', 1e-6, 1e-4, log=True)
 
         if fixed_parameters['time_stacked_states'] > 1:
             time_stacked_states = trial.suggest_int('time_stacked_states', 1, fixed_parameters['time_stacked_states'])
@@ -91,11 +112,18 @@ def search(
             prioritized_experience_replay = trial.suggest_categorical('prioritized_experience_replay', [True, False])
 
         if prioritized_experience_replay:
-            collect_steps_per_iteration = trial.suggest_int(
-                'prioritized_experience_replay_collect_steps_per_iteration', 1, batch_size // 8)
+            if fixed_parameters['collect_steps_per_iteration'] > 0:
+                collect_steps_per_iteration = trial.suggest_int(
+                    'prioritized_experience_replay_collect_steps_per_iteration',
+                    fixed_parameters['collect_steps_per_iteration'],
+                    batch_size // 8)
+            else:
+                collect_steps_per_iteration = 0.
             buckets_based_priorities = trial.suggest_categorical('buckets_based_priorities', [True, False])
-            priority_exponent = trial.suggest_float('priority_exponent', 0., 1.)
-            importance_sampling_exponent = trial.suggest_float('importance_sampling_exponent', 1e-6, 1.)
+            priority_exponent = trial.suggest_float(
+                'priority_exponent', fixed_parameters['priority_exponent'], 1.)
+            importance_sampling_exponent = trial.suggest_float(
+                'importance_sampling_exponent', fixed_parameters['importance_sampling_exponent'], 1.)
             importance_sampling_exponent_growth_rate = trial.suggest_float(
                 'importance_sampling_exponent_growth_rate', 5e-6, 1e-2, log=True)
 
@@ -128,16 +156,33 @@ def search(
                 'number_of_discrete_actions', 2, fixed_parameters['number_of_discrete_actions'])
             one_output_per_action = False  # trial.suggest_categorical('one_output_per_action', [True, False])
 
-        for attr in ['learning_rate', 'batch_size', 'collect_steps_per_iteration', 'latent_state_size',
-                     'kl_annealing_growth_rate', 'entropy_regularizer_decay_rate', 'prioritized_experience_replay',
-                     'neurons', 'hidden', 'activation', 'priority_exponent', 'importance_sampling_exponent',
-                     'importance_sampling_exponent_growth_rate', 'specs',
-                     'buckets_based_priorities', 'epsilon_greedy', 'epsilon_greedy_decay_rate', 'time_stacked_states',
-                     'state_encoder_pre_processing_network', 'state_decoder_pre_processing_network',
-                     'optimizer', 'label_transition_function'] + ([
-                        'number_of_discrete_actions', 'one_output_per_action']
-                        if fixed_parameters['action_discretizer'] else []):
-            defaults[attr] = locals()[attr]
+        if fixed_parameters['wae']:
+            for attr in ['learning_rate', 'batch_size', 'collect_steps_per_iteration', 'latent_state_size',
+                         'entropy_regularizer_scaling', 'entropy_regularizer_decay_rate',
+                         'action_entropy_regularizer_scaling', 'prioritized_experience_replay',
+                         'n_critic', 'neurons', 'hidden', 'activation', 'priority_exponent',
+                         'importance_sampling_exponent', 'importance_sampling_exponent_growth_rate', 'specs',
+                         'buckets_based_priorities', 'epsilon_greedy', 'epsilon_greedy_decay_rate',
+                         'time_stacked_states',
+                         'state_encoder_pre_processing_network', 'state_decoder_pre_processing_network',
+                         'optimizer', 'label_transition_function'] + [
+                         'wasserstein_optimizer', 'wasserstein_learning_rate', 'encode_actions',
+                         'global_wasserstein_regularizer_scale_factor', 'global_gradient_penalty_scale_factor',
+                         'n_critic', 'squared_wasserstein', 'enforce_upper_bound'
+                        ] + ([
+                            'number_of_discrete_actions'] if fixed_parameters['action_discretizer'] else []):
+                defaults[attr] = locals()[attr]
+        else:
+            for attr in ['learning_rate', 'batch_size', 'collect_steps_per_iteration', 'latent_state_size',
+                         'kl_annealing_growth_rate', 'entropy_regularizer_decay_rate', 'prioritized_experience_replay',
+                         'neurons', 'hidden', 'activation', 'priority_exponent', 'importance_sampling_exponent',
+                         'importance_sampling_exponent_growth_rate', 'specs',
+                         'buckets_based_priorities', 'epsilon_greedy', 'epsilon_greedy_decay_rate', 'time_stacked_states',
+                         'state_encoder_pre_processing_network', 'state_decoder_pre_processing_network',
+                         'optimizer', 'label_transition_function'] + ([
+                            'number_of_discrete_actions', 'one_output_per_action']
+                            if fixed_parameters['action_discretizer'] else []):
+                defaults[attr] = locals()[attr]
 
         return defaults
 
@@ -149,72 +194,120 @@ def search(
             if key != "specs":
                 print("{}={}".format(key, hyperparameters[key]))
 
-        for component_name in [
-            'encoder', 'transition', 'label_transition', 'reward', 'decoder', 'discrete_policy',
-            'state_encoder_pre_processing', 'state_decoder_pre_processing']:
-            hyperparameters[component_name + '_layers'] = hyperparameters['hidden'] * [hyperparameters['neurons']]
-        network = generate_network_components(hyperparameters, name='variational_mdp')
+        hyperparameters['global_network_layers'] = hyperparameters['hidden'] * [hyperparameters['neurons']]
+        network = generate_network_components(hyperparameters, name='{}_mdp'.format(
+            'wasserstein' if fixed_parameters['wae'] else 'variational'))
 
         evaluation_window_size = fixed_parameters['evaluation_window_size']
         specs = hyperparameters['specs']
-        vae_mdp = variational_mdp.VariationalMarkovDecisionProcess(
-            state_shape=specs.state_shape, action_shape=specs.action_shape,
-            reward_shape=specs.reward_shape, label_shape=specs.label_shape,
-            encoder_network=network.encoder,
-            transition_network=network.transition,
-            label_transition_network=network.label_transition if hyperparameters['label_transition_function'] else None,
-            reward_network=network.reward, decoder_network=network.decoder,
-            state_encoder_pre_processing_network=(network.state_encoder_pre_processing
-                                                  if hyperparameters['state_encoder_pre_processing_network']
-                                                  else None),
-            state_decoder_pre_processing_network=(network.state_decoder_pre_processing
-                                                  if hyperparameters['state_decoder_pre_processing_network']
-                                                  else None),
-            latent_policy_network=(network.discrete_policy if fixed_parameters['latent_policy'] else None),
-            latent_state_size=hyperparameters['latent_state_size'],
-            mixture_components=fixed_parameters['mixture_components'],
-            encoder_temperature_decay_rate=fixed_parameters['encoder_temperature_decay_rate'],
-            prior_temperature_decay_rate=fixed_parameters['prior_temperature_decay_rate'],
-            entropy_regularizer_scale_factor=fixed_parameters['entropy_regularizer_scale_factor'],
-            entropy_regularizer_decay_rate=hyperparameters['entropy_regularizer_decay_rate'],
-            entropy_regularizer_scale_factor_min_value=fixed_parameters['entropy_regularizer_scale_factor_min_value'],
-            marginal_entropy_regularizer_ratio=fixed_parameters['marginal_entropy_regularizer_ratio'],
-            kl_scale_factor=fixed_parameters['kl_annealing_scale_factor'],
-            kl_annealing_growth_rate=hyperparameters['kl_annealing_growth_rate'],
-            multivariate_normal_full_covariance=fixed_parameters['full_covariance'],
-            full_optimization=True,
-            importance_sampling_exponent=hyperparameters['importance_sampling_exponent'],
-            importance_sampling_exponent_growth_rate=hyperparameters['importance_sampling_exponent_growth_rate'],
-            evaluation_window_size=evaluation_window_size,
-            evaluation_criterion=variational_mdp.EvaluationCriterion.MAX,
-            time_stacked_states=hyperparameters['time_stacked_states'] > 1,)
+        global_step = tf.Variable(0, trainable=False, dtype=tf.int64)
 
-        if fixed_parameters['action_discretizer']:
-            network = generate_network_components(hyperparameters, name='variational_action_discretizer')
-            vae_mdp = variational_action_discretizer.VariationalActionDiscretizer(
-                vae_mdp=vae_mdp,
-                number_of_discrete_actions=hyperparameters['number_of_discrete_actions'],
-                action_encoder_network=network.encoder,
+        if fixed_parameters['wae']:
+            wasserstein_regularizer_scale_factor = wasserstein_mdp.WassersteinRegularizerScaleFactor(
+                global_scaling=hyperparameters['global_wasserstein_regularizer_scale_factor'],
+                global_gradient_penalty_multiplier=hyperparameters["global_gradient_penalty_scale_factor"],
+            )
+            autoencoder_optimizer = getattr(tf.optimizers, hyperparameters['optimizer'])(
+                learning_rate=hyperparameters['learning_rate'])
+            wasserstein_optimizer = getattr(tf.optimizers, hyperparameters['wasserstein_optimizer'])(
+                learning_rate=hyperparameters['wasserstein_learning_rate'])
+            optimizer = [autoencoder_optimizer, wasserstein_optimizer]
+            action_network = generate_network_components(hyperparameters, name='action')
+            vae_mdp = wasserstein_mdp.WassersteinMarkovDecisionProcess(
+                state_shape=specs.state_shape,
+                action_shape=specs.action_shape,
+                reward_shape=specs.reward_shape,
+                label_shape=specs.label_shape,
+                discretize_action_space=hyperparameters['action_discretizer'],
+                state_encoder_network=network.encoder,
+                action_encoder_network=action_network.encoder if hyperparameters['encode_actions'] else None,
+                action_decoder_network=action_network.decoder,
                 transition_network=network.transition,
-                action_label_transition_network=(network.label_transition
-                                                 if hyperparameters['label_transition_function'] else None),
-                reward_network=network.reward, action_decoder_network=network.decoder,
+                reward_network=network.reward,
+                decoder_network=network.decoder,
                 latent_policy_network=network.discrete_policy,
+                steady_state_lipschitz_network=network.steady_state,
+                transition_loss_lipschitz_network=network.local_transition_loss,
+                latent_state_size=hyperparameters['latent_state_size'],
+                number_of_discrete_actions=hyperparameters['number_of_discrete_actions'],
+                state_encoder_pre_processing_network=(
+                    network.state_encoder_pre_processing
+                    if hyperparameters['state_encoder_pre_processing_network'] else None),
+                state_decoder_pre_processing_network=(
+                    network.state_decoder_pre_processing
+                    if hyperparameters['state_decoder_pre_processing_network'] else None),
+                time_stacked_states=hyperparameters['time_stacked_states'] > 1,
+                state_encoder_temperature=fixed_parameters['state_encoder_temperature'],
+                state_prior_temperature=fixed_parameters['state_prior_temperature'],
+                action_encoder_temperature=fixed_parameters['action_encoder_temperature'],
+                latent_policy_temperature=fixed_parameters['latent_policy_temperature'],
+                wasserstein_regularizer_scale_factor=wasserstein_regularizer_scale_factor,
+                encoder_temperature_decay_rate=0.,
+                prior_temperature_decay_rate=0.,
+                importance_sampling_exponent=hyperparameters['importance_sampling_exponent'],
+                importance_sampling_exponent_growth_rate=hyperparameters['importance_sampling_exponent_growth_rate'],
+                evaluation_window_size=evaluation_window_size,
+                entropy_regularizer_scale_factor=hyperparameters['entropy_regularizer_scale_factor'],
+                entropy_regularizer_decay_rate=hyperparameters['entropy_regularizer_decay_rate'],
+                entropy_regularizer_scale_factor_min_value=0.,
+                relaxed_exp_one_hot_action_encoding=True,
+                action_entropy_regularizer_scaling=hyperparameters["action_entropy_regularizer_scaling"],
+                enforce_upper_bound=hyperparameters['enforce_upper_bound'],
+                squared_wasserstein=hyperparameters['squared_wasserstein'],
+                n_critic=hyperparameters['n_critic'],)
+        else:
+            vae_mdp = variational_mdp.VariationalMarkovDecisionProcess(
+                state_shape=specs.state_shape, action_shape=specs.action_shape,
+                reward_shape=specs.reward_shape, label_shape=specs.label_shape,
+                encoder_network=network.encoder,
+                transition_network=network.transition,
+                label_transition_network=network.label_transition if hyperparameters['label_transition_function'] else None,
+                reward_network=network.reward, decoder_network=network.decoder,
+                state_encoder_pre_processing_network=(network.state_encoder_pre_processing
+                                                      if hyperparameters['state_encoder_pre_processing_network']
+                                                      else None),
+                state_decoder_pre_processing_network=(network.state_decoder_pre_processing
+                                                      if hyperparameters['state_decoder_pre_processing_network']
+                                                      else None),
+                latent_policy_network=(network.discrete_policy if fixed_parameters['latent_policy'] else None),
+                latent_state_size=hyperparameters['latent_state_size'],
+                mixture_components=fixed_parameters['mixture_components'],
                 encoder_temperature_decay_rate=fixed_parameters['encoder_temperature_decay_rate'],
                 prior_temperature_decay_rate=fixed_parameters['prior_temperature_decay_rate'],
-                one_output_per_action=hyperparameters['one_output_per_action'],
-                relaxed_state_encoding=True,
+                entropy_regularizer_scale_factor=fixed_parameters['entropy_regularizer_scale_factor'],
+                entropy_regularizer_decay_rate=hyperparameters['entropy_regularizer_decay_rate'],
+                entropy_regularizer_scale_factor_min_value=fixed_parameters['entropy_regularizer_scale_factor_min_value'],
+                marginal_entropy_regularizer_ratio=fixed_parameters['marginal_entropy_regularizer_ratio'],
+                kl_scale_factor=fixed_parameters['kl_annealing_scale_factor'],
+                kl_annealing_growth_rate=hyperparameters['kl_annealing_growth_rate'],
+                multivariate_normal_full_covariance=fixed_parameters['full_covariance'],
                 full_optimization=True,
-                reconstruction_mixture_components=1,
-                action_entropy_regularizer_scaling=fixed_parameters['action_entropy_regularizer_scaling'])
+                importance_sampling_exponent=hyperparameters['importance_sampling_exponent'],
+                importance_sampling_exponent_growth_rate=hyperparameters['importance_sampling_exponent_growth_rate'],
+                evaluation_window_size=evaluation_window_size,
+                evaluation_criterion=variational_mdp.EvaluationCriterion.MAX,
+                time_stacked_states=hyperparameters['time_stacked_states'] > 1,)
+            optimizer = getattr(tf.optimizers, hyperparameters['optimizer'])(
+                learning_rate=hyperparameters['learning_rate'])
 
-        global_step = tf.Variable(0, trainable=False, dtype=tf.int64)
-        if hyperparameters['optimizer'] == 'Adam':
-            optimizer = tf.keras.optimizers.Adam(learning_rate=hyperparameters['learning_rate'])
-        elif hyperparameters['optimizer'] == 'SGD':
-            optimizer = tf.keras.optimizers.SGD(learning_rate=hyperparameters['learning_rate'])
-        else:
-            optimizer = tf.keras.optimizers.RMSprop(learning_rate=hyperparameters['learning_rate'])
+            if fixed_parameters['action_discretizer']:
+                network = generate_network_components(hyperparameters, name='variational_action_discretizer')
+                vae_mdp = variational_action_discretizer.VariationalActionDiscretizer(
+                    vae_mdp=vae_mdp,
+                    number_of_discrete_actions=hyperparameters['number_of_discrete_actions'],
+                    action_encoder_network=network.encoder,
+                    transition_network=network.transition,
+                    action_label_transition_network=(network.label_transition
+                                                     if hyperparameters['label_transition_function'] else None),
+                    reward_network=network.reward, action_decoder_network=network.decoder,
+                    latent_policy_network=network.discrete_policy,
+                    encoder_temperature_decay_rate=fixed_parameters['encoder_temperature_decay_rate'],
+                    prior_temperature_decay_rate=fixed_parameters['prior_temperature_decay_rate'],
+                    one_output_per_action=hyperparameters['one_output_per_action'],
+                    relaxed_state_encoding=True,
+                    full_optimization=True,
+                    reconstruction_mixture_components=1,
+                    action_entropy_regularizer_scaling=fixed_parameters['action_entropy_regularizer_scaling'])
 
         environments = vae_mdp.initialize_environments(
             environment_suite=environment_suite,
@@ -315,9 +408,6 @@ def search(
                     break
 
         dataset_components.close_fn()
-
-        #  for key, value in vae_mdp.loss_metrics.items():
-        #      trial.set_user_attr(key, float(value.result()))
 
         return score
 
