@@ -66,18 +66,21 @@ def search(
         batch_size = trial.suggest_categorical('batch_size', [64, 128, 256])
         neurons = trial.suggest_categorical('neurons', [64, 128, 256, 512])
         hidden = trial.suggest_int('hidden', 1, 3)
-        activation = trial.suggest_categorical('activation', ['relu', 'leaky_relu', 'elu', 'gelu', 'smooth_elu'])
+        activation = trial.suggest_categorical('activation', ['relu', 'leaky_relu', 'softplus', 'gelu', 'smooth_elu'])
         entropy_regularizer_scale_factor = trial.suggest_float('entropy_regularizer_scale_factor', 1e-2, 10., log=True)
         action_entropy_regularizer_scaling = trial.suggest_float(
-            'action_entropy_regularizer_scaling', 1e-1, entropy_regularizer_scale_factor, log=True)
+            'action_entropy_regularizer_scaling', 1e-1, 1., log=True)
         entropy_regularizer_decay_rate = trial.suggest_float('entropy_regularizer_decay_rate', 1e-6, 1e-4, log=True)
         if fixed_parameters['epsilon_greedy'] > 0.:
             epsilon_greedy = trial.suggest_float('epsilon_greedy', 0., fixed_parameters['epsilon_greedy'])
-        epsilon_greedy_decay_rate = trial.suggest_float('epsilon_greedy_decay_rate', 1e-6, 1e-4, log=True)
+            epsilon_greedy_decay_rate = 0.
+        else:
+            epsilon_greedy = 0.
+            epsilon_greedy_decay_rate = trial.suggest_float('epsilon_greedy_decay_rate', 1e-6, 1e-4, log=True)
 
         if fixed_parameters['wae']:
             wasserstein_optimizer = optimizer
-            wasserstein_learning_rate = trial.suggest_float('learning_rate', 1e-4, 1e-3, log=True)
+            wasserstein_learning_rate = trial.suggest_float('wasserstein_learning_rate', 1e-4, 1e-3, log=True)
             encode_actions = trial.suggest_categorical('encode_actions', [True, False])
             global_wasserstein_regularizer_scale_factor = trial.suggest_float(
                 'regularizer_scale_factor', 1., 100.)
@@ -118,7 +121,7 @@ def search(
                     fixed_parameters['collect_steps_per_iteration'],
                     batch_size // 8)
             else:
-                collect_steps_per_iteration = 0.
+                collect_steps_per_iteration = batch_size // 8
             buckets_based_priorities = trial.suggest_categorical('buckets_based_priorities', [True, False])
             priority_exponent = trial.suggest_float(
                 'priority_exponent', fixed_parameters['priority_exponent'], 1.)
@@ -158,14 +161,14 @@ def search(
 
         if fixed_parameters['wae']:
             for attr in ['learning_rate', 'batch_size', 'collect_steps_per_iteration', 'latent_state_size',
-                         'entropy_regularizer_scaling', 'entropy_regularizer_decay_rate',
+                         'entropy_regularizer_scale_factor', 'entropy_regularizer_decay_rate',
                          'action_entropy_regularizer_scaling', 'prioritized_experience_replay',
                          'n_critic', 'neurons', 'hidden', 'activation', 'priority_exponent',
                          'importance_sampling_exponent', 'importance_sampling_exponent_growth_rate', 'specs',
                          'buckets_based_priorities', 'epsilon_greedy', 'epsilon_greedy_decay_rate',
                          'time_stacked_states',
                          'state_encoder_pre_processing_network', 'state_decoder_pre_processing_network',
-                         'optimizer', 'label_transition_function'] + [
+                         'optimizer'] + [
                          'wasserstein_optimizer', 'wasserstein_learning_rate', 'encode_actions',
                          'global_wasserstein_regularizer_scale_factor', 'global_gradient_penalty_scale_factor',
                          'n_critic', 'squared_wasserstein', 'enforce_upper_bound'
@@ -195,8 +198,11 @@ def search(
                 print("{}={}".format(key, hyperparameters[key]))
 
         hyperparameters['global_network_layers'] = hyperparameters['hidden'] * [hyperparameters['neurons']]
-        network = generate_network_components(hyperparameters, name='{}_mdp'.format(
-            'wasserstein' if fixed_parameters['wae'] else 'variational'))
+        network = generate_network_components(
+                hyperparameters,
+                name='{}_mdp'.format(
+                    'wasserstein' if fixed_parameters['wae'] else 'variational'),
+                wasserstein_networks=fixed_parameters['wae'],)
 
         evaluation_window_size = fixed_parameters['evaluation_window_size']
         specs = hyperparameters['specs']
@@ -218,7 +224,7 @@ def search(
                 action_shape=specs.action_shape,
                 reward_shape=specs.reward_shape,
                 label_shape=specs.label_shape,
-                discretize_action_space=hyperparameters['action_discretizer'],
+                discretize_action_space=fixed_parameters['action_discretizer'],
                 state_encoder_network=network.encoder,
                 action_encoder_network=action_network.encoder if hyperparameters['encode_actions'] else None,
                 action_decoder_network=action_network.decoder,
