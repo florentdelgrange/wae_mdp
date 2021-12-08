@@ -1132,7 +1132,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             state=state,
             latent_states=latent_state,
             action=action if self.encode_action else None,
-            latent_actions=latent_action if self.encode_action else None,
             sample_probability=sample_probability,)
 
         # priority support
@@ -1168,18 +1167,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.loss_metrics['marginal_variance'](marginal_variance)
         self.loss_metrics['entropy_regularizer'](entropy_regularizer)
 
-        def check_nan_values():
-            flag = False
-            for value in [
-                    reconstruction_loss + marginal_variance,
-                    steady_state_regularizer,
-                    steady_state_gradient_penalty,
-                    transition_loss_regularizer,
-                    transition_loss_gradient_penalty,
-                    entropy_regularizer]:
-                flag = flag or tf.reduce_any(tf.logical_or(tf.math.is_nan(value), tf.math.is_inf(value)))
-            return flag
-
         if debug:
             tf.print("latent_state", latent_state, summarize=-1)
             tf.print("next_latent_state", next_latent_state, summarize=-1)
@@ -1207,57 +1194,29 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             labels: Optional[Float] = None,
             latent_states: Optional[Float] = None,
             action: Optional[Float] = None,
-            latent_actions: Optional[Float] = None,
             sample_probability: Optional[Float] = None,
             *args, **kwargs
     ):
         logits = self.state_encoder_network(state)
         if sample_probability is None:
             regularizer = tf.reduce_mean(
-                    - tf.sigmoid(logits) * tf.math.log(tf.reduce_mean(tf.sigmoid(logits), axis=0))
-                    - tf.sigmoid(-logits) * tf.math.log(tf.reduce_mean(tf.sigmoid(-logits), axis=0)),
+                    - tf.sigmoid(logits) * tf.math.log(tf.reduce_mean(tf.sigmoid(logits), axis=0) + epsilon)
+                    - tf.sigmoid(-logits) * tf.math.log(tf.reduce_mean(tf.sigmoid(-logits), axis=0) + epsilon),
                 axis=0)
-            is_weights = 1.
         else:
             is_weights = (tf.stop_gradient(tf.reduce_min(sample_probability)) / sample_probability) ** self.is_exponent
             regularizer = tf.reduce_mean(
-                    - tf.sigmoid(logits) * tf.math.log(tf.reduce_mean(tf.expand_dims(is_weights, -1) * tf.sigmoid(logits), axis=0))
-                    - tf.sigmoid(-logits) * tf.math.log(tf.reduce_mean(tf.expand_dims(is_weights, -1) * tf.sigmoid(-logits), axis=0)),
-                axis=0)
-        #
-        # regularizer -= tf.reduce_mean(tfd.Bernoulli(logits=logits).entropy(), axis=0)
-        #
+                - tf.sigmoid(logits) * tf.math.log(
+                    tf.reduce_mean(tf.expand_dims(is_weights, -1) * tf.sigmoid(logits), axis=0) + epsilon)
+                - tf.sigmoid(-logits) * tf.math.log(
+                    tf.reduce_mean(tf.expand_dims(is_weights, -1) * tf.sigmoid(-logits), axis=0) + epsilon),
+            axis=0)
         regularizer = tf.reduce_sum(regularizer)
         if latent_states is not None:
             if self.encode_action:
                 regularizer += self.action_entropy_regularizer_scaling * tf.reduce_mean(tfd.Categorical(
                         logits=self.action_encoder_network([latent_states, action])
                 ).entropy(), axis=0)
-               # if sample_probability is None:
-               #     N = tf.cast(tf.shape(state)[0], tf.float32)
-               #     regularizer += self.action_entropy_regularizer_scaling * tf.reduce_mean(
-               #         tf.math.log(N) -
-               #         tfd.Independent(tfd.RelaxedBernoulli(
-               #             logits=logits,
-               #             temperature=self.state_encoder_temperature)).log_prob(
-               #                 latent_states[:, self.atomic_props_dims:, ...]) -
-               #         tfd.RelaxedOneHotCategorical(
-               #             logits=self.action_encoder_network([latent_states, action]),
-               #             temperature=self.action_encoder_temperature,
-               #         ).log_prob(latent_actions),
-               #     axis=0)
-               # else:
-               #     regularizer += self.action_entropy_regularizer_scaling * tf.reduce_mean(
-               #         - tf.math.log(is_weights) -
-               #         tfd.Independent(tfd.RelaxedBernoulli(
-               #             logits=logits,
-               #             temperature=self.state_encoder_temperature)).log_probs(
-               #                 latent_states[:, self.atomic_props_dims:, ...]) -
-               #         tfd.RelaxedOneHotCategorical(
-               #             logits=self.action_encoder_network([latent_states, action]),
-               #             temperature=self.action_encoder_temperature,
-               #         ).log_probs(latent_actions),
-               #     axis=0)
             else:
                 regularizer += tf.reduce_mean(self.discrete_latent_policy(latent_states).entropy())
 
