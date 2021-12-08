@@ -86,6 +86,7 @@ def search(
                 'regularizer_scale_factor', 1., 100.)
             global_gradient_penalty_scale_factor = 10.
             n_critic = trial.suggest_int('n_critic', 1, 10)
+            trainable_prior = trial.suggest_categorical('trainable_prior', [True, False])
             if encode_actions:
                 squared_wasserstein = trial.suggest_categorical('squared_wasserstein', [True, False])
                 enforce_upper_bound = False
@@ -171,7 +172,7 @@ def search(
                          'optimizer'] + [
                          'wasserstein_optimizer', 'wasserstein_learning_rate', 'encode_actions',
                          'global_wasserstein_regularizer_scale_factor', 'global_gradient_penalty_scale_factor',
-                         'n_critic', 'squared_wasserstein', 'enforce_upper_bound'
+                         'n_critic', 'squared_wasserstein', 'enforce_upper_bound', 'trainable_prior',
                         ] + ([
                             'number_of_discrete_actions'] if fixed_parameters['action_discretizer'] else []):
                 defaults[attr] = locals()[attr]
@@ -260,7 +261,8 @@ def search(
                 action_entropy_regularizer_scaling=hyperparameters["action_entropy_regularizer_scaling"],
                 enforce_upper_bound=hyperparameters['enforce_upper_bound'],
                 squared_wasserstein=hyperparameters['squared_wasserstein'],
-                n_critic=hyperparameters['n_critic'],)
+                n_critic=hyperparameters['n_critic'],
+                trainable_prior=hyperparameters['trainable_prior'],)
         else:
             vae_mdp = variational_mdp.VariationalMarkovDecisionProcess(
                 state_shape=specs.state_shape, action_shape=specs.action_shape,

@@ -521,6 +521,7 @@ def main(argv):
             enforce_upper_bound=params['enforce_upper_bound'],
             squared_wasserstein=params['squared_wasserstein'],
             n_critic=params['n_critic'],
+            trainable_prior=params['trainable_prior'],
         )
         models = [wae_mdp]
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
@@ -1105,6 +1106,11 @@ if __name__ == '__main__':
         'n_critic',
         default=5,
         help='Number of critic (Wasserstein networks) updates to perform before updating the autoencoders components.'
+    )
+    flags.DEFINE_bool(
+        'trainable_prior',
+        default=True,
+        help='Whether to allow for training the latent steady state distribution or not.',
     )
 
     FLAGS = flags.FLAGS

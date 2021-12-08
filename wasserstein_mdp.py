@@ -113,6 +113,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             enforce_upper_bound: bool = False,
             squared_wasserstein: bool = False,
             n_critic: int = 5,
+            trainable_prior: bool = True,
     ):
         super(WassersteinMarkovDecisionProcess, self).__init__(
             state_shape=state_shape, action_shape=action_shape, reward_shape=reward_shape, label_shape=label_shape,
@@ -144,6 +145,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.enforce_upper_bound = enforce_upper_bound
         self.squared_wasserstein = squared_wasserstein
         self.n_critic = n_critic
+        self.trainable_prior = trainable_prior
 
         if not self.action_discretizer:
             assert len(action_shape) == 1
@@ -356,7 +358,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     def _initialize_latent_steady_state_logits(self):
         return tf.Variable(
             initial_value=tf.zeros(shape=(self.latent_state_size,), dtype=tf.float32),
-            trainable=True,
+            trainable=self.trainable_prior,
             name='latent_steady_state_distribution_logits')
 
     def _initialize_reward_network(
