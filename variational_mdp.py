@@ -5,6 +5,7 @@ from enum import Enum
 from typing import Tuple, Optional, Callable, Dict, Iterator, NamedTuple
 import numpy as np
 import psutil
+from absl import logging
 
 from util.io.video import VideoEmbeddingObserver
 
@@ -1553,7 +1554,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             epsilon_greedy_decay_rate: Optional[float] = -1.,
             discrete_action_space: bool = False,
             training_steps: int = int(3e6),
-            initial_collect_steps: int = int(1e4),
+            initial_collect_steps: int = int(1e5),
             collect_steps_per_iteration: Optional[int] = None,
             replay_buffer_capacity: int = int(1e6),
             use_prioritized_replay_buffer: bool = True,
@@ -1850,7 +1851,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
             for key, value in loss.items():
                 if tf.reduce_any(tf.logical_or(tf.math.is_nan(value), tf.math.is_inf(value))):
-                    raise ValueError("{} is NaN or Inf: {}".format(key, value))
+                    logging.warning("{} is NaN or Inf: {}".format(key, value))
 
         # save the final model
         if save_directory is not None:

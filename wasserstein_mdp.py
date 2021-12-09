@@ -1479,9 +1479,14 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         for optimization_direction, variables in {
             'max': wasserstein_regularizer_variables, 'min': autoencoder_variables
         }.items():
-            if variables is not None and (
-                    optimization_direction == 'max' or
-                    (step % self.n_critic == 0 and optimization_direction == 'min')
+            if (
+                    variables is not None and
+                    not tf.reduce_any(tf.logical_or(
+                        tf.math.is_nan(loss[optimization_direction]),
+                        tf.math.is_inf(loss[optimization_direction])
+                    )) and
+                    (optimization_direction == 'max' or
+                        (step % self.n_critic == 0 and optimization_direction == 'min'))
             ):
                 gradients = tape.gradient(loss[optimization_direction], variables)
                 optimizer = {
