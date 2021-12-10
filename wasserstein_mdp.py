@@ -948,6 +948,12 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             ).mode()
         else:
             return latent_action
+    
+    def norm(self, x: Float, axis: int = -1):
+        """
+        to replace tf.norm(x, order=2, axis) which has numerical instabilities (the derivative can yields NaN).
+        """
+        return tf.sqrt(tf.reduce_sum(tf.square(x), axis=axis) + epsilon)
 
     @tf.function
     def __call__(
@@ -1058,13 +1064,14 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             ]).sample()
         else:
             _state, _action, _reward, _next_state = mean_decoder()
-
+        
+        dummy = self.norm(state - _state, axis=1)
         reconstruction_loss = (
-                tf.norm(state - _state, ord=2, axis=1) +
-                tf.norm(action - _action, ord=2, axis=1) +
-                tf.norm(reward - _reward, ord=2, axis=1) +
-                tf.norm(next_state - _next_state, ord=2, axis=1))
-
+                self.norm(state - _state, axis=1) +
+                self.norm(action - _action, axis=1) +
+                self.norm(reward - _reward, axis=1) +
+                self.norm(next_state - _next_state, axis=1)
+        )
         if self.squared_wasserstein or not self.encode_action:
             reconstruction_loss = reconstruction_loss ** 2
 
@@ -1080,8 +1087,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 ]).sample()
             y = tf.concat([_state, random_action, random_reward, _next_state], axis=-1)
             mean = tf.concat([_state, _action, _reward, _next_state], axis=-1)
-            marginal_variance = (tf.norm(y - mean, ord=2, axis=1) ** 2. +
-                                 tf.norm(mean - tf.reduce_mean(mean), ord=2, axis=1) ** 2)
+            marginal_variance = (self.norm(y - mean, axis=1) ** 2. +
+                                 self.norm(mean - tf.reduce_mean(mean), axis=1) ** 2)
 
         else:
             random_action = _action
@@ -1234,7 +1241,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         noise = tf.random.uniform(shape=(tf.shape(x)[0], 1), minval=0., maxval=1.)
         straight_lines = noise * x + (1. - noise) * y
         gradients = tf.gradients(lipschitz_function(straight_lines), straight_lines)[0]
-        return tf.square(tf.norm(gradients, ord=2, axis=1) - 1.)
+        return tf.square(self.norm(gradients, axis=1) - 1.)
 
     def eval(
             self,
@@ -1470,6 +1477,17 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         if step is None:
             step = self.n_critic
 
+        def numerical_error(x, list_of_tensors=False):
+            detected = False
+            if not list_of_tensors:
+                x = [x]
+            for value in x:
+                if value is not None:
+                    detected = detected or tf.reduce_any(tf.logical_or(
+                        tf.math.is_nan(value),
+                        tf.math.is_inf(value)))
+            return detected
+
         with tf.GradientTape(persistent=True) as tape:
             loss = self.compute_loss(
                 state, label, action, reward, next_state, next_label,
@@ -1481,10 +1499,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         }.items():
             if (
                     variables is not None and
-                    not tf.reduce_any(tf.logical_or(
-                        tf.math.is_nan(loss[optimization_direction]),
-                        tf.math.is_inf(loss[optimization_direction])
-                    )) and
+                    not numerical_error(loss[optimization_direction]) and
                     (optimization_direction == 'max' or
                         (step % self.n_critic == 0 and optimization_direction == 'min'))
             ):
@@ -1493,7 +1508,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     'max': self._wasserstein_regularizer_optimizer,
                     'min': self._autoencoder_optimizer,
                 }[optimization_direction]
-                optimizer.apply_gradients(zip(gradients, variables))
+                
+                if not numerical_error(gradients, list_of_tensors=True):
+                    optimizer.apply_gradients(zip(gradients, variables))
 
                 if debug_gradients:
                     for gradient, variable in zip(gradients, variables):

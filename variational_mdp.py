@@ -60,7 +60,7 @@ check_numerics = False
 if check_numerics:
     tf.debugging.enable_check_numerics(stack_height_limit=150)
 
-epsilon = 1e-25
+epsilon = 1e-12
 
 
 class DatasetComponents(NamedTuple):
@@ -1852,6 +1852,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             for key, value in loss.items():
                 if tf.reduce_any(tf.logical_or(tf.math.is_nan(value), tf.math.is_inf(value))):
                     logging.warning("{} is NaN or Inf: {}".format(key, value))
+                    
 
         # save the final model
         if save_directory is not None:
@@ -2042,6 +2043,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             local_losses_metrics = local_losses_estimator()
 
         if train_summary_writer is not None and eval_steps > 0:
+            buckets = {'states': 32, 'actions': tf.reduce_max(data['actions']) + 1}
             with train_summary_writer.as_default():
                 for key, value in metrics.items():
                     tf.summary.scalar(key, value.result(), step=global_step)
@@ -2051,8 +2053,10 @@ class VariationalMarkovDecisionProcess(tf.Module):
                             data[value] = tf.reduce_sum(
                                 data[value] * 2 ** tf.range(tf.cast(self.latent_state_size, dtype=tf.int64)),
                                 axis=-1)
-                        tf.summary.histogram('{}_frequency'.format(value[:-1]), data[value],
-                                             step=global_step, buckets=32)
+                        tf.summary.histogram('{}_frequency'.format(value[:-1]),
+                                data[value],
+                                step=global_step,
+                                buckets=buckets[value])
                 if local_losses_metrics is not None:
                     tf.summary.scalar('local_reward_loss', local_losses_metrics.local_reward_loss, step=global_step)
                     if (local_losses_metrics.local_probability_loss_transition_function_estimation is not None and
