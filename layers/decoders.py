@@ -73,6 +73,11 @@ class StateReconstructionNetwork(DistributionModel):
         else:
             return tfd.Deterministic(loc=self(latent_state))
 
+    def get_config(self):
+        config = super(StateReconstructionNetwork, self).get_config()
+        config.update({"time_stacked_states": self.time_stacked_states})
+        return config
+
 
 class ActionReconstructionNetwork(DistributionModel):
 
