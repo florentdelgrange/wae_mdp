@@ -21,9 +21,8 @@ class StateReconstructionNetwork(DistributionModel):
             state_decoder_pre_processing_network: Optional[tfk.Model] = None,
             time_stacked_lstm_units: Optional[int] = None,
     ):
-        self.time_stacked_states = time_stacked_states
         decoder = decoder_network(next_latent_state)
-        if self.time_stacked_states:
+        if time_stacked_states:
             time_dimension = state_shape[0]
             _state_shape = state_shape[1:]
 
@@ -66,6 +65,7 @@ class StateReconstructionNetwork(DistributionModel):
             inputs=next_latent_state,
             outputs=decoder_output,
             name='state_reconstruction_network')
+        self.time_stacked_states = time_stacked_states
 
     def distribution(self, latent_state: Float) -> tfd.Distribution:
         if self.time_stacked_states:

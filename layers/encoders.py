@@ -98,9 +98,6 @@ class ActionEncoderNetwork(DiscreteDistributionModel):
             epsilon: Float = 1e-12,
     ):
 
-        self.epsilon = epsilon
-        self.relaxed_exp_one_hot_action_encoding = relaxed_exp_one_hot_action_encoding
-        self.epsilon = tf.Variable(epsilon, trainable=False)
         action_encoder = tfkl.Concatenate(name='action_encoder_input')(
             [latent_state, action])
         action_encoder = action_encoder_network(action_encoder)
@@ -114,6 +111,8 @@ class ActionEncoderNetwork(DiscreteDistributionModel):
             inputs=[latent_state, action],
             outputs=action_encoder,
             name="action_encoder")
+        self.relaxed_exp_one_hot_action_encoding = relaxed_exp_one_hot_action_encoding
+        self.epsilon = tf.Variable(epsilon, trainable=False)
 
     def relaxed_distribution(
             self,
@@ -150,7 +149,6 @@ class ActionEncoderNetwork(DiscreteDistributionModel):
             return tfd.OneHotCategorical(logits=log_probs, allow_nan_stats=False)
         else:
             return tfd.OneHotCategorical(logits=logits, allow_nan_stats=False)
-
 
     def get_config(self):
         config = super(ActionEncoderNetwork, self).get_config()

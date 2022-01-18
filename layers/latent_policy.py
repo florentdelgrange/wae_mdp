@@ -18,8 +18,6 @@ class LatentPolicyNetwork(DiscreteDistributionModel):
             relaxed_exp_one_hot_action_encoding: bool = True,
             epsilon: Float = 1e-12,
     ):
-        self.relaxed_exp_one_hot_action_encoding = relaxed_exp_one_hot_action_encoding
-        self.epsilon = tf.Variable(epsilon, trainable=False)
         _latent_policy_network = latent_policy_network(latent_state)
         _latent_policy_network = tfkl.Dense(
             units=number_of_discrete_actions,
@@ -30,6 +28,8 @@ class LatentPolicyNetwork(DiscreteDistributionModel):
             inputs=latent_state,
             outputs=_latent_policy_network,
             name='latent_policy_network')
+        self.relaxed_exp_one_hot_action_encoding = relaxed_exp_one_hot_action_encoding
+        self.epsilon = tf.Variable(epsilon, trainable=False)
 
     def relaxed_distribution(
             self,

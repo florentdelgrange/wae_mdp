@@ -22,25 +22,26 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
             network_name: Optional[str] = None,
     ):
 
-        self.event_shape = event_shape
-        self.conditional_event_shape = conditional_input.shape[1:] if conditional_input is not None else None
+        conditional_event_shape = conditional_input.shape[1:] if conditional_input is not None else None
         input_event = tfk.Input(shape=event_shape, dtype=tf.float32)
 
-        self._made = tfb.AutoregressiveNetwork(
+        _made = tfb.AutoregressiveNetwork(
             params=1,
             hidden_units=hidden_units,
-            event_shape=self.event_shape,
+            event_shape=event_shape,
             conditional=conditional_input is not None,
-            conditional_event_shape=self.conditional_event_shape,
+            conditional_event_shape=conditional_event_shape,
             activation=activation,
             name=network_name)
         made = self._made(input_event, conditional_input=conditional_input)
         made = tfkl.Lambda(
             lambda x: output_softclip(x[..., 0])
         )(made)
+
         super(AutoRegressiveBernoulliNetwork, self).__init__(
             inputs=input_event if conditional_input is None else [input_event, conditional_input],
             outputs=made)
+        self.event_shape = event_shape
 
     @staticmethod
     def _process_made_inputs(x: Float, conditional: Optional[Float] = None, *args, **kwargs):
@@ -56,7 +57,8 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
             if x is None:
                 loc = tf.zeros(shape=self.event_shape, dtype=tf.float32)
             else:
-                loc = self([x, conditional_input]) / temperature
+                inputs = self._process_made_inputs(x, conditional_input)
+                loc = self(inputs) / temperature
             return tfd.Independent(
                 distribution=tfd.TransformedDistribution(
                     distribution=tfd.Logistic(
@@ -76,7 +78,8 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
             if x is None:
                 logits = tf.zeros(self.event_shape)
             else:
-                logits = self([x, conditional_input])
+                inputs = self._process_made_inputs(x, conditional_input)
+                logits = self(inputs)
             return tfd.Independent(
                 distribution=tfd.Bernoulli(logits=logits),
                 reinterpreted_batch_ndims=1)
@@ -102,7 +105,7 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
                     reinterpreted_batch_ndims=1)),
             bijector=tfb.Invert(
                 tfb.MaskedAutoregressiveFlow(
-                    lambda x: (self([x, conditional_input]) / temperature, None))))
+                    lambda x: (self(self._process_made_inputs(x, conditional_input)) / temperature, None))))
 
         return tfd.TransformedDistribution(
             distribution=distribution,
@@ -122,9 +125,6 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
                 inverse_fn=lambda x: tf.clip_by_value(
                     x, clip_value_min=1e-7, clip_value_max=1. - 1e-7),
                 forward_min_event_ndims=0))
-
-    def call(self, inputs, training=None, mask=None):
-        return super().call(self._process_made_inputs(*inputs), training=training, mask=mask)
 
     def get_config(self):
         config = super(AutoRegressiveBernoulliNetwork, self).get_config()
