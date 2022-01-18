@@ -34,11 +34,11 @@ def generate_network_components(params, name='', wasserstein_networks=False):
     if hasattr(tf.nn, params["activation"]):
         activation = getattr(tf.nn, params["activation"])
     elif hasattr(tfb, params["activation"]):
-        activation = getattr(tfb, params["activation"])
+        activation = getattr(tfb, params["activation"])()
     else:
         other_activations = {
             'smooth_elu': lambda x: tf.nn.softplus(2. * x + 2.) / 2. - 1.,
-            'SmoothELU': tfb.Chain([tfb.Shift(-1.), tfb.Scale(2.), tfb.Softplus, tfb.Shift(2.), tfb.Scale(2.)])
+            'SmoothELU': tfb.Chain([tfb.Shift(-1.), tfb.Scale(2.), tfb.Softplus(), tfb.Shift(2.), tfb.Scale(2.)])
         }
         activation = other_activations.get(
             params["activation"],
