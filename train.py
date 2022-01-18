@@ -183,6 +183,8 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
                 params['wasserstein_optimizer'], params['wasserstein_learning_rate'])
     if params['squared_wasserstein']:
         wae_name += '_2W'
+    if not params['trainable_prior']:
+        wae_name += '_prior_fixed'
     if params['action_discretizer']:
         if wae_name != '':
             base_model_name = wae_name
