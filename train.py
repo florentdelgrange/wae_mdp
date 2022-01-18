@@ -1,4 +1,3 @@
-import functools
 import importlib
 import json
 import os
@@ -8,10 +7,11 @@ from collections import namedtuple
 import numpy as np
 import tensorflow as tf
 import tf_agents
-from absl import app
 from absl import flags
 from tensorflow.keras.layers import Dense
 from tensorflow.python.keras import Sequential
+import tensorflow_probability as tfp
+import tensorflow_probability.python.bijectors as tfb
 from tf_agents import specs
 from tf_agents.environments import tf_py_environment
 from tf_agents.environments.wrappers import HistoryWrapper
@@ -31,13 +31,18 @@ FLAGS = flags.FLAGS
 
 
 def generate_network_components(params, name='', wasserstein_networks=False):
-    try:
+    if hasattr(tf.nn, params["activation"]):
         activation = getattr(tf.nn, params["activation"])
-    except AttributeError:
+    elif hasattr(tfb, params["activation"]):
+        activation = getattr(tfb, params["activation"])()
+    else:
         other_activations = {
-                'smooth_elu': lambda x: tf.nn.softplus(2. * x + 2.) / 2. - 1.,
+            'smooth_elu': lambda x: tf.nn.softplus(2. * x + 2.) / 2. - 1.,
+            'SmoothELU': tfb.Chain([tfb.Shift(-1.), tfb.Scale(2.), tfb.Softplus(), tfb.Shift(2.), tfb.Scale(2.)])
         }
-        activation = other_activations[params["activation"]]
+        activation = other_activations.get(
+            params["activation"],
+            ValueError("activation {} unknown".format(params["activation"])))
 
     component_names = ['encoder', 'transition', 'label_transition', 'reward', 'decoder', 'discrete_policy',
                        'state_encoder_pre_processing', 'state_decoder_pre_processing']

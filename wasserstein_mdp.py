@@ -4,8 +4,8 @@ from collections import namedtuple
 import numpy as np
 import tensorflow as tf
 from typing import Tuple, Optional, Callable, NamedTuple, List, Union
-from tensorflow.python.keras import Model, Input, Sequential
-from tensorflow.python.keras.layers import TimeDistributed, LSTM, Dense, Concatenate, Reshape
+import tensorflow.keras as tfk
+import tensorflow.keras.layers as tfkl
 from tensorflow.keras.utils import Progbar
 from tensorflow.python.keras.metrics import Mean, MeanSquaredError
 import tensorflow_probability.python.bijectors as tfb
@@ -16,6 +16,11 @@ from tf_agents.typing.types import Float, Int
 from tf_agents.environments import tf_py_environment, tf_environment
 
 import variational_action_discretizer
+from layers.autoregressive_bernoulli import AutoRegressiveBernoulliNetwork
+from layers.latent_policy import LatentPolicyNetwork
+from layers.decoders import RewardNetwork, ActionReconstructionNetwork, StateReconstructionNetwork
+from layers.encoders import StateEncoderNetwork, ActionEncoderNetwork
+from layers.lipschitz_functions import TransitionLossLipschitzFunction
 from util.io import dataset_generator
 from variational_mdp import VariationalMarkovDecisionProcess, EvaluationCriterion, debug_gradients, debug, epsilon
 from verification.local_losses import estimate_local_losses_from_samples
@@ -72,19 +77,19 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             reward_shape: Tuple[int, ...],
             label_shape: Tuple[int, ...],
             discretize_action_space: bool,
-            state_encoder_network: Model,
-            action_decoder_network: Model,
-            transition_network: Model,
-            reward_network: Model,
-            decoder_network: Model,
-            latent_policy_network: Model,
-            steady_state_lipschitz_network: Model,
-            transition_loss_lipschitz_network: Model,
+            state_encoder_network: tfk.Model,
+            action_decoder_network: tfk.Model,
+            transition_network: tfk.Model,
+            reward_network: tfk.Model,
+            decoder_network: tfk.Model,
+            latent_policy_network: tfk.Model,
+            steady_state_lipschitz_network: tfk.Model,
+            transition_loss_lipschitz_network: tfk.Model,
             latent_state_size: int,
             number_of_discrete_actions: Optional[int] = None,
-            action_encoder_network: Optional[Model] = None,
-            state_encoder_pre_processing_network: Optional[Model] = None,
-            state_decoder_pre_processing_network: Optional[Model] = None,
+            action_encoder_network: Optional[tfk.Model] = None,
+            state_encoder_pre_processing_network: Optional[tfk.Model] = None,
+            state_decoder_pre_processing_network: Optional[tfk.Model] = None,
             time_stacked_states: bool = False,
             state_encoder_temperature: float = 2. / 3,
             state_prior_temperature: float = 1. / 2,
@@ -107,7 +112,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             importance_sampling_exponent_growth_rate: Optional[Float] = 0.,
             time_stacked_lstm_units: int = 128,
             reward_bounds: Optional[Tuple[float, float]] = None,
-            steady_state_logits: Optional[tf.Variable] = None,
+            steady_state_params: Optional[tf.Variable] = None,
             relaxed_exp_one_hot_action_encoding: bool = True,
             action_entropy_regularizer_scaling: float = 1.,
             enforce_upper_bound: bool = False,
@@ -167,43 +172,79 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         self._sample_additional_transition = False
         # softclipping for latent states logits; 3 offers an probability error of about 5e-2
-        self.softclip = lambda x: 3. * tf.nn.tanh(x / 3.)
+        scale = 3.
+        # self.softclip = tfb.Chain([tfb.Scale(scale), tfb.Tanh(), tfb.Scale(1. / scale)], name="softclip")
+        self.softclip = tfb.SoftClip(low=-scale, high=scale)
 
         if not pre_loaded_model:
 
-            state = Input(shape=state_shape, name="state")
-            action = Input(shape=action_shape, name="action")
-            latent_state = Input(shape=(self.latent_state_size,), name="latent_state")
-            latent_action = Input(shape=(self.number_of_discrete_actions,), name="latent_action")
-            next_latent_state = Input(shape=(self.latent_state_size,), name='next_latent_state')
+            state = tfkl.Input(shape=state_shape, name="state")
+            action = tfkl.Input(shape=action_shape, name="action")
+            latent_state = tfkl.Input(shape=(self.latent_state_size,), name="latent_state")
+            latent_action = tfkl.Input(shape=(self.number_of_discrete_actions,), name="latent_action")
+            next_latent_state = tfkl.Input(shape=(self.latent_state_size,), name='next_latent_state')
 
             # state encoder network
-            self.state_encoder_network = self._initialize_state_encoder_network(
-                state, state_encoder_network, state_encoder_pre_processing_network)
+            self.state_encoder_network = StateEncoderNetwork(
+                state=state,
+                state_encoder_network=state_encoder_network,
+                latent_state_size=self.latent_state_size,
+                atomic_props_dims=self.atomic_props_dims,
+                state_encoder_pre_processing_network=state_encoder_pre_processing_network,
+                time_stacked_states=self.time_stacked_states,
+                output_softclip=self.softclip, )
             # action encoder network
             if self.action_discretizer and self.encode_action:
-                self.action_encoder_network = self._initialize_action_encoder_network(
-                    latent_state, action, action_encoder_network)
+                self.action_encoder_network = ActionEncoderNetwork(
+                    latent_state=latent_state,
+                    action=action,
+                    number_of_discrete_actions=self.number_of_discrete_actions,
+                    action_encoder_network=action_encoder_network,
+                    relaxed_exp_one_hot_action_encoding=relaxed_exp_one_hot_action_encoding,
+                    epsilon=epsilon, )
             else:
                 self.action_encoder_network = None
             # transition network
-            self.transition_network = self._initialize_transition_network(
-                latent_state, latent_action, transition_network)
+            hidden_units, activation = self._scan_model(transition_network)
+            self.transition_network = AutoRegressiveBernoulliNetwork(
+                event_shape=(self.latent_state_size,),
+                activation=activation,
+                hidden_units=hidden_units,
+                conditional_input=tfkl.Concatenate(name="conditional_latent_transition_input")(
+                    [latent_state, latent_action]),
+                output_softclip=self.softclip,
+                network_name="masked_autoregressive_transition_network")
             # stationary distribution over latent states
-            self.latent_stationary_params = self._initialize_latent_stationary_autoregressor(
-                prior_net=latent_policy_network)
+            self.latent_stationary_params: Tuple[AutoRegressiveBernoulliNetwork, Optional[tf.Variable]] = \
+                self._initialize_latent_stationary_autoregressor(prior_net=latent_policy_network)
             # latent policy
-            self.latent_policy_network = self._initialize_latent_policy_network(latent_state, latent_policy_network)
+            self.latent_policy_network = LatentPolicyNetwork(
+                latent_state=latent_state,
+                latent_policy_network=latent_policy_network,
+                number_of_discrete_actions=self.number_of_discrete_actions,
+                relaxed_exp_one_hot_action_encoding=self.relaxed_exp_one_hot_action_encoding,
+                epsilon=epsilon)
             # reward function
-            self.reward_network = self._initialize_reward_network(
-                latent_state, latent_action, next_latent_state, reward_network)
+            self.reward_network = RewardNetwork(
+                latent_state=latent_state,
+                latent_action=latent_action,
+                next_latent_state=next_latent_state,
+                reward_network=reward_network,
+                reward_shape=self.reward_shape)
             # state reconstruction function
-            self.reconstruction_network = self._initialize_state_reconstruction_network(
-                next_latent_state, decoder_network, state_decoder_pre_processing_network)
+            self.reconstruction_network = StateReconstructionNetwork(
+                next_latent_state=next_latent_state,
+                decoder_network=decoder_network,
+                state_shape=self.state_shape,
+                time_stacked_states=self.time_stacked_states,
+                state_decoder_pre_processing_network=state_decoder_pre_processing_network,
+                time_stacked_lstm_units=self.time_stacked_lstm_units)
             # action reconstruction function
             if self.action_discretizer:
-                self.action_reconstruction_network = self._initialize_action_reconstruction_network(
-                    latent_state, latent_action, action_decoder_network)
+                self.action_reconstruction_network = ActionReconstructionNetwork(
+                    latent_state=latent_state,
+                    latent_action=latent_action,
+                    action_decoder_network=action_decoder_network)
             else:
                 self.action_reconstruction_network = None
             # steady state Lipschitz function
@@ -213,9 +254,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 next_latent_state=next_latent_state,
                 steady_state_lipschitz_network=steady_state_lipschitz_network, )
             # transition loss Lipschitz function
-            self.transition_loss_lipschitz_network = self._initialize_transition_loss_lipschitz_function(
-                state, action, latent_state, latent_action, next_latent_state, transition_loss_lipschitz_network)
-            # action-successor Lipschitz function
+            self.transition_loss_lipschitz_network = TransitionLossLipschitzFunction(
+                state=state,
+                action=action,
+                latent_state=latent_state,
+                latent_action=latent_action,
+                next_latent_state=next_latent_state,
+                transition_loss_lipschitz_network=transition_loss_lipschitz_network)
 
             if debug:
                 self.state_encoder_network.summary()
@@ -237,7 +282,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.state_encoder_network = state_encoder_network
             self.action_encoder_network = action_encoder_network
             self.transition_network = transition_network
-            self.latent_stationary_params = steady_state_logits
+            self.latent_stationary_params = steady_state_params
             self.latent_policy_network = latent_policy_network
             self.reward_network = reward_network
             self.reconstruction_network = decoder_network
@@ -265,277 +310,40 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.loss_metrics['marginal_variance'] = Mean(name='marginal_variance')
 
     @staticmethod
-    def _scan_model(model: Model):
+    def _scan_model(model: tfk.Model):
         hidden_units = []
         activation = None
         if model is None:
-            return [128, 128], 'relu'
+            return [128, 128], tfb.Sigmoid
         for layer in model.layers:
             hidden_units.append(layer.units)
             if activation != layer.activation:
                 activation = layer.activation
         return hidden_units, activation
 
-    def _initialize_state_encoder_network(
+    def _initialize_latent_stationary_autoregressor(
             self,
-            state: Input,
-            state_encoder_network: Model,
-            state_encoder_pre_processing_network: Optional[Model] = None
-    ):
-        if self.time_stacked_states:
-            if state_encoder_pre_processing_network is not None:
-                encoder = TimeDistributed(state_encoder_pre_processing_network)(state)
-            else:
-                encoder = state
-            encoder = LSTM(units=self.time_stacked_lstm_units)(encoder)
-            encoder = state_encoder_network(encoder)
-        else:
-            if state_encoder_pre_processing_network is not None:
-                _state = state_encoder_pre_processing_network(state)
-            else:
-                _state = state
-            encoder = state_encoder_network(_state)
-        logits_layer = Dense(
-            units=self.latent_state_size - self.atomic_props_dims,
-            # allows avoiding exploding logits values and probability errors after applying a sigmoid
-            activation=self.softclip,
-            # activation=lambda x: 10 * tf.nn.tanh(x),
-            name='encoder_latent_distribution_logits'
-        )(encoder)
-
-        return Model(
-            inputs=state,
-            outputs=logits_layer,
-            name='state_encoder')
-
-    def _initialize_action_encoder_network(
-            self,
-            latent_state: Input,
-            action: Input,
-            action_encoder_network: Model
-    ):
-        action_encoder = Concatenate(name='action_encoder_input')(
-            [latent_state, action])
-        action_encoder = action_encoder_network(action_encoder)
-        action_encoder = Dense(
-            units=self.number_of_discrete_actions,
-            activation=None,
-            name='action_encoder_exp_one_hot_logits'
-        )(action_encoder)
-
-        return Model(
-            inputs=[latent_state, action],
-            outputs=action_encoder,
-            name="action_encoder")
-
-    def _initialize_transition_network(
-            self,
-            latent_state: Input,
-            latent_action: Input,
-            transition_network: Model
-    ):
-        hidden_units, activation = self._scan_model(transition_network)
-        conditional = Concatenate(name="conditional_latent_transition_fun")([latent_state, latent_action])
-        print("conditional event shape", conditional.shape[1:])
-        return tfb.AutoregressiveNetwork(
-            params=1,
-            event_shape=(self.latent_state_size, ),
-            hidden_units=hidden_units,
-            activation=activation,
-            conditional=True,
-            conditional_event_shape=conditional.shape[1:],
-            name="autoregressive_latent_transition_network")
-
-    def _initialize_latent_policy_network(
-            self,
-            latent_state: Input,
-            latent_policy_network: Model
-    ):
-        _latent_policy_network = latent_policy_network(latent_state)
-        _latent_policy_network = Dense(
-            units=self.number_of_discrete_actions,
-            activation=None,
-            name='latent_policy_exp_one_hot_logits'
-        )(_latent_policy_network)
-        return Model(
-            inputs=latent_state,
-            outputs=_latent_policy_network,
-            name='latent_policy_network')
-
-    def _initialize_latent_stationary_autoregressor(self, prior_net: Optional[Model] = None):
+            prior_net: Optional[tfk.Model] = None
+    ) -> Tuple[AutoRegressiveBernoulliNetwork, Optional[tf.Variable]]:
         """
         Returns a tuple (autoregressive_network, variables), where autoregressive_network is the network used to infer
         the logits of labels (resp. the logits of the stationary distribution) and the Variables the logits of the
         rest of the stationary latent state distribution (resp. None) when the prior is not trainable (resp. trainable).
         """
         hidden_units, activation = self._scan_model(prior_net)
-        if not self.trainable_prior:
-            return (
-                tfb.AutoregressiveNetwork(
-                    params=1,
-                    event_shape=(self.atomic_props_dims,),
-                    hidden_units=hidden_units,
-                    activation=activation,
-                    name="latent_stationary_autoregressor"),
-                tf.Variable(
-                    initial_value=tf.zeros(shape=(self.latent_state_size - self.atomic_props_dims,)),
-                    trainable=False,
-                    name="latent_stationary_logits")
-            )
+        made = AutoRegressiveBernoulliNetwork(
+            event_shape=(self.latent_state_size,) if self.trainable_prior else (self.atomic_props_dims,),
+            activation=activation,
+            hidden_units=hidden_units,
+            output_softclip=self.softclip,
+            network_name="MaskedStationaryLatentStateNetwork")
+        if self.trainable_prior:
+            return made, None
         else:
-            return tfb.AutoregressiveNetwork(
-                params=1,
-                event_shape=(self.latent_state_size,),
-                hidden_units=hidden_units,
-                activation=activation), None
-
-    def _initialize_reward_network(
-            self,
-            latent_state: Input,
-            latent_action: Input,
-            next_latent_state: Input,
-            reward_network: Model,
-    ):
-        _reward_network = Concatenate(name='reward_function_input')([latent_state, latent_action, next_latent_state])
-        _reward_network = reward_network(_reward_network)
-        _reward_network = Dense(
-            units=np.prod(self.reward_shape),
-            activation=None,
-            name='reward_network_raw_output'
-        )(_reward_network)
-        _reward_network = Reshape(self.reward_shape, name='reward')(_reward_network)
-        return Model(
-            inputs=[latent_state, latent_action, next_latent_state],
-            outputs=_reward_network,
-            name='reward_network')
-
-    def _initialize_state_reconstruction_network(
-            self,
-            next_latent_state: Input,
-            decoder_network: Model,
-            state_decoder_pre_processing_network: Optional[Model] = None
-    ):
-
-        decoder = decoder_network(next_latent_state)
-        if self.time_stacked_states:
-            time_dimension = self.state_shape[0]
-            _state_shape = self.state_shape[1:]
-
-            if decoder.shape[-1] % time_dimension != 0:
-                decoder = Dense(
-                    units=decoder.shape[-1] + time_dimension - decoder.shape[-1] % time_dimension
-                )(decoder)
-
-            decoder = Reshape(
-                target_shape=(time_dimension, decoder.shape[-1] // time_dimension)
-            )(decoder)
-            decoder = LSTM(
-                units=self.time_stacked_lstm_units, return_sequences=True
-            )(decoder)
-
-            if state_decoder_pre_processing_network is not None:
-                decoder = TimeDistributed(state_decoder_pre_processing_network)(decoder)
-
-        else:
-            if state_decoder_pre_processing_network is not None:
-                decoder = state_decoder_pre_processing_network(decoder)
-            _state_shape = self.state_shape
-
-        decoder_output = Sequential([
-            Dense(
-                units=np.prod(_state_shape),
-                activation=None,
-                name='state_decoder_raw_output'),
-            Reshape(
-                target_shape=_state_shape,
-                name='state_decoder_raw_output_reshape')],
-            name="state_decoder")
-
-        if self.time_stacked_states:
-            decoder_output = TimeDistributed(decoder_output)(decoder)
-        else:
-            decoder_output = decoder_output(decoder)
-
-        return Model(
-            inputs=next_latent_state,
-            outputs=decoder_output,
-            name='state_reconstruction_network')
-
-    def _initialize_action_reconstruction_network(
-            self,
-            latent_state: Input,
-            latent_action: Input,
-            action_decoder_network: Model
-    ):
-        action_reconstruction_network = Concatenate(name='action_reconstruction_input')([
-            latent_state, latent_action])
-        action_reconstruction_network = action_decoder_network(action_reconstruction_network)
-        action_reconstruction_network = Dense(
-            units=np.prod(self.action_shape),
-            activation=None,
-            name='action_reconstruction_network_raw_output'
-        )(action_reconstruction_network)
-        action_reconstruction_network = Reshape(
-            target_shape=self.action_shape,
-            name='action_reconstruction_network_output'
-        )(action_reconstruction_network)
-
-        return Model(
-            inputs=[latent_state, latent_action],
-            outputs=action_reconstruction_network,
-            name='action_reconstruction_network')
-
-    def _initialize_steady_state_lipschitz_function(
-            self,
-            latent_state: Input,
-            next_latent_state: Input,
-            steady_state_lipschitz_network: Model,
-            latent_action: Optional[Input] = None,
-    ):
-        if self.encode_action and (latent_action is None or next_latent_state is None):
-            raise ValueError("The WAE is built to encode actions, so latent actions and next latent states are"
-                             "required as input of the steady-state Lipschitz function.")
-        if self.encode_action:
-            network_input = Concatenate(name='steady-state-lipschitz-fun-input')(
-                [latent_state, latent_action, next_latent_state])
-        else:
-            network_input = Concatenate(name='steady-state-lipschitz-fun-input')(
-                [latent_state, next_latent_state])
-        _steady_state_lipschitz_network = steady_state_lipschitz_network(network_input)
-        _steady_state_lipschitz_network = Dense(
-            units=1,
-            activation=None,
-            name='steady_state_lipschitz_network_output'
-        )(_steady_state_lipschitz_network)
-
-        return Model(
-            inputs=([latent_state, latent_action, next_latent_state]
-                    if self.encode_action else [latent_state, next_latent_state]),
-            outputs=_steady_state_lipschitz_network,
-            name='steady_state_lipschitz_network')
-
-    @staticmethod
-    def _initialize_transition_loss_lipschitz_function(
-            state: Input,
-            action: Input,
-            latent_state: Input,
-            latent_action: Input,
-            next_latent_state: Input,
-            transition_loss_lipschitz_network: Model,
-    ):
-        _transition_loss_lipschitz_network = Concatenate()([
-            state, action, latent_state, latent_action, next_latent_state])
-        _transition_loss_lipschitz_network = transition_loss_lipschitz_network(_transition_loss_lipschitz_network)
-        _transition_loss_lipschitz_network = Dense(
-            units=1,
-            activation=None,
-            name='transition_loss_lipschitz_network_output'
-        )(_transition_loss_lipschitz_network)
-
-        return Model(
-            inputs=[state, action, latent_state, latent_action, next_latent_state],
-            outputs=_transition_loss_lipschitz_network,
-            name='transition_loss_lipschitz_network')
+            return made, tf.Variable(
+                initial_value=tf.zeros(shape=(self.latent_state_size - self.atomic_props_dims,)),
+                trainable=False,
+                name="latent_stationary_logits")
 
     def anneal(self):
         super().anneal()
@@ -575,17 +383,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             logistic: bool = False,
             *args, **kwargs
     ) -> tfd.Distribution:
-        if logistic:
-            return super().relaxed_state_encoding(state, temperature, label)
-
-        logits = self.encoder_network(state)
-        if label is not None:
-            logits = tf.concat([(label * 2. - 1.) * 1e2, logits], axis=-1)
-        return tfd.Independent(
-            tfd.RelaxedBernoulli(
-                logits=logits,
-                temperature=temperature,
-                allow_nan_stats=False))
+        return self.state_encoder_network.relaxed_distribution(
+            state=state, temperature=temperature, label=label, logistic=logistic)
 
     def discrete_action_encoding(
             self,
@@ -593,13 +392,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             action: tf.Tensor,
     ) -> tfd.Distribution:
         if self.action_discretizer:
-            if self.relaxed_exp_one_hot_action_encoding:
-                relaxed_distribution = self.relaxed_action_encoding(latent_state, action, 1e-5)
-                log_probs = tf.math.log(relaxed_distribution.probs_parameter() + epsilon)
-                return tfd.OneHotCategorical(logits=log_probs, allow_nan_stats=False)
-            else:
-                logits = self.action_encoder_network([latent_state, action])
-                return tfd.OneHotCategorical(logits=logits, allow_nan_stats=False)
+            return self.action_encoder_network.discrete_distribution(
+                latent_state=latent_state, action=action)
         else:
             return tfd.Deterministic(loc=action)
 
@@ -610,17 +404,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             temperature: Optional[Float] = 0.
     ) -> tfd.Distribution:
         if self.action_discretizer:
-            logits = self.action_encoder_network([latent_state, action])
-            if self.relaxed_exp_one_hot_action_encoding:
-                return tfd.ExpRelaxedOneHotCategorical(
-                    temperature=temperature,
-                    logits=logits,
-                    allow_nan_stats=False)
-            else:
-                return tfd.RelaxedOneHotCategorical(
-                    logits=logits,
-                    temperature=temperature,
-                    allow_nan_stats=False)
+            return self.action_encoder_network.relaxed_distribution(
+                latent_state=latent_state, action=action, temperature=temperature)
         else:
             if self.relaxed_exp_one_hot_action_encoding:
                 return tfd.Deterministic(loc=tf.math.log(action + epsilon))
@@ -640,7 +425,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             *args, **kwargs
     ) -> tfd.Distribution:
         if self.action_discretizer:
-            return tfd.Deterministic(loc=self.action_reconstruction_network([latent_state, latent_action]))
+            return self.action_reconstruction_network.distribution(
+                latent_state=latent_state, latent_action=latent_action)
         else:
             return tfd.Deterministic(loc=latent_action)
 
@@ -670,50 +456,17 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             latent_state: Float,
             latent_action: Float,
             temperature: Float = 1e-5,
-            logistic: bool = False,
             *args, **kwargs
     ) -> tfd.Distribution:
-        autoregressive_net = self.transition_network
-        print("autoregressive transition net weights", autoregressive_net.weights)
-        conditional = tf.concat([latent_state, latent_action], axis=-1)
-        print("conditional tensor", conditional)
-        get_param = lambda x: self.softclip(
-            tf.unstack(autoregressive_net(x, conditional_input=conditional), axis=-1)[0])
-        if logistic:
-            next_latent_state_distribution = lambda x: tfd.Independent(
-                tfd.TransformedDistribution(
-                    distribution=tfd.Logistic(
-                        loc=get_param(x) / temperature,
-                        scale=1. / temperature,
-                        allow_nan_stats=False),
-                    bijector=tfb.Sigmoid()
-                ), reinterpreted_batch_ndims=1)
-        else:
-            next_latent_state_distribution = lambda x: tfd.Independent(
-                tfd.RelaxedBernoulli(
-                    logits=get_param(x),
-                    temperature=temperature,
-                    allow_nan_stats=False), reinterpreted_batch_ndims=1)
-        print("next latent state distr", next_latent_state_distribution(tf.zeros((self.latent_state_size, ))))
-        print("zeros", tf.zeros((self.latent_state_size, )))
-        print("autonet test", get_param(tf.zeros(self.latent_state_size, )))
-        return tfd.Autoregressive(
-            distribution_fn=next_latent_state_distribution,
-            sample0=tf.zeros((self.latent_state_size, )),
-            validate_args=True)
+        return self.transition_network.relaxed_distribution(
+            temperature=temperature,
+            conditional_input=tf.concat([latent_state, latent_action], axis=-1))
 
     def discrete_latent_transition(
-            self, latent_state: tf.Tensor, latent_action: tf.Tensor, next_label: Optional[tf.Tensor] = None
+            self, latent_state: tf.Tensor, latent_action: tf.Tensor, *args, **kwargs
     ) -> tfd.Distribution:
-        autoregressive_net = self.transition_network
-        conditional = tf.concat([latent_state, latent_action], axis=-1)
-        get_param = lambda x: self.softclip(
-            tf.unstack(autoregressive_net(x, conditional_input=conditional), axis=-1)[0])
-        return tfd.Autoregressive(
-            distribution_fn=lambda x: tfd.Independent(
-                tfd.Bernoulli(logits=get_param(x)),
-                reinterpreted_batch_ndims=1),
-            sample0=tf.zeros((self.latent_state_size, )))
+        return self.transition_network.discrete_distribution(
+            conditional_input=tf.concat([latent_state, latent_action], axis=-1))
 
     def relaxed_markov_chain_latent_transition(
             self, latent_state: tf.Tensor, temperature: float = 1e-5, reparamaterize: bool = True
@@ -730,24 +483,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             latent_state: tf.Tensor,
             temperature: Float = 1e-5,
     ) -> tfd.Distribution:
-        if self.relaxed_exp_one_hot_action_encoding:
-            return tfd.ExpRelaxedOneHotCategorical(
-                temperature=temperature,
-                logits=self.latent_policy_network(latent_state),
-                allow_nan_stats=False)
-        else:
-            return tfd.RelaxedOneHotCategorical(
-                logits=self.latent_policy_network(latent_state),
-                temperature=temperature,
-                allow_nan_stats=False)
+        return self.latent_policy_network.relaxed_distribution(
+            latent_state=latent_state, temperature=temperature)
 
     def discrete_latent_policy(self, latent_state: tf.Tensor):
-        if self.relaxed_exp_one_hot_action_encoding:
-            relaxed_distribution = self.relaxed_latent_policy(latent_state, temperature=1e-5)
-            log_probs = tf.math.log(relaxed_distribution.probs_parameter() + epsilon)
-            return tfd.OneHotCategorical(logits=log_probs, allow_nan_stats=False)
-        else:
-            return tfd.OneHotCategorical(logits=self.latent_policy_network(latent_state))
+        return self.latent_policy_network.discrete_distribution(latent_state=latent_state)
 
     def reward_distribution(
             self,
@@ -756,7 +496,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             next_latent_state: Float,
             *args, **kwargs
     ) -> tfd.Distribution:
-        return tfd.Deterministic(loc=self.reward_network([latent_state, latent_action, next_latent_state]))
+        return self.reward_network.distribution(
+            latent_state=latent_state, latent_action=latent_action, next_latent_state=next_latent_state)
 
     def markov_chain_reward_distribution(
             self,
@@ -779,71 +520,30 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
     def discrete_latent_steady_state_distribution(self) -> tfd.Distribution:
         autoregressive_net, logits = self.latent_stationary_params
-        get_param = lambda x: self.softclip(tf.unstack(autoregressive_net(x), axis=-1)[0])
+        d1 = autoregressive_net.discrete_distribution()
         if logits is not None:
-            d1 = tfd.Autoregressive(
-                lambda x: tfd.Independent(
-                    tfd.Bernoulli(logits=get_param(x)),
-                    reinterpreted_batch_ndims=1),
-                sample0=tf.zeros(shape=(self.atomic_props_dims,)))
             d2 = tfd.Independent(tfd.Bernoulli(logits=self.softclip(logits)), reinterpreted_batch_ndims=1)
             return tfd.Blockwise([d1, d2])
         else:
-            return tfd.Autoregressive(
-                lambda x: tfd.Independent(
-                    tfd.Bernoulli(logits=get_param(x)),
-                    reinterpreted_batch_ndims=1),
-                sample0=tf.zeros(shape=(self.latent_state_size,)))
+            return d1
 
     def relaxed_latent_steady_state_distribution(
             self,
             temperature: Float,
-            logistic: bool = False,
     ) -> tfd.Distribution:
         autoregressive_net, logits = self.latent_stationary_params
-        get_param = lambda x: self.softclip(tf.unstack(autoregressive_net(x), axis=-1)[0])
-
-        if logistic:
-            distribution = lambda x: tfd.Independent(
+        d1 = autoregressive_net.relaxed_distribution(temperature=temperature)
+        if logits is not None:
+            d2 = tfd.Independent(
                 tfd.TransformedDistribution(
                     distribution=tfd.Logistic(
-                        loc=get_param(x) / temperature,
-                        scale=1. / temperature,
-                        allow_nan_stats=False),
+                        loc=self.softclip(logits) / temperature,
+                        scale=1. / temperature, ),
                     bijector=tfb.Sigmoid()),
                 reinterpreted_batch_ndims=1)
-        else:
-            distribution = lambda x: tfd.Independent(
-                tfd.RelaxedBernoulli(
-                    logits=get_param(x),
-                    temperature=temperature,
-                    allow_nan_stats=False),
-                reinterpreted_batch_ndims=1)
-
-        if logits is not None:
-            d1 = tfd.Autoregressive(
-                distribution,
-                sample0=tf.zeros(shape=(self.atomic_props_dims,), dtype=tf.float32))
-            if logistic:
-                d2 = tfd.Independent(
-                    tfd.TransformedDistribution(
-                        distribution=tfd.Logistic(
-                            loc=self.softclip(logits) / temperature,
-                            scale=1. / temperature, ),
-                        bijector=tfb.Sigmoid()),
-                    reinterpreted_batch_ndims=1)
-                print(d1, d2)
-            else:
-                d2 = tfd.Independent(
-                    tfd.RelaxedBernoulli(
-                        logits=self.softclip(logits),
-                        temperature=temperature),
-                    reinterpreted_batch_ndims=1)
             return tfd.Blockwise([d1, d2])
         else:
-            return tfd.Autoregressive(
-                distribution,
-                sample0=tf.zeros(shape=(self.latent_state_size,), dtype=tf.float32))
+            return d1
 
     def discrete_marginal_state_encoder_distribution(
             self,
@@ -1007,7 +707,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         else:
             return latent_action
 
-    def norm(self, x: Float, axis: int = -1):
+    @staticmethod
+    @tf.function
+    def norm(x: Float, axis: int = -1):
         """
         to replace tf.norm(x, order=2, axis) which has numerical instabilities (the derivative can yields NaN).
         """
@@ -1031,85 +733,67 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         # encoder sampling
         latent_state = tf.concat([
             label,
-            tfd.TransformedDistribution(
-                distribution=self.relaxed_state_encoding(state, self.state_encoder_temperature, logistic=True),
-                bijector=tfb.Sigmoid(),
-            ).sample(),
+            self.relaxed_state_encoding(state, self.state_encoder_temperature, logistic=True).sample(),
         ], axis=-1)
         next_latent_state = tf.concat([
             next_label,
-            tfd.TransformedDistribution(
-                distribution=self.relaxed_state_encoding(next_state, self.state_encoder_temperature, logistic=True),
-                bijector=tfb.Sigmoid(),
-            ).sample()
+            self.relaxed_state_encoding(next_state, self.state_encoder_temperature, logistic=True).sample()
         ], axis=-1)
 
         if self.encode_action:
-            latent_action = tfd.TransformedDistribution(
-                distribution=self.relaxed_action_encoding(
-                    latent_state,
-                    action,
-                    temperature=self.action_encoder_temperature),
-                bijector=(tfb.Exp() if self.relaxed_exp_one_hot_action_encoding else
-                          tfb.Identity())
+            latent_action = self.relaxed_action_encoding(
+                latent_state,
+                action,
+                temperature=self.action_encoder_temperature
             ).sample()
         else:
-            latent_action = tfd.TransformedDistribution(
-                distribution=self.relaxed_latent_policy(
-                    latent_state,
-                    temperature=self.latent_policy_temperature),
-                bijector=(tfb.Exp() if self.relaxed_exp_one_hot_action_encoding else
-                          tfb.Identity())
+            latent_action = self.relaxed_latent_policy(
+                latent_state,
+                temperature=self.latent_policy_temperature
             ).sample()
 
         # TODO REMOVE WHEN READY
         # sample(n) not supported
-        stationary_latent_state = tf.map_fn(
-            fn=lambda _: self.relaxed_latent_steady_state_distribution(
-                temperature=self.encoder_temperature,
-                logistic=True
-            ).sample(),
-            elems=tf.range(batch_size, dtype=tf.float32))
+        # stationary_latent_state = tf.map_fn(
+        #     fn=lambda _: self.relaxed_latent_steady_state_distribution(
+        #         temperature=self.encoder_temperature,
+        #     ).sample(),
+        #     elems=tf.range(batch_size, dtype=tf.float32))
         # print(stationary_latent_state)
         # tf.print(stationary_latent_state)
         #  stationary_latent_state =self.relaxed_latent_steady_state_distribution(
         #          temperature=self.encoder_temperature,
         #          logistic=True
         #      ).sample(batch_size)
-        stationary_latent_action = tfd.TransformedDistribution(
-            distribution=self.relaxed_latent_policy(
-                latent_state=stationary_latent_state,
-                temperature=self.latent_policy_temperature),
-            bijector=(tfb.Exp() if self.relaxed_exp_one_hot_action_encoding else
-                      tfb.Identity())
-        ).sample()
-        next_stationary_latent_state = self.relaxed_latent_transition(
-            stationary_latent_state,
-            stationary_latent_action,
-            temperature=self.state_prior_temperature,
-            logistic=False
-        ).sample()
+        # stationary_latent_action = tfd.TransformedDistribution(
+        #     distribution=self.relaxed_latent_policy(
+        #         latent_state=stationary_latent_state,
+        #         temperature=self.latent_policy_temperature),
+        #     bijector=(tfb.Exp() if self.relaxed_exp_one_hot_action_encoding else
+        #               tfb.Identity())
+        # ).sample()
+        # next_stationary_latent_state = self.relaxed_latent_transition(
+        #     stationary_latent_state,
+        #     stationary_latent_action,
+        #     temperature=self.state_prior_temperature,
+        #     logistic=False
+        # ).sample()
         #  print("next_stationary_latent_state", next_stationary_latent_state)
         #  next_stationary_latent_state = next_latent_state
         # latent steady-state distribution
-        #  (stationary_latent_state,
-        #   stationary_latent_action,
-        #   next_stationary_latent_state) = tfd.JointDistributionSequential([
-        #      self.relaxed_latent_steady_state_distribution(
-        #          temperature=self.encoder_temperature,
-        #          logistic=True),
-        #      lambda _latent_state: tfd.TransformedDistribution(
-        #          distribution=self.relaxed_latent_policy(
-        #              latent_state=_latent_state,
-        #              temperature=self.latent_policy_temperature),
-        #          bijector=(tfb.Exp() if self.relaxed_exp_one_hot_action_encoding else
-        #                    tfb.Identity())),
-        #      lambda _latent_action, _latent_state: self.relaxed_latent_transition(
-        #          _latent_state,
-        #          _latent_action,
-        #          temperature=self.state_prior_temperature,
-        #          logistic=True),
-        #  ]).sample(sample_shape=batch_size)
+        (stationary_latent_state,
+         stationary_latent_action,
+         next_stationary_latent_state) = tfd.JointDistributionSequential([
+            self.relaxed_latent_steady_state_distribution(
+                temperature=self.encoder_temperature),
+            lambda _latent_state: self.relaxed_latent_policy(
+                latent_state=_latent_state,
+                temperature=self.latent_policy_temperature),
+            lambda _latent_action, _latent_state: self.relaxed_latent_transition(
+                _latent_state,
+                _latent_action,
+                temperature=self.state_prior_temperature),
+            ]).sample(sample_shape=batch_size)
 
         # next latent state from the latent transition function
         next_transition_latent_state = self.relaxed_latent_transition(
