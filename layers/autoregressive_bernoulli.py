@@ -52,28 +52,50 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
             temperature: Float,
             conditional_input: Optional[Float] = None
     ) -> tfd.Distribution:
+        """
+        Construct a distribution whose parameters are produced by a Masked Autoregressive Flow.
+        More specifically, the Flow uses the internal masked autoregressive network to infer a location of a logistic
+        distribution at each event step. This allows (via a chain of reparameterization) to generate logistic samples
+        followed by a sigmoid at each time step, in order to generate (dependent) samples of relaxed Bernoulli.
+        """
 
-        def distribution_fn(x: Float = None):
-            if x is None:
-                loc = tf.zeros(shape=self.event_shape, dtype=tf.float32)
-            else:
-                inputs = self._process_made_inputs(x, conditional_input)
-                loc = self(inputs) / temperature
-            return tfd.Independent(
-                distribution=tfd.TransformedDistribution(
-                    distribution=tfd.Logistic(
-                        loc=loc,
-                        scale=1. / temperature),
-                    bijector=tfb.Sigmoid()),
-                reinterpreted_batch_ndims=1)
+        def bijector_fn(x) -> tfb.Bijector:
+            inputs = self._process_made_inputs(x, conditional_input)
+            shift = self(inputs) / temperature
+            return tfb.Chain([tfb.Sigmoid(), tfb.Shift(shift)])
 
-        return tfd.Autoregressive(distribution_fn)
+        return tfd.TransformedDistribution(
+            distribution=tfd.Sample(
+                tfd.Logistic(loc=0., scale=1. / temperature),
+                sample_shape=self.event_shape),
+            bijector=tfb.MaskedAutoregressiveFlow(bijector_fn=bijector_fn))
 
     def discrete_distribution(
             self,
             conditional_input: Optional[Float] = None
     ) -> tfd.Distribution:
+        """
+        Important: to sample from this distribution when a conditional input is provided, the batch size of the
+        conditional need to be provided in parameter of the tfd.Distribution.sample() function:
+        ```python
+        event_shape = (3, )
+        cond_shape = (5, )
+        batch_size = 4
 
+        autoregressive_model = AutoRegressiveBernoulliNetwork(
+            ..., event_shape=event_shape, conditional_event_shape=cond_shape)
+        conditional_samples = tf.random.uniform((batch_size, ) + cond_shape)
+        autoregressive_model.relaxed_distribution(
+            temperature=.5,
+            conditional_input=conditional_samples
+        ).sample()  # no need to provide batch_size here
+
+        autoregressive_model.discrete_distribution(
+            conditional_input=conditional_samples
+        ).sample(batch_size)  # here, batch_size need to be provided;
+        # note that batch_size must always match tf.shape(conditional_samples)[0]
+        ```
+        """
         def distribution_fn(x: Optional[Float] = None):
             if x is None:
                 logits = tf.zeros(self.event_shape)
