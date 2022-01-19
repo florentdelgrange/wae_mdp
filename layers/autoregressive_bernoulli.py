@@ -14,18 +14,21 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
 
     def __init__(
             self,
-            event_shape: Union[tf.TensorShape, Tuple[int, ...]] = None,
-            activation: Callable[[Float], Float] = None,
-            hidden_units: Tuple[int, ...] = None,
-            conditional_input: Optional[tfkl.Input] = None,
+            event_shape: Union[tf.TensorShape, Tuple[int, ...]],
+            activation: Callable[[Float], Float],
+            hidden_units: Tuple[int, ...],
+            conditional_event_shape: Optional[Union[tf.TensorShape, Tuple[int, ...]]] = None,
             output_softclip: Optional[Callable[[Float], Float]] = tfb.Identity(),
             network_name: Optional[str] = None,
     ):
 
-        conditional_event_shape = conditional_input.shape[1:] if conditional_input is not None else None
         input_event = tfk.Input(shape=event_shape, dtype=tf.float32)
+        if conditional_event_shape is None:
+            conditional_input = None
+        else:
+            conditional_input = tfk.Input(shape=conditional_event_shape, dtype=tf.float32)
 
-        _made = tfb.AutoregressiveNetwork(
+        made = tfb.AutoregressiveNetwork(
             params=1,
             hidden_units=hidden_units,
             event_shape=event_shape,
@@ -33,7 +36,7 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
             conditional_event_shape=conditional_event_shape,
             activation=activation,
             name=network_name)
-        made = self._made(input_event, conditional_input=conditional_input)
+        made = made(input_event, conditional_input=conditional_input)
         made = tfkl.Lambda(
             lambda x: output_softclip(x[..., 0])
         )(made)
