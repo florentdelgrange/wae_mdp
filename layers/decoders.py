@@ -85,18 +85,19 @@ class ActionReconstructionNetwork(DistributionModel):
             self,
             latent_state: tfkl.Input,
             latent_action: tfkl.Input,
-            action_decoder_network: tfk.Model
+            action_decoder_network: tfk.Model,
+            action_shape: Union[Tuple[int, ...], tf.TensorShape],
     ):
         action_reconstruction_network = tfkl.Concatenate(name='action_reconstruction_input')([
             latent_state, latent_action])
         action_reconstruction_network = action_decoder_network(action_reconstruction_network)
         action_reconstruction_network = tfkl.Dense(
-            units=np.prod(self.action_shape),
+            units=np.prod(action_shape),
             activation=None,
             name='action_reconstruction_network_raw_output'
         )(action_reconstruction_network)
         action_reconstruction_network = tfkl.Reshape(
-            target_shape=self.action_shape,
+            target_shape=action_shape,
             name='action_reconstruction_network_output'
         )(action_reconstruction_network)
 

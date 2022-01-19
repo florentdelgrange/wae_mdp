@@ -4,7 +4,7 @@ import tensorflow.keras as tfk
 import tensorflow_probability.python.distributions as tfd
 
 
-class DiscreteDistributionModel(tfk.Model, abc.ABC):
+class DiscreteDistributionModel(tfk.Model):
 
     @abc.abstractmethod
     def relaxed_distribution(self, *args, **kwargs) -> tfd.Distribution:
@@ -22,7 +22,7 @@ class DiscreteDistributionModel(tfk.Model, abc.ABC):
         return config
 
 
-class DistributionModel(tfk.Model, abc.ABC):
+class DistributionModel(tfk.Model):
 
     @abc.abstractmethod
     def distribution(self, *args, **kwargs) -> tfd.Distribution:
