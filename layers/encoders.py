@@ -139,7 +139,7 @@ class ActionEncoderNetwork(DiscreteDistributionModel):
             latent_state: Float,
             action: Float,
     ) -> tfd.Distribution:
-        logits = self.action_encoder_network([latent_state, action])
+        logits = self([latent_state, action])
         if self.relaxed_exp_one_hot_action_encoding:
             relaxed_distribution = tfd.ExpRelaxedOneHotCategorical(
                 temperature=1e-5,
