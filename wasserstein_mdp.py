@@ -212,7 +212,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 hidden_units=hidden_units,
                 conditional_event_shape=(self.latent_state_size + self.number_of_discrete_actions, ),
                 output_softclip=self.softclip,
-                network_name="masked_autoregressive_transition_network")
+                network_name="autoregressive_transition_network")
             # stationary distribution over latent states
             self.latent_stationary_params: Tuple[AutoRegressiveBernoulliNetwork, Optional[tf.Variable]] = \
                 self._initialize_latent_stationary_autoregressor(prior_net=latent_policy_network)
@@ -269,8 +269,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 else:
                     print("No action encoder")
                 self.transition_network.summary()
+                self.latent_stationary_params[0].summary()
                 print("latent state stationary logits")
-                tf.print(self.latent_stationary_params, tf.shape(self.latent_stationary_params), summarize=-1)
+                tf.print(self.latent_stationary_params, tf.shape(self.latent_stationary_params[1]), summarize=-1)
                 self.reward_network.summary()
                 self.reconstruction_network.summary()
                 if self.action_discretizer:
@@ -314,10 +315,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         hidden_units = []
         activation = None
         if model is None:
-            return [128, 128], tfb.Sigmoid
+            return [128, 128], tfb.Sigmoid()
         for layer in model.layers:
-            hidden_units.append(layer.units)
-            if activation != layer.activation:
+            if hasattr(layer, 'units'):
+                hidden_units.append(layer.units)
+            if hasattr(layer, 'activation') and activation != layer.activation:
                 activation = layer.activation
         return hidden_units, activation
 
@@ -751,41 +753,41 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         # TODO REMOVE WHEN READY
         # sample(n) not supported
-        #  stationary_latent_state = self.relaxed_latent_steady_state_distribution(
-        #      temperature=self.encoder_temperature,
-        #  ).sample(batch_size)
-        #  stationary_latent_state = tf.map_fn(
-        #      fn=lambda _: self.relaxed_latent_steady_state_distribution(
-        #          temperature=self.encoder_temperature,
-        #      ).sample(),
-        #      elems=tf.range(batch_size, dtype=tf.float32))
-        #  print("stationary_latent_state", stationary_latent_state)
-        #  stationary_latent_action = self.relaxed_latent_policy(
-        #      latent_state=stationary_latent_state,
-        #      temperature=self.latent_policy_temperature,
-        #  ).sample()
-        #  print("stationary_latent_action", stationary_latent_action)
-        #  next_stationary_latent_state = self.relaxed_latent_transition(
-        #      stationary_latent_state,
-        #      stationary_latent_action,
-        #      temperature=self.state_prior_temperature,
-        #  ).sample()
-        #  print("next_stationary_latent_state", next_stationary_latent_state)
+        stationary_latent_state = self.relaxed_latent_steady_state_distribution(
+            temperature=self.encoder_temperature,
+        ).sample(batch_size)
+        # stationary_latent_state = tf.map_fn(
+        #     fn=lambda _: self.relaxed_latent_steady_state_distribution(
+        #         temperature=self.encoder_temperature,
+        #     ).sample(),
+        #     elems=tf.range(batch_size, dtype=tf.float32))
+        print("stationary_latent_state", stationary_latent_state)
+        stationary_latent_action = self.relaxed_latent_policy(
+            latent_state=stationary_latent_state,
+            temperature=self.latent_policy_temperature,
+        ).sample()
+        print("stationary_latent_action", stationary_latent_action)
+        next_stationary_latent_state = self.relaxed_latent_transition(
+            stationary_latent_state,
+            stationary_latent_action,
+            temperature=self.state_prior_temperature,
+        ).sample()
+        print("next_stationary_latent_state", next_stationary_latent_state)
         #  next_stationary_latent_state = next_latent_state
         # latent steady-state distribution
-        (stationary_latent_state,
-         stationary_latent_action,
-         next_stationary_latent_state) = tfd.JointDistributionSequential([
-            self.relaxed_latent_steady_state_distribution(
-                temperature=self.encoder_temperature),
-            lambda _latent_state: self.relaxed_latent_policy(
-                latent_state=_latent_state,
-                temperature=self.latent_policy_temperature),
-            lambda _latent_action, _latent_state: self.relaxed_latent_transition(
-                _latent_state,
-                _latent_action,
-                temperature=self.state_prior_temperature),
-            ]).sample(sample_shape=batch_size)
+        #  (stationary_latent_state,
+        #   stationary_latent_action,
+        #   next_stationary_latent_state) = tfd.JointDistributionSequential([
+        #      self.relaxed_latent_steady_state_distribution(
+        #          temperature=self.encoder_temperature),
+        #      lambda _latent_state: self.relaxed_latent_policy(
+        #          latent_state=_latent_state,
+        #          temperature=self.latent_policy_temperature),
+        #      lambda _latent_action, _latent_state: self.relaxed_latent_transition(
+        #          _latent_state,
+        #          _latent_action,
+        #          temperature=self.state_prior_temperature),
+        #      ]).sample(sample_shape=batch_size)
 
         # next latent state from the latent transition function
         next_transition_latent_state = self.relaxed_latent_transition(
