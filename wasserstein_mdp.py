@@ -212,7 +212,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 hidden_units=hidden_units,
                 conditional_event_shape=(self.latent_state_size + self.number_of_discrete_actions, ),
                 output_softclip=self.softclip,
-                network_name="autoregressive_transition_network")
+                temperature=self.state_prior_temperature,
+                name="autoregressive_transition_network",
+                made_name="made_transition_network")
             # stationary distribution over latent states
             self.latent_stationary_params: Tuple[AutoRegressiveBernoulliNetwork, Optional[tf.Variable]] = \
                 self._initialize_latent_stationary_autoregressor(prior_net=latent_policy_network)
@@ -338,7 +340,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             activation=activation,
             hidden_units=hidden_units,
             output_softclip=self.softclip,
-            network_name="MaskedStationaryLatentStateNetwork")
+            temperature=self.state_prior_temperature,
+            name="MaskedStationaryLatentStateNetwork")
         if self.trainable_prior:
             return made, None
         else:
@@ -457,9 +460,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             temperature: Float = 1e-5,
             *args, **kwargs
     ) -> tfd.Distribution:
-        return self.transition_network.relaxed_distribution(
-            temperature=temperature,
-            conditional_input=tf.concat([latent_state, latent_action], axis=-1))
+        #  return self.transition_network.relaxed_distribution(
+        #      temperature=temperature,
+        #      conditional_input=tf.concat([latent_state, latent_action], axis=-1))
+        return self.transition_network(tf.concat([latent_state, latent_action], axis=-1))
 
     def discrete_latent_transition(
             self, latent_state: tf.Tensor, latent_action: tf.Tensor, *args, **kwargs
@@ -531,7 +535,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             temperature: Float,
     ) -> tfd.Distribution:
         autoregressive_net, logits = self.latent_stationary_params
-        d1 = autoregressive_net.relaxed_distribution(temperature=temperature)
+        d1 = autoregressive_net
         if logits is not None:
             d2 = tfd.Independent(
                 tfd.TransformedDistribution(
