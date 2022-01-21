@@ -1,3 +1,4 @@
+import functools
 import importlib
 import json
 import os
@@ -7,7 +8,7 @@ from collections import namedtuple
 import numpy as np
 import tensorflow as tf
 import tf_agents
-from absl import flags
+from absl import app, flags
 from tensorflow.keras.layers import Dense
 from tensorflow.python.keras import Sequential
 import tensorflow_probability as tfp
