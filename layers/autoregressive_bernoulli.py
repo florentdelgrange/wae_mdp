@@ -5,10 +5,61 @@ from tensorflow import keras as tfk
 from tensorflow.keras import layers as tfkl
 import tensorflow_probability.python.bijectors as tfb
 import tensorflow_probability.python.distributions as tfd
-from tf_agents.typing.types import Float
+from tf_agents.typing.types import Float, Int
 
 from layers.base_models import DiscreteDistributionModel
 
+
+class AutoregressiveTransform(tfpl.DistributionLambda):
+        def __init__(
+                self,
+                made: tfb.AutoregressiveNetwork,
+                temperature=None,
+                output_softclip=None,
+                **kwargs):
+        if temperature is None:
+            temperature = 1e-5
+        if output_softclip is None:
+            output_softclip = tfb.Identity()
+            
+        super(AutoregressiveTransform, self).__init__(self._transform, **kwargs)
+        self._made = made
+        self._temperature = temperature
+        self._output_softclip = output_softclip
+
+    def build(self, input_shape):
+        if self._made._conditional:
+            inputs = tfk.Input(input_shape[0][1:], dtype=self.dtype)
+            conditional_input = tfk.Input(input_shape[1][1:], dtype=self.dtype)
+            outputs = self._made(inputs, conditional_input=conditional_input)
+            outputs = tfkl.Lambda(lambda x: self._output_softclip(x) / self._temperature)(outputs)
+            tfk.Model(inputs=[inputs, conditional_input], outputs=outputs)
+        else:
+            tfk.Sequential([
+                tfkl.InputLayer(
+                    input_shape=input_shape[1:], dtype=self.dtype),
+                self._made,
+                tfkl.Lambda(lambda x: self._output_softclip(x) / self._temperature)
+            ])
+        super(AutoregressiveTransform, self).build(input_shape)
+
+    def _transform(self, previous_outputs):
+        if self._made._conditional:
+            distribution, conditional_input = previous_outputs
+        else:
+            distribution, conditional_input = previous_outputs, None
+        
+        def bijector_fn(x) -> tfb.Bijector:
+            shift = self._output_softclip(
+                self._made(x, conditional_input=conditional_input)[..., 0]
+            ) / self._temperature
+            return tfb.Chain([tfb.Sigmoid(), tfb.Shift(shift)])
+        
+        return tfd.TransformedDistribution(
+            bijector=tfb.MaskedAutoregressiveFlow(
+                bijector_fn=bijector_fn,
+                is_constant_jacobian=True),
+            distribution=distribution)
 
 class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
 
@@ -20,15 +71,18 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
             conditional_event_shape: Optional[Union[tf.TensorShape, Tuple[int, ...]]] = None,
             output_softclip: Optional[Callable[[Float], Float]] = tfb.Identity(),
             network_name: Optional[str] = None,
+            input_event_name: str = 'autoregressor_input_event',
+            conditional_input_name: str = 'autoregressor_conditional_input'
     ):
-
-        input_event = tfk.Input(shape=event_shape, dtype=tf.float32)
+        if network_name is None:
+            network_name = 'AutoregressiveBernoulliNetwork'
+        input_event = tfk.Input(shape=event_shape, dtype=tf.float32, name=input_event_name)
         if conditional_event_shape is None:
             conditional_input = None
         else:
-            conditional_input = tfk.Input(shape=conditional_event_shape, dtype=tf.float32)
+            conditional_input = tfk.Input(shape=conditional_event_shape, dtype=tf.float32, name=conditional_input_name)
 
-        made = tfb.AutoregressiveNetwork(
+        _made = tfb.AutoregressiveNetwork(
             params=1,
             hidden_units=hidden_units,
             event_shape=event_shape,
@@ -36,15 +90,27 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
             conditional_event_shape=conditional_event_shape,
             activation=activation,
             name=network_name)
-        made = made(input_event, conditional_input=conditional_input)
+        made = _made(input_event, conditional_input=conditional_input)
         made = tfkl.Lambda(
             lambda x: output_softclip(x[..., 0])
         )(made)
 
+        if conditional_input is None:
+            inputs = input_event
+        else:
+            inputs = [input_event, conditional_input]
         super(AutoRegressiveBernoulliNetwork, self).__init__(
-            inputs=input_event if conditional_input is None else [input_event, conditional_input],
+            inputs=inputs,
             outputs=made)
         self.event_shape = event_shape
+        self._made = _made
+
+        #  temperature_input = tfkl.Input(shape=(1, ))
+        #  bijector_layer = tfkl.Lambda(tfb.Power(-1))(temperature_input)
+        #  bijector_layer = tfkl.Multiply()([self(inputs), bijector_layer])
+        #  bijector_layer = tfkl.Lambda(lambda x: tfb.Chain([tfb.Sigmoid(), tfb.Shift(x)]))(bijector_layer)
+        #  bijector_input = [temperature_input] + ([inputs] if conditional_input is None else inputs)
+        #  self.bijector_network = tfk.Model(inputs=bijector_input, outputs=bijector_layer)
 
     @staticmethod
     def _process_made_inputs(x: Float, conditional: Optional[Float] = None, *args, **kwargs):
@@ -53,7 +119,8 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
     def relaxed_distribution(
             self,
             temperature: Float,
-            conditional_input: Optional[Float] = None
+            conditional_input: Optional[Float] = None,
+            batch_size: Optional[Int] = 0
     ) -> tfd.Distribution:
         """
         Construct a distribution whose parameters are produced by a Masked Autoregressive Flow.
@@ -67,11 +134,18 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
             shift = self(inputs) / temperature
             return tfb.Chain([tfb.Sigmoid(), tfb.Shift(shift)])
 
-        return tfd.TransformedDistribution(
+        maf = tfd.TransformedDistribution(
             distribution=tfd.Sample(
-                tfd.Logistic(loc=0., scale=1. / temperature),
+                tfd.Logistic(
+                    loc=0. if conditional_input is None else 0.,
+                    scale=1. / temperature),
                 sample_shape=self.event_shape),
-            bijector=tfb.MaskedAutoregressiveFlow(bijector_fn=bijector_fn))
+            #  bijector=tfb.Invert(tfb.MaskedAutoregressiveFlow(bijector_fn=bijector_fn)))
+            bijector=tfb.MaskedAutoregressiveFlow(
+                bijector_fn=bijector_fn,
+                is_constant_jacobian=True))
+        maf._made = self
+        return maf
 
     def discrete_distribution(
             self,
