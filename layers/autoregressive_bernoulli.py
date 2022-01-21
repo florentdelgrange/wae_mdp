@@ -50,7 +50,9 @@ class AutoregressiveTransform(tfpl.DistributionLambda):
             distribution, conditional_input = previous_outputs
         else:
             distribution, conditional_input = previous_outputs, None
-        
+        # print("distribution", distribution)
+        # print("reparameterizable?", distribution.reparameterization_type)
+
         def bijector_fn(x) -> tfb.Bijector:
             shift = self._output_softclip(
                 self._made(x, conditional_input=conditional_input)[..., 0]
@@ -60,8 +62,8 @@ class AutoregressiveTransform(tfpl.DistributionLambda):
         return tfd.TransformedDistribution(
             bijector=tfb.MaskedAutoregressiveFlow(
                 bijector_fn=bijector_fn,
-                is_constant_jacobian=True),
-            distribution=distribution)
+                is_constant_jacobian=True,),
+            distribution=distribution,)
 
 class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
 
@@ -76,10 +78,9 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
             dtype: tf.dtypes = tf.float32,
             name: Optional[str] = None,
             made_name: Optional[str] = None,
-            input_event_name: str = 'autoregressor_input_event',
-            conditional_input_name: str = 'autoregressor_conditional_input',
+            input_event_name: str = 'input_event',
+            conditional_input_name: str = 'conditional_input',
     ):
-        super(AutoRegressiveBernoulliNetwork, self).__init__()
         if conditional_event_shape is None:
             inputs = tfk.Input(shape=(0, ), dtype=dtype, name=input_event_name)
             conditional_input = None
@@ -88,17 +89,19 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
             conditional_input = inputs
 
         logistic_distribution_layer = tfk.Sequential([
-            tfkl.InputLayer(input_shape=conditional_event_shape, dtype=dtype),
+            tfkl.InputLayer(input_shape=conditional_event_shape, dtype=dtype, name="logistic_layer_input"),
             tfpl.DistributionLambda(
-                lambda t: tfd.Logistic(
-                    loc=tf.zeros(tf.concat([tf.shape(t)[:-1], event_shape], axis=0)),
-                    scale=tf.pow(temperature, -1))),
-            ])
+                lambda t: tfd.Independent(
+                    tfd.Logistic(
+                        loc=tf.zeros(tf.concat([tf.shape(t)[:-1], event_shape], axis=0)),
+                        scale=tf.pow(temperature, -1),),
+                    reinterpreted_batch_ndims=1,)),
+            ], name="sequential_logistic_distribution_layer")
 
         made = tfb.AutoregressiveNetwork(
             params=1,
             hidden_units=hidden_units,
-            event_shape=None if conditional_input is not None else event_shape,
+            event_shape=None if conditional_input is None else event_shape,
             conditional=conditional_input is not None,
             conditional_event_shape=conditional_event_shape,
             activation=activation,
@@ -108,7 +111,8 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
         x = AutoregressiveTransform(
             made=made,
             temperature=temperature,
-            output_softclip=output_softclip
+            output_softclip=output_softclip,
+            name="autoregressive_transform",
         )(x if conditional_input is None else [x, conditional_input])
 
         super(AutoRegressiveBernoulliNetwork, self).__init__(
