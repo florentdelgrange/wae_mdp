@@ -561,7 +561,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         d1 = tfd.TransformedDistribution(
             distribution=tfd.Independent(
                 tfd.Logistic(
-                    loc=tf.zeros(autoregressive_network.event_size),
+                    loc=tf.zeros(autoregressive_network.event_shape),
                     scale=tf.pow(temperature, -1.)),
                 reinterpreted_batch_ndims=1),
             bijector=maf)
