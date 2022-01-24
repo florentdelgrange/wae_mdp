@@ -25,9 +25,11 @@ def relaxed_distribution(
         return tfb.Chain([tfb.Sigmoid(), tfb.Shift(shift)])
 
     maf = tfd.TransformedDistribution(
-        distribution=tfd.Logistic(
-            loc=tf.zeros(event_shape),
-            scale=tf.pow(temperature, -1)),
+        distribution=tfd.Independent(
+            tfd.Logistic(
+                loc=tf.zeros(event_shape),
+                scale=tf.pow(temperature, -1)),
+            reinterpreted_batch_ndims=1),
         bijector=tfb.MaskedAutoregressiveFlow(
             bijector_fn=bijector_fn,
             is_constant_jacobian=True))
@@ -288,11 +290,11 @@ class MaskedAutoregressiveFlowDistributionWrapper(tfd.Distribution):
         return self._wrapped_distribution._event_shape_tensor()
 
     def _sample_n(self, n, seed=None, **kwargs):
-        return self._wrapped_distribution._sample_n(
+        return self._wrapped_distribution.sample(
             n, seed=seed, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
 
     def _log_survival_function(self, value, **kwargs):
-        return self._wrapped_distribution.log_survival_function(
+        return self._wrapped_distribution._log_survival_function(
             value, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
 
     def _survival_function(self, value, **kwargs):
