@@ -24,17 +24,18 @@ def relaxed_distribution(
         ) / temperature
         return tfb.Chain([tfb.Sigmoid(), tfb.Shift(shift)])
 
-    maf = tfd.TransformedDistribution(
+    maf = tfb.MaskedAutoregressiveFlow(
+        bijector_fn=bijector_fn,
+        is_constant_jacobian=True)
+    maf._made_variables = made.variables
+
+    return tfd.TransformedDistribution(
         distribution=tfd.Independent(
             tfd.Logistic(
                 loc=tf.zeros(event_shape),
                 scale=tf.pow(temperature, -1)),
             reinterpreted_batch_ndims=1),
-        bijector=tfb.MaskedAutoregressiveFlow(
-            bijector_fn=bijector_fn,
-            is_constant_jacobian=True))
-    maf._made_variables = made.variables
-    return maf
+        bijector=maf)
 
 
 def discrete_distribution(

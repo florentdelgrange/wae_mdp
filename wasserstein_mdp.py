@@ -17,7 +17,7 @@ from tf_agents.environments import tf_py_environment, tf_environment
 
 import variational_action_discretizer
 from layers import autoregressive_bernoulli
-from layers.autoregressive_bernoulli import AutoRegressiveBernoulliNetwork
+from layers.autoregressive_bernoulli import AutoRegressiveBernoulliNetwork, MaskedAutoregressiveFlowDistributionWrapper
 from layers.latent_policy import LatentPolicyNetwork
 from layers.decoders import RewardNetwork, ActionReconstructionNetwork, StateReconstructionNetwork
 from layers.encoders import StateEncoderNetwork, ActionEncoderNetwork
@@ -296,14 +296,16 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.transition_loss_lipschitz_network = transition_loss_lipschitz_network
 
         self.encoder_network = self.state_encoder_network
-        self._transition_network_distribution = autoregressive_bernoulli.relaxed_distribution(
+        self._masked_autoregressive_transition_flow = autoregressive_bernoulli.relaxed_distribution(
             made=self.transition_network,
             output_softclip=self.softclip,
-            temperature=self.state_prior_temperature)
-        self._steady_state_distribution = autoregressive_bernoulli.relaxed_distribution(
+            temperature=self.state_prior_temperature
+        ).bijector
+        self._masked_autoregressive_stationary_flow = autoregressive_bernoulli.relaxed_distribution(
             made=self.latent_stationary_params[0],
             output_softclip=self.softclip,
-            temperature=self.state_prior_temperature)
+            temperature=self.state_prior_temperature
+        ).bijector
 
         self.loss_metrics = {
             'reconstruction_loss': Mean(name='reconstruction_loss'),
@@ -469,8 +471,15 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             temperature: Float = 1e-5,
             *args, **kwargs
     ) -> tfd.Distribution:
-        return autoregressive_bernoulli.MaskedAutoregressiveFlowDistributionWrapper(
-            self._transition_network_distribution,
+        batch_size = tf.shape(latent_state)[0]
+        return MaskedAutoregressiveFlowDistributionWrapper(
+            tfd.TransformedDistribution(
+                distribution=tfd.Independent(
+                    tfd.Logistic(
+                        loc=tf.zeros(shape=(batch_size, self.latent_state_size, )),
+                        scale=tf.pow(temperature, -1.)),
+                    reinterpreted_batch_ndims=1),
+                bijector=self._masked_autoregressive_transition_flow),
             conditional=tf.concat([latent_state, latent_action], axis=-1))
 
     def discrete_latent_transition(
@@ -547,8 +556,16 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             temperature: Float,
             batch_size: Optional = None,
     ) -> tfd.Distribution:
-        _, logits = self.latent_stationary_params
-        d1 = self._steady_state_distribution
+        autoregressive_network, logits = self.latent_stationary_params
+        maf = self._masked_autoregressive_stationary_flow
+        d1 = tfd.TransformedDistribution(
+            distribution=tfd.Independent(
+                tfd.Logistic(
+                    loc=tf.zeros(autoregressive_network.event_size),
+                    scale=tf.pow(temperature, -1.)),
+                reinterpreted_batch_ndims=1),
+            bijector=maf)
+
         if logits is not None:
             d2 = tfd.Independent(
                 tfd.TransformedDistribution(
