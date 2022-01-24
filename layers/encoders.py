@@ -70,7 +70,8 @@ class StateEncoderNetwork(DiscreteDistributionModel):
                 tfd.RelaxedBernoulli(
                     logits=logits,
                     temperature=temperature,
-                    allow_nan_stats=False))
+                    allow_nan_stats=False),
+            reinterpreted_batch_ndims=1)
 
     def discrete_distribution(
             self,
@@ -83,7 +84,8 @@ class StateEncoderNetwork(DiscreteDistributionModel):
         return tfd.Independent(
             tfd.Bernoulli(
                 logits=logits,
-                allow_nan_stats=False))
+                allow_nan_stats=False),
+        reinterpreted_batch_ndims=1)
 
 
 class ActionEncoderNetwork(DiscreteDistributionModel):
