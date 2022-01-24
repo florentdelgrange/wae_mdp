@@ -187,7 +187,7 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
         distribution at each event step. This allows (via a chain of reparameterization) to generate logistic samples
         followed by a sigmoid at each time step, in order to generate (dependent) samples of relaxed Bernoulli.
         """
-        return MaskedAutoregressiveFlowDistributionWrapper(
+        return MaskedAutoregressiveFlowDistributionConditionalWrapper(
             relaxed_distribution(self._made, self._output_softclip, self._temperature),
             conditional=conditional_input)
 
@@ -269,7 +269,7 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
         return config
 
 
-class MaskedAutoregressiveFlowDistributionWrapper(tfd.Distribution):
+class MaskedAutoregressiveFlowDistributionConditionalWrapper(tfd.Distribution):
 
     def __init__(
             self,
@@ -294,13 +294,6 @@ class MaskedAutoregressiveFlowDistributionWrapper(tfd.Distribution):
         """Function transforming x => y."""
         return self._wrapped_distribution.bijector
 
-    @property
-    def _composite_tensor_nonshape_params(self):
-        return self._wrapped_distribution._composite_tensor_nonshape_params()
-
-    def __getitem__(self, slices):
-        return self._wrapped_distribution.__getitem__(slices)
-
     def _event_shape_tensor(self):
         return self._wrapped_distribution._event_shape_tensor()
 
@@ -316,13 +309,19 @@ class MaskedAutoregressiveFlowDistributionWrapper(tfd.Distribution):
     def _batch_shape(self):
         return self._wrapped_distribution._batch_shape()
 
-    def _call_sample_n(self, sample_shape, seed, name, **kwargs):
+    def _maybe_broadcast_distribution_batch_shape(self):
+        return self._wrapped_distribution._maybe_broadcast_distribution_batch_shape()
+
+    def _call_sample_n(self, sample_shape, seed, **kwargs):
         return self._wrapped_distribution._call_sample_n(
             sample_shape=sample_shape,
             seed=seed,
-            name=name,
             bijector_kwargs={'conditional_input': self._conditional},
             **kwargs)
+
+    def _sample_and_log_prob(self, sample_shape, seed, **kwargs):
+        return self._wrapped_distribution._sample_and_log_prob(
+            sample_shape, seed, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
 
     def _log_prob(self, y, **kwargs):
         return self._wrapped_distribution._log_prob(

@@ -17,7 +17,7 @@ from tf_agents.environments import tf_py_environment, tf_environment
 
 import variational_action_discretizer
 from layers import autoregressive_bernoulli
-from layers.autoregressive_bernoulli import AutoRegressiveBernoulliNetwork, MaskedAutoregressiveFlowDistributionWrapper
+from layers.autoregressive_bernoulli import AutoRegressiveBernoulliNetwork, MaskedAutoregressiveFlowDistributionConditionalWrapper
 from layers.latent_policy import LatentPolicyNetwork
 from layers.decoders import RewardNetwork, ActionReconstructionNetwork, StateReconstructionNetwork
 from layers.encoders import StateEncoderNetwork, ActionEncoderNetwork
@@ -472,7 +472,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             *args, **kwargs
     ) -> tfd.Distribution:
         batch_size = tf.shape(latent_state)[0]
-        return MaskedAutoregressiveFlowDistributionWrapper(
+        return MaskedAutoregressiveFlowDistributionConditionalWrapper(
             tfd.TransformedDistribution(
                 distribution=tfd.Independent(
                     tfd.Logistic(
