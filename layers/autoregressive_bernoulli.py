@@ -11,11 +11,56 @@ from tf_agents.typing.types import Float, Int
 from layers.base_models import DiscreteDistributionModel
 
 
+def relaxed_distribution(
+        made: tfb.AutoregressiveNetwork,
+        output_softclip: Callable[[Float], Float],
+        temperature: Float,
+) -> tfd.TransformedDistribution:
+    event_shape = made._event_shape
+
+    def bijector_fn(x, conditional_input: Optional[Float] = None) -> tfb.Bijector:
+        shift = output_softclip(
+            made(x, conditional_input=conditional_input)[..., 0]
+        ) / temperature
+        return tfb.Chain([tfb.Sigmoid(), tfb.Shift(shift)])
+
+    maf = tfd.TransformedDistribution(
+        distribution=tfd.Logistic(
+            loc=tf.zeros(event_shape),
+            scale=tf.pow(temperature, -1)),
+        bijector=tfb.MaskedAutoregressiveFlow(
+            bijector_fn=bijector_fn,
+            is_constant_jacobian=True))
+    maf._made_variables = made.variables
+    return maf
+
+
+def discrete_distribution(
+        made: tfb.AutoregressiveNetwork,
+        output_softclip: Callable[[Float], Float],
+        conditional_input: Optional[Float] = None
+) -> tfd.Autoregressive:
+    event_shape = made._event_shape
+
+    def distribution_fn(x: Optional[Float] = None):
+        if x is None:
+            # enforce distribution0 to forward samples with zero values as input of MADE
+            logits = -10. * tf.ones(event_shape)
+        else:
+            logits = output_softclip(
+                made(x, conditional_input=conditional_input))
+
+        return tfd.Independent(
+            distribution=tfd.Bernoulli(logits=logits),
+            reinterpreted_batch_ndims=1)
+
+    return tfd.Autoregressive(distribution_fn)
+
 class AutoregressiveTransform(tfpl.DistributionLambda):
     def __init__(
             self,
             made: tfb.AutoregressiveNetwork,
-            temperature: Optional[Float]=None,
+            temperature: Optional[Float] = None,
             output_softclip: Optional[Callable[[Float], Float]] = None,
             **kwargs
     ):
@@ -23,7 +68,7 @@ class AutoregressiveTransform(tfpl.DistributionLambda):
             temperature = 1e-5
         if output_softclip is None:
             output_softclip = tfb.Identity()
-            
+
         super(AutoregressiveTransform, self).__init__(self._transform, **kwargs)
         self._made = made
         self._temperature = temperature
@@ -50,6 +95,7 @@ class AutoregressiveTransform(tfpl.DistributionLambda):
             distribution, conditional_input = previous_outputs
         else:
             distribution, conditional_input = previous_outputs, None
+
         # print("distribution", distribution)
         # print("reparameterizable?", distribution.reparameterization_type)
 
@@ -58,12 +104,13 @@ class AutoregressiveTransform(tfpl.DistributionLambda):
                 self._made(x, conditional_input=conditional_input)[..., 0]
             ) / self._temperature
             return tfb.Chain([tfb.Sigmoid(), tfb.Shift(shift)])
-        
+
         return tfd.TransformedDistribution(
             bijector=tfb.MaskedAutoregressiveFlow(
                 bijector_fn=bijector_fn,
-                is_constant_jacobian=True,),
-            distribution=distribution,)
+                is_constant_jacobian=True, ),
+            distribution=distribution, )
+
 
 class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
 
@@ -82,7 +129,7 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
             conditional_input_name: str = 'conditional_input',
     ):
         if conditional_event_shape is None:
-            inputs = tfk.Input(shape=(0, ), dtype=dtype, name=input_event_name)
+            inputs = tfk.Input(shape=(0,), dtype=dtype, name=input_event_name)
             conditional_input = None
         else:
             inputs = tfk.Input(shape=conditional_event_shape, dtype=dtype, name=conditional_input_name)
@@ -94,9 +141,9 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
                 lambda t: tfd.Independent(
                     tfd.Logistic(
                         loc=tf.zeros(tf.concat([tf.shape(t)[:-1], event_shape], axis=0)),
-                        scale=tf.pow(temperature, -1),),
-                    reinterpreted_batch_ndims=1,)),
-            ], name="sequential_logistic_distribution_layer")
+                        scale=tf.pow(temperature, -1), ),
+                    reinterpreted_batch_ndims=1, )),
+        ], name="sequential_logistic_distribution_layer")
 
         made = tfb.AutoregressiveNetwork(
             params=1,
@@ -130,7 +177,6 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
             self,
             temperature: Float,
             conditional_input: Optional[Float] = None,
-            batch_size: Optional[Int] = 0
     ) -> tfd.Distribution:
         """
         Construct a distribution whose parameters are produced by a Masked Autoregressive Flow.
@@ -138,25 +184,9 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
         distribution at each event step. This allows (via a chain of reparameterization) to generate logistic samples
         followed by a sigmoid at each time step, in order to generate (dependent) samples of relaxed Bernoulli.
         """
-
-        def bijector_fn(x) -> tfb.Bijector:
-            shift = self._output_softclip(
-                self._made(x, conditional_input=conditional_input)[..., 0]
-            ) / temperature
-            return tfb.Chain([tfb.Sigmoid(), tfb.Shift(shift)])
-
-        maf = tfd.TransformedDistribution(
-            distribution=tfd.Sample(
-                tfd.Logistic(
-                    loc=0.,
-                    scale=1. / temperature),
-                sample_shape=self.event_shape),
-            #  bijector=tfb.Invert(tfb.MaskedAutoregressiveFlow(bijector_fn=bijector_fn)))
-            bijector=tfb.MaskedAutoregressiveFlow(
-                bijector_fn=bijector_fn,
-                is_constant_jacobian=True))
-        maf._made = self._made
-        return maf
+        return MaskedAutoregressiveFlowDistributionWrapper(
+            relaxed_distribution(self._made, self._output_softclip, self._temperature),
+            conditional=conditional_input)
 
     def discrete_distribution(
             self,
@@ -184,17 +214,7 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
         # note that batch_size must always match tf.shape(conditional_samples)[0]
         ```
         """
-        def distribution_fn(x: Optional[Float] = None):
-            if x is None:
-                logits = tf.zeros(self.event_shape)
-            else:
-                logits = self._output_softclip(
-                    self._made(x, conditional_input=conditional_input))
-            return tfd.Independent(
-                distribution=tfd.Bernoulli(logits=logits),
-                reinterpreted_batch_ndims=1)
-
-        return tfd.Autoregressive(distribution_fn)
+        return discrete_distribution(self._made, self._output_softclip, conditional_input)
 
     def relaxed_invert_maf_distribution(
             self,
@@ -244,3 +264,64 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
             "relaxed_invert_maf_distribution": self.relaxed_invert_maf_distribution,
             "discrete_invert_maf_distribution": self.discrete_invert_maf_distribution})
         return config
+
+
+class MaskedAutoregressiveFlowDistributionWrapper(tfd.Distribution):
+
+    def __init__(
+            self,
+            masked_autoregressive_flow_transformed_distribution: tfd.TransformedDistribution,
+            conditional: Float
+    ):
+        super().__init__(
+            masked_autoregressive_flow_transformed_distribution.dtype,
+            masked_autoregressive_flow_transformed_distribution.reparameterization_type,
+            masked_autoregressive_flow_transformed_distribution.validate_args,
+            masked_autoregressive_flow_transformed_distribution.allow_nan_stats)
+        self._wrapped_distribution: tfd.TransformedDistribution = masked_autoregressive_flow_transformed_distribution
+        self._conditional = conditional
+
+    def _batch_shape_tensor(self):
+        return self._wrapped_distribution._batch_shape_tensor()
+
+    def _event_shape_tensor(self):
+        return self._wrapped_distribution._event_shape_tensor()
+
+    def _sample_n(self, n, seed=None, **kwargs):
+        return self._wrapped_distribution._sample_n(
+            n, seed=seed, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+
+    def _log_survival_function(self, value, **kwargs):
+        return self._wrapped_distribution.log_survival_function(
+            value, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+
+    def _survival_function(self, value, **kwargs):
+        return self._survival_function(
+            value, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+
+    def _entropy(self, **kwargs):
+        return self._wrapped_distribution._entropy(bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+
+    def _mean(self, **kwargs):
+        self._wrapped_distribution._mean(bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+
+    def _quantile(self, value, **kwargs):
+        return self._wrapped_distribution._quantile(
+            value, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+
+    def _variance(self, **kwargs):
+        return self._wrapped_distribution._variance(bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+
+    def _stddev(self, **kwargs):
+        return self._wrapped_distribution._stddev(bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+
+    def _covariance(self, **kwargs):
+        return self._wrapped_distribution._covariance(
+            bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+
+    def _mode(self, **kwargs):
+        return self._wrapped_distribution._mode(bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+
+    def _default_event_space_bijector(self, *args, **kwargs):
+        return self._wrapped_distribution._default_event_space_bijector(
+            bijector_kwargs={'conditional_input': self._conditional}, *args, **kwargs)
