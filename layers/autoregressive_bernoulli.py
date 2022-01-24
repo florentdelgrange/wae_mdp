@@ -283,47 +283,88 @@ class MaskedAutoregressiveFlowDistributionWrapper(tfd.Distribution):
         self._wrapped_distribution: tfd.TransformedDistribution = masked_autoregressive_flow_transformed_distribution
         self._conditional = conditional
 
-    def _batch_shape_tensor(self):
-        return self._wrapped_distribution._batch_shape_tensor()
+    @property
+    def distribution(self):
+        """Base distribution, p(x)."""
+        return self._wrapped_distribution.distribution
+
+    @property
+    def bijector(self):
+        """Function transforming x => y."""
+        return self._wrapped_distribution.bijector
+
+    @property
+    def _composite_tensor_nonshape_params(self):
+        return self._wrapped_distribution._composite_tensor_nonshape_params()
+
+    def __getitem__(self, slices):
+        return self._wrapped_distribution.__getitem__(slices)
 
     def _event_shape_tensor(self):
         return self._wrapped_distribution._event_shape_tensor()
 
-    def _sample_n(self, n, seed=None, **kwargs):
-        return self._wrapped_distribution.sample(
-            n, seed=seed, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+    def _event_shape(self):
+        # Since the `bijector` may change the `event_shape`, we then forward what we
+        # know to the bijector. This allows the `bijector` to have final say in the
+        # `event_shape`.
+        return self._wrapped_distribution._event_shape()
 
-    def _log_survival_function(self, value, **kwargs):
+    def _batch_shape_tensor(self):
+        return self._wrapped_distribution._batch_shape_tensor()
+
+    def _batch_shape(self):
+        return self._wrapped_distribution._batch_shape()
+
+    def _call_sample_n(self, sample_shape, seed, name, **kwargs):
+        return self._wrapped_distribution._call_sample_n(
+            sample_shape=sample_shape,
+            seed=seed,
+            name=name,
+            bijector_kwargs={'conditional_input': self._conditional},
+            **kwargs)
+
+    def _log_prob(self, y, **kwargs):
+        return self._wrapped_distribution._log_prob(
+            y, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+
+    def _prob(self, y, **kwargs):
+        return self._wrapped_distribution._prob(
+            y, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+
+    def _log_cdf(self, y, **kwargs):
+        return self._wrapped_distribution._log_cdf(
+            y, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+
+    def _cdf(self, y, **kwargs):
+        return self._wrapped_distribution._cdf(
+            y, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+
+    def _log_survival_function(self, y, **kwargs):
         return self._wrapped_distribution._log_survival_function(
-            value, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+            y, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
 
-    def _survival_function(self, value, **kwargs):
-        return self._survival_function(
-            value, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
-
-    def _entropy(self, **kwargs):
-        return self._wrapped_distribution._entropy(bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
-
-    def _mean(self, **kwargs):
-        self._wrapped_distribution._mean(bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+    def _survival_function(self, y, **kwargs):
+        return self._wrapped_distribution._survival_function(
+            y, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
 
     def _quantile(self, value, **kwargs):
         return self._wrapped_distribution._quantile(
             value, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
 
-    def _variance(self, **kwargs):
-        return self._wrapped_distribution._variance(bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
-
-    def _stddev(self, **kwargs):
-        return self._wrapped_distribution._stddev(bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
-
-    def _covariance(self, **kwargs):
-        return self._wrapped_distribution._covariance(
-            bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
-
     def _mode(self, **kwargs):
         return self._wrapped_distribution._mode(bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
 
-    def _default_event_space_bijector(self, *args, **kwargs):
-        return self._wrapped_distribution._default_event_space_bijector(
-            bijector_kwargs={'conditional_input': self._conditional}, *args, **kwargs)
+    def _mean(self, **kwargs):
+        return self._wrapped_distribution._mean(bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+
+    def _stddev(self, **kwargs):
+        return self._wrapped_distribution._stddev(
+            bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+
+    def _entropy(self, **kwargs):
+        return self._wrapped_distribution._entropy(
+            bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+
+    # pylint: disable=not-callable
+    def _default_event_space_bijector(self):
+        return self._wrapped_distribution._default_event_space_bijector()
