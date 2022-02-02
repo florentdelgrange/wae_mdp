@@ -208,10 +208,14 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
         if self.conditional:
             if conditional_input is None:
                 raise ValueError("You must provide a conditional event.")
-            distribution = self(conditional_input)
+            distribution = self(conditional_input, *args, **kwargs)
         else:
-            distribution = self(tf.zeros((0, )))
-        distribution.prob = lambda value: tf.exp(distribution.log_prob(value))
+            distribution = self(tf.zeros((0, )), *args, **kwargs)
+
+        def prob(value, name='prob', **kwargs):
+            return tf.exp(distribution.log_prob(value, name=name, **kwargs))
+        distribution.prob = prob
+
         return distribution
 
     def discrete_distribution(
