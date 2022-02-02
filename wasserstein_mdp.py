@@ -538,7 +538,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             return self.latent_stationary_network.relaxed_distribution(*args, **kwargs)
         else:
             return tfd.BatchBroadcast(
-                self.latent_stationary_network.relaxed_distribution,
+                self.latent_stationary_network.relaxed_distribution(*args, **kwargs),
                 with_shape=[batch_size])
 
     def discrete_marginal_state_encoder_distribution(
@@ -750,39 +750,38 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         # TODO REMOVE WHEN READY
         # sample(n) not supported
-        stationary_latent_state = self.relaxed_latent_steady_state_distribution(
-            # temperature=self.encoder_temperature,
-            # batch_size=batch_size
-        ).sample(batch_size)
+        #  stationary_latent_state = self.relaxed_latent_steady_state_distribution(
+        #      # temperature=self.encoder_temperature,
+        #      # batch_size=batch_size
+        #  ).sample(batch_size)
+        # dirty batch sampling
         # stationary_latent_state = tf.map_fn(
         #     fn=lambda _: self.relaxed_latent_steady_state_distribution(
         #         temperature=self.encoder_temperature,
         #     ).sample(),
         #     elems=tf.range(batch_size, dtype=tf.float32))
-        stationary_latent_action = self.relaxed_latent_policy(
-            latent_state=stationary_latent_state,
-            temperature=self.latent_policy_temperature,
-        ).sample()
-        next_stationary_latent_state = self.relaxed_latent_transition(
-            stationary_latent_state,
-            stationary_latent_action,
-            # temperature=self.state_prior_temperature,
-        ).sample()
+        #  stationary_latent_action = self.relaxed_latent_policy(
+        #      latent_state=stationary_latent_state,
+        #      temperature=self.latent_policy_temperature,
+        #  ).sample()
+        #  next_stationary_latent_state = self.relaxed_latent_transition(
+        #      stationary_latent_state,
+        #      stationary_latent_action,
+        #      # temperature=self.state_prior_temperature,
+        #  ).sample()
         #  next_stationary_latent_state = next_latent_state
         # latent steady-state distribution
-        #  (stationary_latent_state,
-        #   stationary_latent_action,
-        #   next_stationary_latent_state) = tfd.JointDistributionSequential([
-        #      self.relaxed_latent_steady_state_distribution(
-        #          temperature=self.encoder_temperature),
-        #      lambda _latent_state: self.relaxed_latent_policy(
-        #          latent_state=_latent_state,
-        #          temperature=self.latent_policy_temperature),
-        #      lambda _latent_action, _latent_state: self.relaxed_latent_transition(
-        #          _latent_state,
-        #          _latent_action,
-        #          temperature=self.state_prior_temperature),
-        #      ]).sample(sample_shape=batch_size)
+        (stationary_latent_state,
+         stationary_latent_action,
+         next_stationary_latent_state) = tfd.JointDistributionSequential([
+            self.relaxed_latent_steady_state_distribution(batch_size=batch_size),
+            lambda _latent_state: self.relaxed_latent_policy(
+                latent_state=_latent_state,
+                temperature=self.latent_policy_temperature),
+            lambda _latent_action, _latent_state: self.relaxed_latent_transition(
+                _latent_state,
+                _latent_action,),
+            ]).sample()
 
         # next latent state from the latent transition function
         next_transition_latent_state = self.relaxed_latent_transition(
