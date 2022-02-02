@@ -17,7 +17,7 @@ from tf_agents.environments import tf_py_environment, tf_environment
 
 import variational_action_discretizer
 from layers import autoregressive_bernoulli
-from layers.autoregressive_bernoulli import AutoRegressiveBernoulliNetwork, MaskedAutoregressiveFlowDistributionConditionalWrapper
+from layers.autoregressive_bernoulli import MaskedAutoregressiveFlowDistributionConditionalWrapper
 from layers.latent_policy import LatentPolicyNetwork
 from layers.decoders import RewardNetwork, ActionReconstructionNetwork, StateReconstructionNetwork
 from layers.encoders import StateEncoderNetwork, ActionEncoderNetwork
@@ -213,7 +213,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 conditional=True,
                 conditional_event_shape=(self.latent_state_size + self.number_of_discrete_actions, ),
                 hidden_units=hidden_units,
-                activation=activation)
+                activation=activation,
+                name="SALUT")
             # stationary distribution over latent states
             self.latent_stationary_params: Tuple[tfb.AutoregressiveNetwork, Optional[tf.Variable]] = \
                 self._initialize_latent_stationary_autoregressor(prior_net=latent_policy_network)
@@ -330,7 +331,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         hidden_units = []
         activation = None
         if model is None:
-            return [128, 128], tfb.Sigmoid()
+            return [128, 128], tf.nn.relu
         for layer in model.layers:
             if hasattr(layer, 'units'):
                 hidden_units.append(layer.units)
@@ -352,7 +353,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             params=1,
             event_shape=(self.latent_state_size,) if self.trainable_prior else (self.atomic_props_dims,),
             activation=activation,
-            hidden_units=hidden_units)
+            hidden_units=hidden_units,
+            name="COUCOU")
         if self.trainable_prior:
             return made, None
         else:
@@ -561,7 +563,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         d1 = tfd.TransformedDistribution(
             distribution=tfd.Independent(
                 tfd.Logistic(
-                    loc=tf.zeros(autoregressive_network.event_size),
+                    loc=tf.zeros(autoregressive_network.event_shape),
                     scale=tf.pow(temperature, -1.)),
                 reinterpreted_batch_ndims=1),
             bijector=maf)
@@ -1237,13 +1239,17 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
     @property
     def generator_variables(self):
-        variables = [self.latent_stationary_params]
+        variables = []
+        latent_stationary_network, latent_stationary_variables = self.latent_stationary_params
+        if latent_stationary_variables is not None and latent_stationary_variables.trainable:
+            variables += [latent_stationary_variables]
         if self.action_discretizer:
             variables += self.action_reconstruction_network.trainable_variables
         for network in [self.transition_network,
                         self.latent_policy_network,
                         self.reward_network,
-                        self.reconstruction_network]:
+                        self.reconstruction_network,
+                        latent_stationary_network]:
             variables += network.trainable_variables
         return variables
 
