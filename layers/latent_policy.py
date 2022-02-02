@@ -57,9 +57,9 @@ class LatentPolicyNetwork(DiscreteDistributionModel):
                 logits=self(latent_state),
                 allow_nan_stats=False)
             log_probs = tf.math.log(relaxed_distribution.probs_parameter() + self.epsilon)
-            return tfd.OneHotCategorical(logits=log_probs, allow_nan_stats=False)
+            return tfd.OneHotCategorical(logits=log_probs, allow_nan_stats=False, dtype=self.dtype)
         else:
-            return tfd.OneHotCategorical(logits=logits)
+            return tfd.OneHotCategorical(logits=logits, dtype=self.dtype)
 
     def get_config(self):
         config = super(LatentPolicyNetwork, self).get_config()
