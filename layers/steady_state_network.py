@@ -73,7 +73,7 @@ class SteadyStateNetwork(AutoRegressiveBernoulliNetwork):
             return d1
         else:
             d2 = tfd.Independent(
-                tfd.Bernoulli(logits=self.prior_variables),
+                tfd.Bernoulli(logits=self.prior_variables, dtype=self.dtype),
                 reinterpreted_batch_ndims=1)
             return tfd.Blockwise([d1, d2])
 
