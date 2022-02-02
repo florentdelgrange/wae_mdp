@@ -35,11 +35,17 @@ class SteadyStateNetwork(AutoRegressiveBernoulliNetwork):
             dtype=dtype,
             name=name,
             made_name=made_name)
+
         self.trainable_prior = trainable_prior
+        if self.trainable_prior:
+            logits = tf.zeros(shape=(0, ), dtype=self.dtype)
+        else:
+            logits = tf.zeros(shape=(latent_state_size - atomic_props_dims,), dtype=self.dtype)
         self.prior_variables = tf.Variable(
-            initial_value=(latent_state_size - atomic_props_dims,) if trainable_prior else (0,),
+            initial_value=logits,
             trainable=False,
-            name='prior_logits')
+            name='prior_logits',
+            dtype=self.dtype)
 
     def relaxed_distribution(
             self,
@@ -52,7 +58,7 @@ class SteadyStateNetwork(AutoRegressiveBernoulliNetwork):
             d2 = tfd.Independent(
                 tfd.TransformedDistribution(
                     distribution=tfd.Logistic(
-                        loc=self.softclip(self.prior_variables) / self._temperature,
+                        loc=self.prior_variables / self._temperature,
                         scale=tf.pow(self._temperature, -1.), ),
                     bijector=tfb.Sigmoid()),
                 reinterpreted_batch_ndims=1)
@@ -67,7 +73,7 @@ class SteadyStateNetwork(AutoRegressiveBernoulliNetwork):
             return d1
         else:
             d2 = tfd.Independent(
-                tfd.Bernoulli(logits=self.softclip(self.prior_variables)),
+                tfd.Bernoulli(logits=self.prior_variables),
                 reinterpreted_batch_ndims=1)
             return tfd.Blockwise([d1, d2])
 
