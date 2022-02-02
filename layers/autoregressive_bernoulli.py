@@ -50,7 +50,7 @@ def discrete_distribution(
         if x is None:
             # enforce distribution0 to forward samples with zero values as input of MADE
             if conditional_input is None:
-                -10. * tf.ones(shape=event_shape)
+                logits = -10. * tf.ones(shape=event_shape)
             else:
                 logits = -10. * tf.ones(tf.concat([tf.shape(conditional_input)[:-1], event_shape], axis=0))
         else:
