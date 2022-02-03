@@ -125,7 +125,7 @@ class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):
             state_encoder_pre_processing_network: Optional[tfk.Model] = None,
     ):
         hidden_units, activation = scan_model(state_encoder_network)
-        super(AutoRegressiveBernoulliNetwork, self).__init__(
+        super(AutoRegressiveStateEncoderNetwork, self).__init__(
             event_shape=(latent_state_size - atomic_props_dims, ),
             activation=activation,
             hidden_units=hidden_units,
