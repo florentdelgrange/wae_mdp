@@ -1379,8 +1379,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     latent_state=tf.cast(latent_state, tf.float32),
                     latent_action=tf.cast(latent_action, tf.float32))
 
-            def prob(self, label, state_without_label):
-                self._distribution.prob(tf.concat([label, state_without_label], axis=-1))
+            def prob(self, label, state_without_label) -> Float:
+                return self._distribution.prob(tf.concat([label, state_without_label], axis=-1))
 
         return estimate_local_losses_from_samples(
             environment=environment,
