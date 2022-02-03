@@ -23,7 +23,7 @@ from layers.decoders import RewardNetwork, ActionReconstructionNetwork, StateRec
 from layers.encoders import StateEncoderNetwork, ActionEncoderNetwork, AutoRegressiveStateEncoderNetwork
 from layers.lipschitz_functions import SteadyStateLipschitzFunction, TransitionLossLipschitzFunction
 from layers.steady_state_network import SteadyStateNetwork
-from util.io import dataset_generator
+from util.io import dataset_generator, scan_model
 from variational_mdp import VariationalMarkovDecisionProcess, EvaluationCriterion, debug_gradients, debug, epsilon
 from verification.local_losses import estimate_local_losses_from_samples
 
@@ -209,7 +209,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             else:
                 self.action_encoder_network = None
             # transition network
-            hidden_units, activation = self._scan_model(transition_network)
+            hidden_units, activation = scan_model(transition_network)
             self.transition_network = AutoRegressiveBernoulliNetwork(
                 event_shape=(self.latent_state_size, ),
                 activation=activation,
@@ -321,19 +321,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         else:
             self.loss_metrics['marginal_variance'] = Mean(name='marginal_variance')
 
-    @staticmethod
-    def _scan_model(model: tfk.Model):
-        hidden_units = []
-        activation = None
-        if model is None:
-            return [128, 128], tf.nn.relu
-        for layer in model.layers:
-            if hasattr(layer, 'units'):
-                hidden_units.append(layer.units)
-            if hasattr(layer, 'activation') and activation != layer.activation:
-                activation = layer.activation
-        return hidden_units, activation
-
     def _initialize_latent_stationary_autoregressor(
             self,
             prior_net: Optional[tfk.Model] = None
@@ -343,7 +330,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         the logits of labels (resp. the logits of the stationary distribution) and the Variables the logits of the
         rest of the stationary latent state distribution (resp. None) when the prior is not trainable (resp. trainable).
         """
-        hidden_units, activation = self._scan_model(prior_net)
+        hidden_units, activation = scan_model(prior_net)
         made = tfb.AutoregressiveNetwork(
             params=1,
             event_shape=(self.latent_state_size,) if self.trainable_prior else (self.atomic_props_dims,),

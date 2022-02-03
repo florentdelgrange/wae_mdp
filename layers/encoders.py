@@ -9,8 +9,7 @@ from tf_agents.typing.types import Float
 
 from layers.autoregressive_bernoulli import AutoRegressiveBernoulliNetwork
 from layers.base_models import DiscreteDistributionModel
-from wasserstein_mdp import WassersteinMarkovDecisionProcess
-scan_model = WassersteinMarkovDecisionProcess._scan_model
+from util.io import scan_model
 
 
 class StateEncoderNetwork(DiscreteDistributionModel):
