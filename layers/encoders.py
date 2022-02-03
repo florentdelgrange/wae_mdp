@@ -175,14 +175,16 @@ class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):
         def mode(name='mode', **kwargs):
             d2_sample = d2.sample()
             return tfd.Independent(
-                tfd.Bernoulli(logits=self.get_logits(state, d2_sample, include_label=False)),
+                tfd.Bernoulli(
+                    logits=self.get_logits(state, d2_sample, include_label=False),
+                    dtype=self.dtype),
                 reinterpreted_batch_ndims=1
             ).mode(name=name, **kwargs)
         d2.mode = mode
 
         if label is not None:
             d1 = tfd.Independent(
-                tfd.Deterministic(loc=label),
+                tfd.Deterministic(loc=tf.cast(label, dtype=self.dtype)),
                 reinterpreted_batch_ndims=1)
 
             def mode(name='mode', **kwargs):

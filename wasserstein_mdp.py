@@ -1314,13 +1314,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         logits = self.encoder_network.get_logits(state, latent_state)
         logits = tf.concat([(label * 2. - 1.) * 1e2, logits], axis=-1)
         latent_distribution = tfd.Independent(
-            tfd.Bernoulli(logits=logits),
+            tfd.Bernoulli(logits=logits, dtype=tf.float32),
             reinterpreted_batch_ndims=1)
         if deterministic:
             mean = tf.reduce_mean(latent_distribution.mode(), axis=0)
         else:
             mean = tf.reduce_mean(latent_distribution.mean(), axis=0)
-        check = lambda x: 1 if 1 - eps > x > eps else 0
+        check = lambda x: 1. if 1. - eps > x > eps else 0.
         mbu = {'mean_state_bits_used': tf.reduce_sum(tf.map_fn(check, mean), axis=0).numpy()}
         if self.action_discretizer:
             mean = tf.reduce_mean(
