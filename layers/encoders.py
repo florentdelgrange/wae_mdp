@@ -168,17 +168,34 @@ class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):
         if state is None:
             raise ValueError("a state to encode should be provided.")
 
-        distribution = super(
+        d2 = super(
             AutoRegressiveStateEncoderNetwork, self
         ).discrete_distribution(conditional_input=state)
+
+        def mode(name='mode', **kwargs):
+            d2_sample = d2.sample()
+            return tfd.Independent(
+                tfd.Bernoulli(logits=self.get_logits(state, d2_sample, include_label=False)),
+                reinterpreted_batch_ndims=1
+            ).mode(name=name, **kwargs)
+        d2.mode = mode
 
         if label is not None:
             d1 = tfd.Independent(
                 tfd.Deterministic(loc=label),
                 reinterpreted_batch_ndims=1)
-            return tfd.Blockwise([d1, distribution])
-        else:
+
+            def mode(name='mode', **kwargs):
+                return tf.concat([
+                    d1.mode(name='label_' + name, **kwargs),
+                    d2.mode(name='latent_state_' + name, **kwargs)],
+                    axis=-1)
+
+            distribution = tfd.Blockwise([d1, d2])
+            distribution.mode = mode
             return distribution
+        else:
+            return d2
 
     def get_logits(
             self,
