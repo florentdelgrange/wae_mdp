@@ -526,12 +526,20 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 loc=loc,
                 scale_diag=tf.ones(tf.shape(loc)) * 1e-6))
 
-    def discrete_latent_steady_state_distribution(self, *args, **kwargs) -> tfd.Distribution:
-        return self.latent_stationary_network.discrete_distribution(*args, **kwargs)
+    def discrete_latent_steady_state_distribution(
+            self,
+            batch_size: Optional[int] = None,
+            *args, **kwargs) -> tfd.Distribution:
+        if batch_size is None:
+            return self.latent_stationary_network.discrete_distribution(*args, **kwargs)
+        else:
+            return tfd.BatchBroadcast(
+                self.latent_stationary_network.discrete_distribution(*args, **kwargs),
+                with_shape=[batch_size])
 
     def relaxed_latent_steady_state_distribution(
             self,
-            batch_size: Optional = None,
+            batch_size: Optional[int] = None,
             *args, **kwargs
     ) -> tfd.Distribution:
         if batch_size is None:
@@ -1015,27 +1023,24 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             next_label, tf.cast(self.binary_encode_state(next_state).sample(), tf.float32)
         ], axis=-1)
         if self.encode_action:
-            latent_action = self.discrete_action_encoding(latent_state, action).sample()
+            latent_action = tf.cast(self.discrete_action_encoding(latent_state, action).sample(), tf.float32)
         else:
             latent_action = tf.cast(self.discrete_latent_policy(latent_state).sample(), tf.float32)
 
         # latent steady-state distribution
-        (stationary_latent_state,
-         stationary_latent_action,
-         next_stationary_latent_state) = tfd.JointDistributionSequential([
-            self.discrete_latent_steady_state_distribution(),
-            lambda _latent_state: self.discrete_latent_policy(_latent_state),
-            lambda _latent_action, _latent_state: self.discrete_latent_transition(
-                _latent_state,
-                _latent_action),
-        ]).sample(batch_size)
+        stationary_latent_state = self.discrete_latent_steady_state_distribution().sample(batch_size)
+        stationary_latent_action = self.discrete_latent_policy(stationary_latent_state).sample()
+        next_stationary_latent_state = self.discrete_latent_transition(
+            latent_state=stationary_latent_state,
+            latent_action=stationary_latent_action
+        ).sample()
         next_stationary_latent_state = tf.cast(next_stationary_latent_state, tf.float32)
 
         # next latent state from the latent transition function
         next_transition_latent_state = self.discrete_latent_transition(
             latent_state,
             latent_action,
-        ).sample(batch_size)
+        ).sample()
 
         # reconstruction loss
         # the reward as well as the state and action reconstruction functions are deterministic
@@ -1050,7 +1055,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 next_latent_state) if self.encode_action else
             tfd.Deterministic(loc=self.markov_chain_reward_distribution(latent_state, next_latent_state).mean()),
             self.decode_state(next_latent_state)
-        ]).sample(batch_size)
+        ]).sample()
 
         reconstruction_loss = (
                 tf.norm(action - _action, ord=2, axis=1) +
