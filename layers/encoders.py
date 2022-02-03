@@ -60,22 +60,27 @@ class StateEncoderNetwork(DiscreteDistributionModel):
     ) -> tfd.Distribution:
 
         logits = self(state)
-        if label is not None:
-            logits = tf.concat([(label * 2. - 1.) * 1e2, logits], axis=-1)
         if logistic:
-            return tfd.TransformedDistribution(
+            distribution = tfd.TransformedDistribution(
                 distribution=tfd.Logistic(
                     loc=logits / temperature,
-                    scale=1. / temperature,
+                    scale=tf.pow(temperature, -1.),
                     allow_nan_stats=False),
                 bijector=tfb.Sigmoid())
         else:
-            return tfd.Independent(
+            distribution = tfd.Independent(
                 tfd.RelaxedBernoulli(
                     logits=logits,
                     temperature=temperature,
                     allow_nan_stats=False),
                 reinterpreted_batch_ndims=1)
+        if label is not None:
+            d1 = tfd.Independent(
+                tfd.Deterministic(loc=label),
+                reinterpreted_batch_ndims=1)
+            return tfd.Blockwise([d1, distribution])
+        else:
+            return distribution
 
     def discrete_distribution(
             self,
@@ -83,13 +88,28 @@ class StateEncoderNetwork(DiscreteDistributionModel):
             label: Optional[Float] = None,
     ) -> tfd.Distribution:
         logits = self(state)
-        if label is not None:
-            logits = tf.concat([(label * 2. - 1.) * 1e2, logits], axis=-1)
-        return tfd.Independent(
+        distribution = tfd.Independent(
             tfd.Bernoulli(
                 logits=logits,
                 allow_nan_stats=False),
             reinterpreted_batch_ndims=1)
+        if label is not None:
+            d1 = tfd.Independent(
+                tfd.Deterministic(loc=label),
+                reinterpreted_batch_ndims=1)
+            return tfd.Blockwise([d1, distribution])
+        else:
+            return distribution
+
+    def get_logits(self, state: Float, *args, **kwargs):
+        return self(state)
+
+    def get_config(self):
+        config = super(AutoRegressiveStateEncoderNetwork, self).get_config()
+        config.update({
+            "get_logits": self.get_logits,
+        })
+        return config
 
 
 class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):
@@ -117,6 +137,7 @@ class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):
             time_stacked_lstm_units=time_stacked_lstm_units,
             pre_processing_network=state_encoder_pre_processing_network,
             name='autoregressive_state_encoder')
+        self._atomic_props_dims = atomic_props_dims
 
     def relaxed_distribution(
             self,
@@ -160,15 +181,24 @@ class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):
         else:
             return distribution
 
-    def get_logits(self, state: Float, latent_state: Float) -> Float:
+    def get_logits(
+            self,
+            state: Float,
+            latent_state: Float,
+            include_label: bool = True,
+            *args, **kwargs
+    ) -> Float:
+        if include_label:
+            latent_state = latent_state[..., self._atomic_props_dims:]
         if self.pre_process_input:
             state = self._preprocess_fn(state)
-        return self._made(latent_state, conditional_input=state)
+        return self._output_softclip(self._made(latent_state, conditional_input=state)[..., 0])
 
     def get_config(self):
         config = super(AutoRegressiveStateEncoderNetwork, self).get_config()
         config.update({
-            "get_logits": self.get_logits
+            "_atomic_props_dims": self._atomic_props_dims,
+            "get_logits": self.get_logits,
         })
         return config
 
