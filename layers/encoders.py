@@ -7,7 +7,10 @@ import tensorflow_probability.python.bijectors as tfb
 import tensorflow_probability.python.distributions as tfd
 from tf_agents.typing.types import Float
 
+from layers.autoregressive_bernoulli import AutoRegressiveBernoulliNetwork
 from layers.base_models import DiscreteDistributionModel
+from wasserstein_mdp import WassersteinMarkovDecisionProcess
+scan_model = WassersteinMarkovDecisionProcess._scan_model
 
 
 class StateEncoderNetwork(DiscreteDistributionModel):
@@ -19,6 +22,7 @@ class StateEncoderNetwork(DiscreteDistributionModel):
             latent_state_size: int,
             atomic_props_dims: int,
             time_stacked_states: bool,
+            time_stacked_lstm_units: int = 128,
             output_softclip: Callable[[Float], Float] = tfb.Identity(),
             state_encoder_pre_processing_network: Optional[tfk.Model] = None,
     ):
@@ -27,7 +31,7 @@ class StateEncoderNetwork(DiscreteDistributionModel):
                 encoder = tfkl.TimeDistributed(state_encoder_pre_processing_network)(state)
             else:
                 encoder = state
-            encoder = tfkl.LSTM(units=self.time_stacked_lstm_units)(encoder)
+            encoder = tfkl.LSTM(units=time_stacked_lstm_units)(encoder)
             encoder = state_encoder_network(encoder)
         else:
             if state_encoder_pre_processing_network is not None:
@@ -71,7 +75,7 @@ class StateEncoderNetwork(DiscreteDistributionModel):
                     logits=logits,
                     temperature=temperature,
                     allow_nan_stats=False),
-            reinterpreted_batch_ndims=1)
+                reinterpreted_batch_ndims=1)
 
     def discrete_distribution(
             self,
@@ -85,8 +89,88 @@ class StateEncoderNetwork(DiscreteDistributionModel):
             tfd.Bernoulli(
                 logits=logits,
                 allow_nan_stats=False),
-        reinterpreted_batch_ndims=1)
+            reinterpreted_batch_ndims=1)
 
+
+class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):
+    def __init__(
+            self,
+            state: tfkl.Input,
+            state_encoder_network: tfk.Model,
+            latent_state_size: int,
+            atomic_props_dims: int,
+            time_stacked_states: bool,
+            temperature: Float,
+            time_stacked_lstm_units: int = 128,
+            output_softclip: Callable[[Float], Float] = tfb.Identity(),
+            state_encoder_pre_processing_network: Optional[tfk.Model] = None,
+    ):
+        hidden_units, activation = scan_model(state_encoder_network)
+        super(AutoRegressiveBernoulliNetwork, self).__init__(
+            event_shape=(latent_state_size - atomic_props_dims, ),
+            activation=activation,
+            hidden_units=hidden_units,
+            conditional_event_shape=state.shape[1:],
+            temperature=temperature,
+            output_softclip=output_softclip,
+            time_stacked_input=time_stacked_states,
+            time_stacked_lstm_units=time_stacked_lstm_units,
+            pre_processing_network=state_encoder_pre_processing_network,
+            name='autoregressive_state_encoder')
+
+    def relaxed_distribution(
+            self,
+            state: Optional[Float] = None,
+            label: Optional[Float] = None,
+            *args,  **kwargs
+    ) -> tfd.Distribution:
+        if state is None:
+            raise ValueError("a state to encode should be provided.")
+
+        distribution = super(
+            AutoRegressiveStateEncoderNetwork, self
+        ).relaxed_distribution(conditional_input=state)
+
+        if label is not None:
+            d1 = tfd.Independent(
+                tfd.Deterministic(loc=label),
+                reinterpreted_batch_ndims=1)
+            return tfd.Blockwise([d1, distribution])
+        else:
+            return distribution
+
+    def discrete_distribution(
+            self,
+            state: Optional[Float] = None,
+            label: Optional[Float] = None,
+            *args, **kwargs
+    ) -> tfd.Distribution:
+        if state is None:
+            raise ValueError("a state to encode should be provided.")
+
+        distribution = super(
+            AutoRegressiveStateEncoderNetwork, self
+        ).discrete_distribution(conditional_input=state)
+
+        if label is not None:
+            d1 = tfd.Independent(
+                tfd.Deterministic(loc=label),
+                reinterpreted_batch_ndims=1)
+            return tfd.Blockwise([d1, distribution])
+        else:
+            return distribution
+
+    def get_logits(self, state: Float, latent_state: Float) -> Float:
+        if self.pre_process_input:
+            state = self._preprocess_fn(state)
+        return self._made(latent_state, conditional_input=state)
+
+    def get_config(self):
+        config = super(AutoRegressiveStateEncoderNetwork, self).get_config()
+        config.update({
+            "get_logits": self.get_logits
+        })
+        return config
 
 class ActionEncoderNetwork(DiscreteDistributionModel):
 

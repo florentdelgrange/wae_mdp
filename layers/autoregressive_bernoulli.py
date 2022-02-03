@@ -146,10 +146,25 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
             dtype: tf.dtypes = tf.float32,
             name: Optional[str] = None,
             made_name: Optional[str] = None,
+            time_stacked_input: bool = False,
+            time_stacked_lstm_units: int = 128,
+            pre_processing_network: Optional[tfk.Model] = None,
     ):
         conditional = conditional_event_shape is not None
+        inputs = None
+        x = None
+        self._preprocess_fn = None
+
         if not conditional:
             conditional_event_shape = (0, )
+        elif time_stacked_input:
+            x = tfk.Input(shape=conditional_event_shape)
+            inputs = [x]
+            if pre_processing_network is not None:
+                x = tfkl.TimeDistributed(pre_processing_network)(x)
+            x = tfkl.LSTM(units=time_stacked_lstm_units)(x)
+            conditional_event_shape = (time_stacked_lstm_units, )
+            self._preprocess_fn = tfk.Model(inputs=inputs, outputs=x, name="autoregressive_input_preprocessor")
 
         logistic_distribution_layer = tfk.Sequential([
             tfkl.InputLayer(input_shape=conditional_event_shape, dtype=dtype, name="logistic_layer_input"),
@@ -160,7 +175,10 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
                         scale=tf.pow(temperature, -1), ),
                     reinterpreted_batch_ndims=1, )),
         ], name="sequential_logistic_distribution_layer")
-        inputs = logistic_distribution_layer.inputs
+
+        if inputs == x is None:
+            inputs = logistic_distribution_layer.inputs
+            x = inputs
 
         made = tfb.AutoregressiveNetwork(
             params=1,
@@ -171,7 +189,7 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
             activation=activation,
             name=made_name)
 
-        x = logistic_distribution_layer(inputs)
+        x = logistic_distribution_layer(x)
         x = AutoregressiveTransform(
             made=made,
             temperature=temperature,
@@ -191,8 +209,12 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
         self._made = made
 
     @property
-    def conditional(self):
+    def conditional(self) -> bool:
         return self._made._conditional
+
+    @property
+    def pre_process_input(self) -> bool:
+        return self._preprocess_fn is not None
 
     def relaxed_distribution(
             self,
@@ -253,7 +275,9 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
             "event_shape": self.event_shape,
             "_temperature": self._temperature,
             "_output_softclip": self._output_softclip,
-            "conditional": self.conditional})
+            "conditional": self.conditional,
+            "_preprocess_fn": self._preprocess_fn,
+            "preprocess_input": self.pre_process_input})
         return config
 
 
