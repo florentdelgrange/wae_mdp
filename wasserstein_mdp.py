@@ -1311,11 +1311,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     def mean_latent_bits_used(self, inputs, eps=1e-3, deterministic=True):
         state, label, action, reward, next_state, next_label = inputs[:6]
         latent_state = tf.cast(self.binary_encode_state(state, label).sample(), tf.float32)
-        logits = self.encoder_network.get_logits(state, latent_state)
-        logits = tf.concat([(label * 2. - 1.) * 1e2, logits], axis=-1)
-        latent_distribution = tfd.Independent(
-            tfd.Bernoulli(logits=logits, dtype=tf.float32),
-            reinterpreted_batch_ndims=1)
+        latent_distribution = self.binary_encode_state(state, label)
         if deterministic:
             mean = tf.reduce_mean(latent_distribution.mode(), axis=0)
         else:

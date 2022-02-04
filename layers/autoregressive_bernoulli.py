@@ -1,3 +1,4 @@
+from collections import namedtuple
 from typing import Union, Tuple, Callable, Optional
 
 import tensorflow as tf
@@ -6,7 +7,7 @@ from tensorflow.keras import layers as tfkl
 import tensorflow_probability.python.bijectors as tfb
 import tensorflow_probability.python.distributions as tfd
 import tensorflow_probability.python.layers as tfpl
-from tf_agents.typing.types import Float, Int
+from tf_agents.typing.types import Float
 
 from layers.base_models import DiscreteDistributionModel
 
@@ -42,26 +43,30 @@ def discrete_distribution(
         made: tfb.AutoregressiveNetwork,
         output_softclip: Callable[[Float], Float],
         conditional_input: Optional[Float] = None,
-        dtype=tf.float32
+        dtype=tf.float32,
 ) -> tfd.Autoregressive:
     event_shape = made._event_shape
 
+    if conditional_input is None:
+        sample0 = tf.zeros(shape=event_shape, dtype=dtype)
+    else:
+        sample0 = tf.zeros(tf.concat([tf.shape(conditional_input)[:-1], event_shape], axis=0), dtype=dtype)
+
     def distribution_fn(x: Optional[Float] = None):
         if x is None:
-            # enforce distribution0 to forward samples with zero values as input of MADE
-            if conditional_input is None:
-                logits = -10. * tf.ones(shape=event_shape)
-            else:
-                logits = -10. * tf.ones(tf.concat([tf.shape(conditional_input)[:-1], event_shape], axis=0))
+            distribution = tfd.Independent(
+                tfd.Deterministic(loc=sample0),
+                reinterpreted_batch_ndims=1)
         else:
             logits = output_softclip(
-                made(x, conditional_input=conditional_input)[..., 0])
+                tf.unstack(made(x, conditional_input=conditional_input), axis=-1)[0])
+            distribution = tfd.Independent(
+                distribution=tfd.Bernoulli(logits=logits, dtype=dtype),
+                reinterpreted_batch_ndims=1)
 
-        return tfd.Independent(
-            distribution=tfd.Bernoulli(logits=logits, dtype=dtype),
-            reinterpreted_batch_ndims=1)
+        return distribution
 
-    return tfd.Autoregressive(distribution_fn)
+    return tfd.Autoregressive(distribution_fn, sample0=sample0)
 
 
 class AutoregressiveTransform(tfpl.DistributionLambda):
@@ -96,7 +101,7 @@ class AutoregressiveTransform(tfpl.DistributionLambda):
         if self._made._conditional:
             inputs = tfk.Input(input_shape[0][1:], dtype=self.dtype)
             conditional_input = tfk.Input(input_shape[1][1:], dtype=self.dtype)
-            outputs = self._made(inputs, conditional_input=conditional_input)
+            outputs = self._made(inputs, conditional_input=conditional_input)[..., 0]
             outputs = tfkl.Lambda(lambda x: self._output_softclip(x) / self._temperature)(outputs)
             tfk.Model(inputs=[inputs, conditional_input], outputs=outputs)
         else:
@@ -104,7 +109,7 @@ class AutoregressiveTransform(tfpl.DistributionLambda):
                 tfkl.InputLayer(
                     input_shape=input_shape[1:], dtype=self.dtype),
                 self._made,
-                tfkl.Lambda(lambda x: self._output_softclip(x) / self._temperature)
+                tfkl.Lambda(lambda x: self._output_softclip(x[..., 0]) / self._temperature)
             ])
         super(AutoregressiveTransform, self).build(input_shape)
 
@@ -156,14 +161,14 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
         self._preprocess_fn = None
 
         if not conditional:
-            conditional_event_shape = (0, )
+            conditional_event_shape = (0,)
         elif time_stacked_input:
             x = tfk.Input(shape=conditional_event_shape)
             inputs = [x]
             if pre_processing_network is not None:
                 x = tfkl.TimeDistributed(pre_processing_network)(x)
             x = tfkl.LSTM(units=time_stacked_lstm_units)(x)
-            conditional_event_shape = (time_stacked_lstm_units, )
+            conditional_event_shape = (time_stacked_lstm_units,)
             self._preprocess_fn = tfk.Model(inputs=inputs, outputs=x, name="autoregressive_input_preprocessor")
 
         logistic_distribution_layer = tfk.Sequential([
@@ -219,7 +224,7 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
     def relaxed_distribution(
             self,
             conditional_input: Optional[Float] = None,
-            *args,  **kwargs
+            *args, **kwargs
     ) -> tfd.Distribution:
         """
         Construct a distribution whose parameters are produced by a Masked Autoregressive Flow.
@@ -232,10 +237,11 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
                 raise ValueError("You must provide a conditional event.")
             distribution = self(conditional_input, *args, **kwargs)
         else:
-            distribution = self(tf.zeros((0, )), *args, **kwargs)
+            distribution = self(tf.zeros((0,)), *args, **kwargs)
 
         def prob(value, name='prob', **kwargs):
             return tf.exp(distribution.log_prob(value, name=name, **kwargs))
+
         distribution.prob = prob
 
         return distribution
@@ -243,31 +249,12 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
     def discrete_distribution(
             self,
             conditional_input: Optional[Float] = None,
-            *args, **kwargs
     ) -> tfd.Distribution:
-        """
-        Important: to sample from this distribution when a conditional input is provided, the batch size of the
-        conditional need to be provided in parameter of the tfd.Distribution.sample() function:
-        ```python
-        event_shape = (3, )
-        cond_shape = (5, )
-        batch_size = 4
-
-        autoregressive_model = AutoRegressiveBernoulliNetwork(
-            ..., event_shape=event_shape, conditional_event_shape=cond_shape)
-        conditional_samples = tf.random.uniform((batch_size, ) + cond_shape)
-        autoregressive_model.relaxed_distribution(
-            temperature=.5,
-            conditional_input=conditional_samples
-        ).sample()  # no need to provide batch_size here
-
-        autoregressive_model.discrete_distribution(
-            conditional_input=conditional_samples
-        ).sample(batch_size)  # here, batch_size need to be provided;
-        # note that batch_size must always match tf.shape(conditional_samples)[0]
-        ```
-        """
-        return discrete_distribution(self._made, self._output_softclip, conditional_input, dtype=self.dtype)
+        return discrete_distribution(
+            self._made,
+            self._output_softclip,
+            conditional_input,
+            dtype=self.dtype,)
 
     def get_config(self):
         config = super(AutoRegressiveBernoulliNetwork, self).get_config()
