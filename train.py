@@ -10,7 +10,7 @@ import tensorflow as tf
 import tf_agents
 from absl import app, flags
 from tensorflow.keras.layers import Dense
-from tensorflow.python.keras import Sequential
+from tensorflow.keras import Sequential
 import tensorflow_probability as tfp
 import tensorflow_probability.python.bijectors as tfb
 from tf_agents import specs
