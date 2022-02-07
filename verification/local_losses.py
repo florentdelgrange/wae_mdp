@@ -129,9 +129,12 @@ def estimate_local_losses_from_samples(
         dataset_iterator = iter(dataset)
 
         state, label, latent_action, reward, next_state, next_label = next(dataset_iterator)
-        latent_state = state_embedding_function(state, label)
+        latent_state = tf.cast(state_embedding_function(state, label), tf.int32)
         next_latent_state_no_label = state_embedding_function(next_state, None)
-        next_latent_state = tf.concat([tf.cast(next_label, dtype=tf.int32), next_latent_state_no_label], axis=-1)
+        next_latent_state = tf.concat(
+                [tf.cast(next_label, dtype=tf.int32),
+                 tf.cast(next_latent_state_no_label, dtype=tf.int32)],
+                axis=-1)
 
         return namedtuple(
             'ErgodicMDPTransitionSample',

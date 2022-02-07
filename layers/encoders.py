@@ -1,4 +1,5 @@
 from typing import Optional, Callable, Union, Tuple
+import enum
 
 import tensorflow as tf
 import tensorflow.keras as tfk
@@ -11,6 +12,10 @@ from layers.autoregressive_bernoulli import AutoRegressiveBernoulliNetwork
 from layers.base_models import DiscreteDistributionModel
 from util.io import scan_model
 
+class StateEncoderType(enum.Enum):
+    NORMAL = enum.auto()
+    AUTOREGRESSIVE = enum.auto()
+    LSTM = enum.auto()
 
 class StateEncoderNetwork(DiscreteDistributionModel):
 
@@ -27,6 +32,14 @@ class StateEncoderNetwork(DiscreteDistributionModel):
             lstm_output: bool = False,
     ):
         hidden_units, activation = scan_model(state_encoder_network)
+        n_logits = (latent_state_size - atomic_props_dims)
+        state_encoder_network = tfk.Sequential(name="state_encoder_body")
+
+        for i, units in enumerate(hidden_units):
+            if i == len(hidden_units) - 1:
+                units = units // n_logits * n_logits
+            state_encoder_network.add(tfkl.Dense(units, activation))
+
         if time_stacked_states:
             if state_encoder_pre_processing_network is not None:
                 encoder = tfkl.TimeDistributed(state_encoder_pre_processing_network)(state)
@@ -42,12 +55,7 @@ class StateEncoderNetwork(DiscreteDistributionModel):
             encoder = state_encoder_network(_state)
 
         if lstm_output:
-            units = (latent_state_size - atomic_props_dims)
-            encoder = tfkl.Dense(
-                units=hidden_units[-1] // units * units,
-                activation=activation
-            )(encoder)
-            encoder = tfkl.Reshape(target_shape=(units, hidden_units[-1] // units))(encoder)
+            encoder = tfkl.Reshape(target_shape=(n_logits, hidden_units[-1] // n_logits))(encoder)
             encoder = tfkl.LSTM(units=1, activation=output_softclip, return_sequences=True)(encoder)
             encoder = tfkl.Reshape(target_shape=(latent_state_size - atomic_props_dims,))(encoder)
         else:

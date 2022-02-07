@@ -20,7 +20,7 @@ from layers.autoregressive_bernoulli import MaskedAutoregressiveFlowDistribution
     AutoRegressiveBernoulliNetwork
 from layers.latent_policy import LatentPolicyNetwork
 from layers.decoders import RewardNetwork, ActionReconstructionNetwork, StateReconstructionNetwork
-from layers.encoders import StateEncoderNetwork, ActionEncoderNetwork, AutoRegressiveStateEncoderNetwork
+from layers.encoders import StateEncoderNetwork, ActionEncoderNetwork, AutoRegressiveStateEncoderNetwork, StateEncoderType
 from layers.lipschitz_functions import SteadyStateLipschitzFunction, TransitionLossLipschitzFunction
 from layers.steady_state_network import SteadyStateNetwork
 from util.io import dataset_generator, scan_model
@@ -121,6 +121,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             squared_wasserstein: bool = False,
             n_critic: int = 5,
             trainable_prior: bool = True,
+            state_encoder_type: StateEncoderType = StateEncoderType.AUTOREGRESSIVE
     ):
         super(WassersteinMarkovDecisionProcess, self).__init__(
             state_shape=state_shape, action_shape=action_shape, reward_shape=reward_shape, label_shape=label_shape,
@@ -187,16 +188,30 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             next_latent_state = tfkl.Input(shape=(self.latent_state_size,), name='next_latent_state')
 
             # state encoder network
-            self.state_encoder_network = AutoRegressiveStateEncoderNetwork(
-                state=state,
-                state_encoder_network=state_encoder_network,
-                latent_state_size=self.latent_state_size,
-                atomic_props_dims=self.atomic_props_dims,
-                time_stacked_states=self.time_stacked_states,
-                temperature=self.state_encoder_temperature,
-                time_stacked_lstm_units=self.time_stacked_lstm_units,
-                state_encoder_pre_processing_network=state_encoder_pre_processing_network,
-                output_softclip=self.softclip)
+            if state_encoder_type is StateEncoderType.AUTOREGRESSIVE:
+                hidden_units, activation = scan_model(state_encoder_network)
+                self.state_encoder_network = AutoRegressiveStateEncoderNetwork(
+                    state_shape=state_shape,
+                    activation=activation,
+                    hidden_units=hidden_units,
+                    latent_state_size=self.latent_state_size,
+                    atomic_props_dims=self.atomic_props_dims,
+                    time_stacked_states=self.time_stacked_states,
+                    temperature=self.state_encoder_temperature,
+                    time_stacked_lstm_units=self.time_stacked_lstm_units,
+                    state_encoder_pre_processing_network=state_encoder_pre_processing_network,
+                    output_softclip=self.softclip)
+            else:
+                self.state_encoder_network = StateEncoderNetwork(
+                    state=state,
+                    state_encoder_network=state_encoder_network,
+                    latent_state_size=self.latent_state_size,
+                    atomic_props_dims=self.atomic_props_dims,
+                    time_stacked_states=self.time_stacked_states,
+                    time_stacked_lstm_units=self.time_stacked_lstm_units,
+                    state_encoder_pre_processing_network=state_encoder_pre_processing_network,
+                    output_softclip=self.softclip,
+                    lstm_output=state_encoder_type is StateEncoderType.LSTM)
             # action encoder network
             if self.action_discretizer and self.encode_action:
                 self.action_encoder_network = ActionEncoderNetwork(
@@ -274,7 +289,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 next_latent_state=next_latent_state,
                 transition_loss_lipschitz_network=transition_loss_lipschitz_network)
 
-            if debug:
+            if debug or True:
                 self.state_encoder_network.summary()
                 if self.action_discretizer and self.encode_action:
                     self.action_encoder_network.summary()
