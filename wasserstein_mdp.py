@@ -328,14 +328,14 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             'latent_policy_entropy': Mean('latent_policy_entropy'),
             'steady_state_regularizer': Mean('steady_state_wasserstein_regularizer'),
             'gradient_penalty': Mean('gradient_penalty'),
-            'state_encoder_entropy': Mean('state_encoder_entropy'),
-            'latent_sationary_distribution_entropy': Mean('latent_sationary_distribution_entropy'),
+            'marginal_state_encoder_entropy': Mean('state_encoder_entropy'),
+            # 'latent_sationary_distribution_entropy': Mean('latent_sationary_distribution_entropy'),
             'entropy_regularizer': Mean('entropy_regularizer'),
             'transition_log_probs': Mean('transition_log_probs'),
             'binary_encoding_log_probs': Mean('binary_encoding_log_probs'),
         }
         if self.encode_action:
-            self.loss_metrics['action_encoder_entropy'] = Mean('action_encoder_entropy')
+            self.loss_metrics['marginal_action_encoder_entropy'] = Mean('action_encoder_entropy')
         else:
             self.loss_metrics['marginal_variance'] = Mean(name='marginal_variance')
 
@@ -613,13 +613,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         # encoder sampling
         latent_state = self.relaxed_state_encoding(
             state,
+            label=label,
             temperature=self.state_encoder_temperature,
-            label=label
         ).sample()
         next_latent_state = self.relaxed_state_encoding(
             next_state,
+            label=next_label,
             temperature=self.state_encoder_temperature,
-            label=label
         ).sample()
 
         if self.encode_action:
@@ -774,13 +774,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.loss_metrics['steady_state_regularizer'](steady_state_regularizer)
         self.loss_metrics['gradient_penalty'](
             steady_state_gradient_penalty + transition_loss_gradient_penalty)
-        #  self.loss_metrics['state_encoder_entropy'](
-        #      tfd.Independent(
-        #          tfd.Bernoulli(
-        #              logits=self.encoder_network.get_logits(
-        #                  state=state,
-        #                  latent_state=latent_state)),
-        #          reinterpreted_batch_ndims=1).entropy())
+        self.loss_metrics['marginal_state_encoder_entropy'](
+                self.marginal_state_encoder_entropy(state, latent_state, sample_probability))
         self.loss_metrics['latent_policy_entropy'](
             self.discrete_latent_policy(latent_state).entropy())
         self.loss_metrics['transition_log_probs'](
@@ -795,8 +790,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 state=state
             ).log_prob(tf.round(latent_state)[..., self.atomic_props_dims:]))
         if self.encode_action:
-            self.loss_metrics['action_encoder_entropy'](
-                self.discrete_action_encoding(latent_state, action).entropy())
+            self.loss_metrics['marginal_action_encoder_entropy'](
+                self.marginal_action_encoder_entropy(latent_state, action))
         else:
             self.loss_metrics['marginal_variance'](marginal_variance)
         self.loss_metrics['entropy_regularizer'](entropy_regularizer)
@@ -903,13 +898,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         batch_size = tf.shape(state)[0]
         # sampling
         # encoders
-        latent_state_distribution = self.binary_encode_state(state)
-        latent_state = tf.concat([
-            label, tf.cast(latent_state_distribution.sample(), tf.float32)
-        ], axis=-1)
-        next_latent_state = tf.concat([
-            next_label, tf.cast(self.binary_encode_state(next_state).sample(), tf.float32)
-        ], axis=-1)
+        latent_state = self.binary_encode_state(state, label).sample()
+        next_latent_state = self.binary_encode_state(next_state, next_label).sample()
         if self.encode_action:
             latent_action = tf.cast(self.discrete_action_encoding(latent_state, action).sample(), tf.float32)
         else:
