@@ -559,143 +559,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 self.latent_stationary_network.relaxed_distribution(*args, **kwargs),
                 with_shape=[batch_size])
 
-    def discrete_marginal_state_encoder_distribution(
-            self,
-            states: Float,
-            labels: Optional[Float] = None,
-            is_weights: Optional[Float] = None,
-    ):
-        logits = self.state_encoder_network(states)
-        batch_size = tf.shape(logits)[0]
-
-        if is_weights is None:
-            mixture_distribution = tfd.Categorical(logits=tf.ones(shape=(batch_size,)))
-        else:
-            mixture_distribution = tfd.Categorical(
-                logits=tf.math.log(
-                    tf.pow(tf.cast(batch_size, tf.float32), -1.) * is_weights + epsilon),
-                allow_nan_stats=False)
-
-        latent_state_distribution = tfd.MixtureSameFamily(
-            mixture_distribution=mixture_distribution,
-            components_distribution=tfd.Independent(
-                tfd.Bernoulli(
-                    logits=logits,
-                    allow_nan_stats=False)))
-
-        if labels is not None:
-            return tfd.JointDistributionSequential([
-                tfd.MixtureSameFamily(
-                    mixture_distribution=mixture_distribution,
-                    components_distribution=tfd.Independent(
-                        tfd.Bernoulli(
-                            logits=(labels * 2. - 1) * 1e2,
-                            allow_nan_stats=False)
-                    ),
-                ),
-                latent_state_distribution
-            ])
-        else:
-            return latent_state_distribution
-
-    def relaxed_marginal_action_encoder_distribution(
-            self,
-            latent_states: Float,
-            actions: Float,
-            temperature: Float = 1e-5,
-            is_weights: Optional[Float] = None,
-    ) -> tfd.Distribution:
-        if self.relaxed_exp_one_hot_action_encoding:
-            logits = tf.math.log(
-                self.relaxed_action_encoding(
-                    latent_states, actions, temperature=temperature
-                ).probs_parameter() + epsilon)
-        else:
-            logits = self.action_encoder_network([latent_states, actions])
-
-        batch_size = tf.shape(logits)[0]
-
-        if debug:
-            tf.print('relaxed marginal actions logits:', logits, summarize=-1)
-
-        if is_weights is None:
-            mixture_distribution = tfd.Categorical(logits=tf.ones(shape=(batch_size,)), allow_nan_stats=False)
-        else:
-            mixture_distribution = tfd.Categorical(
-                logits=tf.math.log(
-                    tf.pow(tf.cast(batch_size, tf.float32), -1.) * is_weights + epsilon),
-                allow_nan_stats=False)
-
-        return tfd.MixtureSameFamily(
-            mixture_distribution=mixture_distribution,
-            components_distribution=tfd.RelaxedOneHotCategorical(
-                logits=logits,
-                temperature=temperature,
-                allow_nan_stats=False),
-            allow_nan_stats=False)
-
-    def relaxed_marginal_state_encoder_distribution(
-            self,
-            states: Float,
-            labels: Optional[Float] = None,
-            temperature: Float = 1e-5,
-            reparameterize: bool = True,
-            logistic: bool = True,
-            is_weights: Optional[Float] = None,
-    ) -> tfd.Distribution:
-        logits = self.state_encoder_network(states)
-        batch_size = tf.shape(logits)[0]
-        reparameterize = reparameterize and labels is None
-
-        if debug:
-            tf.print('relaxed marginal logits:', logits, summarize=-1)
-
-        if is_weights is None:
-            mixture_distribution = tfd.Categorical(logits=tf.ones(shape=(batch_size,)), allow_nan_stats=False)
-        else:
-            mixture_distribution = tfd.Categorical(
-                logits=tf.math.log(tf.pow(tf.cast(batch_size, tf.float32), -1.) * is_weights),
-                allow_nan_stats=False)
-
-        if logistic:
-            latent_state_distribution = tfd.MixtureSameFamily(
-                mixture_distribution=mixture_distribution,
-                components_distribution=tfd.Independent(
-                    tfd.Logistic(
-                        loc=logits / temperature,
-                        scale=1. / temperature,
-                        allow_nan_stats=False)
-                ),
-                reparameterize=reparameterize,
-                allow_nan_stats=False)
-        else:
-            latent_state_distribution = tfd.MixtureSameFamily(
-                mixture_distribution=mixture_distribution,
-                components_distribution=tfd.Independent(
-                    tfd.RelaxedBernoulli(
-                        logits=logits,
-                        temperature=temperature,
-                        validate_args=False,
-                        allow_nan_stats=False)
-                ),
-                reparameterize=reparameterize,
-                allow_nan_stats=False)
-
-        if labels is not None:
-            return tfd.JointDistributionSequential([
-                tfd.MixtureSameFamily(
-                    mixture_distribution=mixture_distribution,
-                    components_distribution=tfd.Independent(
-                        tfd.Bernoulli(
-                            logits=(labels * 2. - 1) * 1e2,
-                            allow_nan_stats=False)
-                    ),
-                    allow_nan_stats=False
-                ), latent_state_distribution
-            ])
-        else:
-            return latent_state_distribution
-
     def action_embedding_function(
             self,
             state: tf.Tensor,
@@ -886,7 +749,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             state=state,
             latent_state=latent_state,
             action=action if self.encode_action else None,
-            sample_probability=sample_probability, )
+            sample_probability=sample_probability,)
 
         # priority support
         if self.priority_handler is not None and sample_key is not None:
@@ -945,18 +808,12 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             'entropy_regularizer': entropy_regularizer if self.entropy_regularizer_scale_factor > epsilon else 0.,
         }
 
-    @tf.function
-    def entropy_regularizer(
+    def marginal_state_encoder_entropy(
             self,
-            state: tf.Tensor,
-            labels: Optional[Float] = None,
-            latent_state: Optional[Float] = None,
-            action: Optional[Float] = None,
+            state: Float,
+            latent_state: Float,
             sample_probability: Optional[Float] = None,
-            *args, **kwargs
-    ):
-        if latent_state is None:
-            raise ValueError("a latent state should be provided")
+    ) -> Float:
         logits = self.state_encoder_network.get_logits(state, latent_state)
         if sample_probability is None:
             regularizer = tf.reduce_mean(
@@ -971,14 +828,39 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 - tf.sigmoid(-logits) * tf.math.log(
                     tf.reduce_mean(tf.expand_dims(is_weights, -1) * tf.sigmoid(-logits), axis=0) + epsilon),
                 axis=0)
-        regularizer = tf.reduce_sum(regularizer)
-        if self.encode_action:
-            regularizer += self.action_entropy_regularizer_scaling * tf.reduce_mean(tfd.Categorical(
+        return tf.reduce_sum(regularizer)
+
+    def marginal_action_encoder_entropy(
+            self,
+            latent_state: Float,
+            action: Float,
+    ) -> Float:
+        if self.encode_action and action is not None:
+            return self.action_entropy_regularizer_scaling * tf.reduce_mean(tfd.Categorical(
                 logits=self.action_encoder_network([latent_state, action])
             ).entropy(), axis=0)
         else:
-            regularizer += tf.reduce_mean(self.discrete_latent_policy(latent_state).entropy())
+            return self.action_entropy_regularizer_scaling * tf.reduce_mean(self.discrete_latent_policy(latent_state).entropy())
 
+    @tf.function
+    def entropy_regularizer(
+            self,
+            state: tf.Tensor,
+            labels: Optional[Float] = None,
+            latent_state: Optional[Float] = None,
+            action: Optional[Float] = None,
+            sample_probability: Optional[Float] = None,
+            include_state_entropy: bool = False,
+            include_action_entropy: bool = True,
+            *args, **kwargs
+    ) -> Float:
+        if latent_state is None:
+            raise ValueError("a latent state should be provided")
+        regularizer = 0.
+        if include_state_entropy:
+            regularizer += self.marginal_state_encoder_entropy(state, latent_state, sample_probability)
+        if include_action_entropy:
+            regularizer += self.marginal_action_encoder_entropy(latent_state, action)
         return regularizer
 
     @tf.function
