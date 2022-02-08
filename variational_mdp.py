@@ -1475,7 +1475,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                     priority_handler.checkpoint(*args, **kwargs)
                     model_manager.save(*args, **kwargs)
 
-                manager = namedtuple('CustomCheckpointManager', ['save'])(_manager_save)
+                manager = namedtuple('CheckpointManagerWithPrioritizedRB', ['save'])(_manager_save)
 
             def close():
                 env.close()
@@ -1501,6 +1501,20 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
             replay_buffer_num_frames = lambda: replay_buffer.num_frames().numpy()
             close = lambda: env.close()
+
+            if manager is not None:
+                model_manager = manager
+                checkpoint_path = os.path.join(manager.directory, 'replay_buffer')
+                rb_checkpointer = tf.train.Checkpoint(replay_buffer)
+                rb_manager = tf.train.CheckpointManager(
+                    checkpoint=rb_checkpointer, directory=checkpoint_path, max_to_keep=1)
+                rb_checkpointer.restore(rb_manager.latest_checkpoint)
+
+                def _manager_save(*args, **kwargs):
+                    rb_manager.save(*args, **kwargs)
+                    model_manager.save(*args, **kwargs)
+
+                manager = namedtuple('CheckpointManagerWithRB', ['save'])(_manager_save)
 
         if replay_buffer_num_frames() < initial_collect_steps:
             print("Initial collect steps...")
