@@ -1,4 +1,3 @@
-from collections import namedtuple
 from typing import Union, Tuple, Callable, Optional
 
 import tensorflow as tf
@@ -116,7 +115,7 @@ class AutoregressiveTransform(tfpl.DistributionLambda):
     def _transform(self, previous_outputs):
         if self._made._conditional:
             distribution, conditional_input = previous_outputs
-            return MaskedAutoregressiveFlowDistributionConditionalWrapper(
+            return ConditionalTransformedDistribution(
                 tfd.TransformedDistribution(
                     bijector=self._maf,
                     distribution=distribution),
@@ -254,7 +253,7 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
             self._made,
             self._output_softclip,
             conditional_input,
-            dtype=self.dtype,)
+            dtype=self.dtype, )
 
     def get_config(self):
         config = super(AutoRegressiveBernoulliNetwork, self).get_config()
@@ -268,12 +267,13 @@ class AutoRegressiveBernoulliNetwork(DiscreteDistributionModel):
         return config
 
 
-class MaskedAutoregressiveFlowDistributionConditionalWrapper(tfd.Distribution):
+class ConditionalTransformedDistribution(tfd.Distribution):
 
     def __init__(
             self,
             masked_autoregressive_flow_transformed_distribution: tfd.TransformedDistribution,
-            conditional: Float
+            conditional: Float,
+            conditional_kwarg='conditional_input'
     ):
         super().__init__(
             masked_autoregressive_flow_transformed_distribution.dtype,
@@ -282,6 +282,7 @@ class MaskedAutoregressiveFlowDistributionConditionalWrapper(tfd.Distribution):
             masked_autoregressive_flow_transformed_distribution.allow_nan_stats)
         self._wrapped_distribution: tfd.TransformedDistribution = masked_autoregressive_flow_transformed_distribution
         self._conditional = conditional
+        self._conditional_kwarg = conditional_kwarg
 
     @property
     def distribution(self):
@@ -315,54 +316,54 @@ class MaskedAutoregressiveFlowDistributionConditionalWrapper(tfd.Distribution):
         return self._wrapped_distribution._call_sample_n(
             sample_shape=sample_shape,
             seed=seed,
-            bijector_kwargs={'conditional_input': self._conditional},
+            bijector_kwargs={self._conditional_kwarg: self._conditional},
             **kwargs)
 
     def _sample_and_log_prob(self, sample_shape, seed, **kwargs):
         return self._wrapped_distribution._sample_and_log_prob(
-            sample_shape, seed, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+            sample_shape, seed, bijector_kwargs={self._conditional_kwarg: self._conditional}, **kwargs)
 
     def _log_prob(self, y, **kwargs):
         return self._wrapped_distribution._log_prob(
-            y, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+            y, bijector_kwargs={self._conditional_kwarg: self._conditional}, **kwargs)
 
     def _prob(self, y, **kwargs):
         return self._wrapped_distribution._prob(
-            y, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+            y, bijector_kwargs={self._conditional_kwarg: self._conditional}, **kwargs)
 
     def _log_cdf(self, y, **kwargs):
         return self._wrapped_distribution._log_cdf(
-            y, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+            y, bijector_kwargs={self._conditional_kwarg: self._conditional}, **kwargs)
 
     def _cdf(self, y, **kwargs):
         return self._wrapped_distribution._cdf(
-            y, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+            y, bijector_kwargs={self._conditional_kwarg: self._conditional}, **kwargs)
 
     def _log_survival_function(self, y, **kwargs):
         return self._wrapped_distribution._log_survival_function(
-            y, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+            y, bijector_kwargs={self._conditional_kwarg: self._conditional}, **kwargs)
 
     def _survival_function(self, y, **kwargs):
         return self._wrapped_distribution._survival_function(
-            y, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+            y, bijector_kwargs={self._conditional_kwarg: self._conditional}, **kwargs)
 
     def _quantile(self, value, **kwargs):
         return self._wrapped_distribution._quantile(
-            value, bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+            value, bijector_kwargs={self._conditional_kwarg: self._conditional}, **kwargs)
 
     def _mode(self, **kwargs):
-        return self._wrapped_distribution._mode(bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+        return self._wrapped_distribution._mode(bijector_kwargs={self._conditional_kwarg: self._conditional}, **kwargs)
 
     def _mean(self, **kwargs):
-        return self._wrapped_distribution._mean(bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+        return self._wrapped_distribution._mean(bijector_kwargs={self._conditional_kwarg: self._conditional}, **kwargs)
 
     def _stddev(self, **kwargs):
         return self._wrapped_distribution._stddev(
-            bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+            bijector_kwargs={self._conditional_kwarg: self._conditional}, **kwargs)
 
     def _entropy(self, **kwargs):
         return self._wrapped_distribution._entropy(
-            bijector_kwargs={'conditional_input': self._conditional}, **kwargs)
+            bijector_kwargs={self._conditional_kwarg: self._conditional}, **kwargs)
 
     # pylint: disable=not-callable
     def _default_event_space_bijector(self):
