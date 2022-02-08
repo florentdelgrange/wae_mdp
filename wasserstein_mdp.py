@@ -16,7 +16,7 @@ from tf_agents.environments import tf_py_environment, tf_environment
 
 import variational_action_discretizer
 from layers import autoregressive_bernoulli
-from layers.autoregressive_bernoulli import MaskedAutoregressiveFlowDistributionConditionalWrapper, \
+from layers.autoregressive_bernoulli import ConditionalTransformedDistribution, \
     AutoRegressiveBernoulliNetwork
 from layers.latent_policy import LatentPolicyNetwork
 from layers.decoders import RewardNetwork, ActionReconstructionNetwork, StateReconstructionNetwork
