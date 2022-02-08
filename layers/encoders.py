@@ -12,7 +12,7 @@ from layers.autoregressive_bernoulli import AutoRegressiveBernoulliNetwork
 from layers.base_models import DiscreteDistributionModel
 from util.io import scan_model
 
-class StateEncoderType(enum.Enum):
+class EncodingType(enum.Enum):
     NORMAL = enum.auto()
     AUTOREGRESSIVE = enum.auto()
     LSTM = enum.auto()
