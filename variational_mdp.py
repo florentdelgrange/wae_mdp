@@ -1485,7 +1485,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
         else:
             num_parallel_environments = env.batch_size
             collect_steps_per_iteration = collect_steps_per_iteration // num_parallel_environments
-            initial_collect_steps = initial_collect_steps // num_parallel_environments
+            initial_collect_steps = initial_collect_steps
             replay_buffer_capacity = replay_buffer_capacity // num_parallel_environments
 
             replay_buffer = tf_uniform_replay_buffer.TFUniformReplayBuffer(
@@ -1574,7 +1574,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             logs: bool = True,
             log_dir: str = 'log',
             log_name: str = 'vae_training',
-            annealing_period: int = 0,
+            annealing_period: int = 1,
             start_annealing_step: int = 0,
             reset_kl_scale_factor: Optional[float] = None,
             reset_entropy_regularizer: Optional[float] = None,
@@ -1783,10 +1783,11 @@ class VariationalMarkovDecisionProcess(tf.Module):
             # Collect a few steps and save them to the replay buffer.
             driver.run(env.current_time_step())
 
-            if tf.logical_and(tf.equal(global_step, 0), save_directory is not None):
+            if tf.logical_and(tf.equal(global_step, 100), save_directory is not None):
                 _time = time.time()
                 print("Saving base model")
-                save(os.path.join(log_name, 'base'))
+                # save(os.path.join(log_name, 'base'))
+                # tf.saved_model.save(self, os.path.join(save_directory, 'models', log_name, 'base'))
                 save_time = time.time() - _time
                 save_time += 10.  # epsilon
 
@@ -1901,8 +1902,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
         metrics_key_values = [('step', global_step.numpy())] + \
                              [(key, value) for key, value in loss.items()] + \
                              [(key, value.result()) for key, value in self.loss_metrics.items()] + \
-                             [(key, value) for key, value in additional_metrics.items()] + \
-                             [(key, value) for key, value in self.mean_latent_bits_used(dataset_batch).items()]
+                             [(key, value) for key, value in additional_metrics.items()]
+                             # [(key, value) for key, value in self.mean_latent_bits_used(dataset_batch).items()]
         if annealing_period != 0:
             metrics_key_values.append(('t_1', self.encoder_temperature))
             metrics_key_values.append(('t_2', self.prior_temperature))
