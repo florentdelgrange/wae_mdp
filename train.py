@@ -27,6 +27,7 @@ import variational_mdp
 import variational_action_discretizer
 import wasserstein_mdp
 import reinforcement_learning.environments
+from layers.encoders import EncodingType
 
 FLAGS = flags.FLAGS
 
@@ -169,7 +170,8 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
     wae_name = 'wae_LS{}_TD{:.2f}-{:.2f}_activ={}_opt={}_lr={:g}_seed={:d}' \
                '_ER={:g}_decay={:g}' \
                '_SR={:g}_GP={:g}' \
-               '_TL={:g}_GP={:g}_n_critic={:d}'.format(
+               '_TL={:g}_GP={:g}_n_critic={:d}' \
+               '_encoding_type={}'.format(
         params['latent_size'],
         params['state_encoder_temperature'],
         params['state_prior_temperature'],
@@ -183,12 +185,13 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
         wasserstein_regularizer.stationary.gradient_penalty_multiplier,
         wasserstein_regularizer.local_transition_loss.scaling,
         wasserstein_regularizer.local_transition_loss.gradient_penalty_multiplier,
-        params['n_critic'])
+        params['n_critic'],
+        params['state_encoder_type'])
     if params['wasserstein_optimizer'] is not None:
         wae_name += '_wopt={}_lr={:g}'.format(
                 params['wasserstein_optimizer'], params['wasserstein_learning_rate'])
     if params['squared_wasserstein']:
-        wae_name += '_2W'
+        wae_name += '_W2'
     if not params['trainable_prior']:
         wae_name += '_prior_fixed'
     if params['action_discretizer']:
@@ -530,6 +533,10 @@ def main(argv):
             squared_wasserstein=params['squared_wasserstein'],
             n_critic=params['n_critic'],
             trainable_prior=params['trainable_prior'],
+            state_encoder_type={
+                'autoregressive': EncodingType.AUTOREGRESSIVE,
+                'lstm': EncodingType.LSTM,
+                'normal': EncodingType.NORMAL}[params['state_encoder_type']],
         )
         models = [wae_mdp]
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
@@ -1120,6 +1127,11 @@ if __name__ == '__main__':
         default=True,
         help='Whether to allow for training the latent steady state distribution or not.',
     )
+    flags.DEFINE_enum(
+        'state_encoder_type',
+        'autoregressive',
+        ['autoregressive', 'lstm', 'normal'],
+        'State encoder type, defining which technique to use to encode states. If normal, independent logits are generated.')
 
     FLAGS = flags.FLAGS
 
