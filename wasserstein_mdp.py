@@ -20,7 +20,7 @@ from layers.autoregressive_bernoulli import ConditionalTransformedDistribution, 
     AutoRegressiveBernoulliNetwork
 from layers.latent_policy import LatentPolicyNetwork
 from layers.decoders import RewardNetwork, ActionReconstructionNetwork, StateReconstructionNetwork
-from layers.encoders import StateEncoderNetwork, ActionEncoderNetwork, AutoRegressiveStateEncoderNetwork, StateEncoderType
+from layers.encoders import StateEncoderNetwork, ActionEncoderNetwork, AutoRegressiveStateEncoderNetwork, EncodingType
 from layers.lipschitz_functions import SteadyStateLipschitzFunction, TransitionLossLipschitzFunction
 from layers.steady_state_network import SteadyStateNetwork
 from util.io import dataset_generator, scan_model
@@ -121,7 +121,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             squared_wasserstein: bool = False,
             n_critic: int = 5,
             trainable_prior: bool = True,
-            state_encoder_type: StateEncoderType = StateEncoderType.AUTOREGRESSIVE
+            state_encoder_type: EncodingType = EncodingType.AUTOREGRESSIVE,
     ):
         super(WassersteinMarkovDecisionProcess, self).__init__(
             state_shape=state_shape, action_shape=action_shape, reward_shape=reward_shape, label_shape=label_shape,
@@ -175,9 +175,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         self._sample_additional_transition = False
         # softclipping for latent states logits; 3 offers an probability error of about 5e-2
-        scale = 3.
+        scale = 10.
         # self.softclip = tfb.Chain([tfb.Scale(scale), tfb.Tanh(), tfb.Scale(1. / scale)], name="softclip")
-        self.softclip = tfb.SoftClip(low=-scale, high=scale)
+        # self.softclip = tfb.SoftClip(low=-scale, high=scale)
+        self.softclip = tfb.Identity()
 
         if not pre_loaded_model:
 
@@ -188,7 +189,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             next_latent_state = tfkl.Input(shape=(self.latent_state_size,), name='next_latent_state')
 
             # state encoder network
-            if state_encoder_type is StateEncoderType.AUTOREGRESSIVE:
+            if state_encoder_type is EncodingType.AUTOREGRESSIVE:
                 hidden_units, activation = scan_model(state_encoder_network)
                 self.state_encoder_network = AutoRegressiveStateEncoderNetwork(
                     state_shape=state_shape,
@@ -211,7 +212,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     time_stacked_lstm_units=self.time_stacked_lstm_units,
                     state_encoder_pre_processing_network=state_encoder_pre_processing_network,
                     output_softclip=self.softclip,
-                    lstm_output=state_encoder_type is StateEncoderType.LSTM)
+                    lstm_output=state_encoder_type is EncodingType.LSTM)
             # action encoder network
             if self.action_discretizer and self.encode_action:
                 self.action_encoder_network = ActionEncoderNetwork(
@@ -330,6 +331,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             'state_encoder_entropy': Mean('state_encoder_entropy'),
             'latent_sationary_distribution_entropy': Mean('latent_sationary_distribution_entropy'),
             'entropy_regularizer': Mean('entropy_regularizer'),
+            'transition_log_probs': Mean('transition_log_probs'),
+            'binary_encoding_log_probs': Mean('binary_encoding_log_probs'),
         }
         if self.encode_action:
             self.loss_metrics['action_encoder_entropy'] = Mean('action_encoder_entropy')
@@ -648,7 +651,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             latent_state,
             latent_action,
         ).sample()
-        # next_transition_latent_state = next_latent_state
 
         # reconstruction loss
         # the reward as well as the state and action reconstruction functions are deterministic
@@ -681,7 +683,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 self.norm(next_state - _next_state, axis=1)
         )
         if self.squared_wasserstein or not self.encode_action:
-            reconstruction_loss = reconstruction_loss ** 2
+            reconstruction_loss = tf.square(reconstruction_loss)
 
         if not self.encode_action:
             # marginal variance of the reconstruction
@@ -772,15 +774,26 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.loss_metrics['steady_state_regularizer'](steady_state_regularizer)
         self.loss_metrics['gradient_penalty'](
             steady_state_gradient_penalty + transition_loss_gradient_penalty)
-        self.loss_metrics['state_encoder_entropy'](
-            tfd.Independent(
-                tfd.Bernoulli(
-                    logits=self.encoder_network.get_logits(
-                        state=state,
-                        latent_state=latent_state)),
-                reinterpreted_batch_ndims=1).entropy())
+        #  self.loss_metrics['state_encoder_entropy'](
+        #      tfd.Independent(
+        #          tfd.Bernoulli(
+        #              logits=self.encoder_network.get_logits(
+        #                  state=state,
+        #                  latent_state=latent_state)),
+        #          reinterpreted_batch_ndims=1).entropy())
         self.loss_metrics['latent_policy_entropy'](
             self.discrete_latent_policy(latent_state).entropy())
+        self.loss_metrics['transition_log_probs'](
+            self.discrete_latent_transition(
+                latent_state=tf.round(latent_state),
+                latent_action=tf.one_hot(
+                    tf.argmax(latent_action, axis=-1),
+                    depth=self.number_of_discrete_actions)
+            ).log_prob(tf.round(next_latent_state)))
+        self.loss_metrics['binary_encoding_log_probs'](
+            self.binary_encode_state(
+                state=state
+            ).log_prob(tf.round(latent_state)[..., self.atomic_props_dims:]))
         if self.encode_action:
             self.loss_metrics['action_encoder_entropy'](
                 self.discrete_action_encoding(latent_state, action).entropy())
@@ -1207,8 +1220,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
     def mean_latent_bits_used(self, inputs, eps=1e-3, deterministic=True):
         state, label, action, reward, next_state, next_label = inputs[:6]
-        latent_state = tf.cast(self.binary_encode_state(state, label).sample(), tf.float32)
         latent_distribution = self.binary_encode_state(state, label)
+        latent_state = latent_distribution.sample()
         if deterministic:
             mean = tf.reduce_mean(latent_distribution.mode(), axis=0)
         else:
