@@ -747,9 +747,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             lipschitz_function=lambda _x: self.transition_loss_lipschitz_network(
                 [state, action, latent_state, latent_action, _x]))
 
+        logits = self.state_encoder_network.get_logits(state, latent_state)
         entropy_regularizer = self.entropy_regularizer(
             state=state,
             latent_state=latent_state,
+            logits=logits,
             action=action if self.encode_action else None,
             sample_probability=sample_probability,)
 
@@ -775,7 +777,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.loss_metrics['gradient_penalty'](
             steady_state_gradient_penalty + transition_loss_gradient_penalty)
         self.loss_metrics['marginal_state_encoder_entropy'](
-                self.marginal_state_encoder_entropy(state, latent_state, sample_probability))
+                self.marginal_state_encoder_entropy(logits=logits, sample_probability=sample_probability))
         self.loss_metrics['latent_policy_entropy'](
             self.discrete_latent_policy(latent_state).entropy())
         self.loss_metrics['transition_log_probs'](
@@ -818,11 +820,19 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
     def marginal_state_encoder_entropy(
             self,
-            state: Float,
-            latent_state: Float,
+            state: Optional[Float] = None,
+            latent_state: Optional[Float] = None,
+            logits: Optional[Float] = None,
             sample_probability: Optional[Float] = None,
     ) -> Float:
-        logits = self.state_encoder_network.get_logits(state, latent_state)
+        
+        if logits is None:
+            if state is None or latent_state is None:
+                raise ValueError("A state and its encoding (i.e., as a latent state) "
+                                 "should be provided when logits are not.")
+
+            logits = self.state_encoder_network.get_logits(state, latent_state)
+
         if sample_probability is None:
             regularizer = tf.reduce_mean(
                 - tf.sigmoid(logits) * tf.math.log(tf.reduce_mean(tf.sigmoid(logits), axis=0) + epsilon)
@@ -844,9 +854,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             action: Float,
     ) -> Float:
         if self.encode_action and action is not None:
-            return self.action_entropy_regularizer_scaling * tf.reduce_mean(tfd.Categorical(
-                logits=self.action_encoder_network([latent_state, action])
-            ).entropy(), axis=0)
+            return self.action_entropy_regularizer_scaling * tf.reduce_mean(
+                    tfd.Categorical(
+                        logits=self.action_encoder_network([latent_state, action])
+                ).entropy(),
+            axis=0)
         else:
             return self.action_entropy_regularizer_scaling * tf.reduce_mean(self.discrete_latent_policy(latent_state).entropy())
 
@@ -856,17 +868,29 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             state: tf.Tensor,
             labels: Optional[Float] = None,
             latent_state: Optional[Float] = None,
+            logits: Optional[Float] = None,
             action: Optional[Float] = None,
             sample_probability: Optional[Float] = None,
-            include_state_entropy: bool = False,
+            include_state_entropy: bool = True,
             include_action_entropy: bool = True,
             *args, **kwargs
     ) -> Float:
         if latent_state is None:
             raise ValueError("a latent state should be provided")
+
         regularizer = 0.
+
         if include_state_entropy:
-            regularizer += self.marginal_state_encoder_entropy(state, latent_state, sample_probability)
+            if logits is None:
+                logits = self.state_encoder_network.get_logits(state, latent_state)
+            regularizer += self.marginal_state_encoder_entropy(
+                logits=logits,
+                sample_probability=sample_probability)
+            regularizer -= tfd.Independent(
+                tfd.Bernoulli(logits=logits),
+                reinterpreted_batch_ndims=1
+            ).entropy()
+
         if include_action_entropy:
             regularizer += self.marginal_action_encoder_entropy(latent_state, action)
         return regularizer
@@ -1128,7 +1152,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         }.items():
             if (
                     variables is not None and
-                    not numerical_error(loss[optimization_direction]) and
+                    (not debug or not numerical_error(loss[optimization_direction])) and
                     (optimization_direction == 'max' or
                      (step % self.n_critic == 0 and optimization_direction == 'min'))
             ):
