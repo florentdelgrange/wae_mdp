@@ -227,10 +227,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             # transition network
             hidden_units, activation = scan_model(transition_network)
             self.transition_network = AutoRegressiveBernoulliNetwork(
-                event_shape=(self.latent_state_size, ),
+                event_shape=(self.latent_state_size,),
                 activation=activation,
                 hidden_units=hidden_units,
-                conditional_event_shape=(self.latent_state_size + self.number_of_discrete_actions, ),
+                conditional_event_shape=(self.latent_state_size + self.number_of_discrete_actions,),
                 temperature=self.state_prior_temperature,
                 output_softclip=self.softclip,
                 name='autoregressive_transition_network')
@@ -643,8 +643,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 temperature=self.latent_policy_temperature),
             lambda _latent_action, _latent_state: self.relaxed_latent_transition(
                 _latent_state,
-                _latent_action,),
-            ]).sample()
+                _latent_action, ),
+        ]).sample()
 
         # next latent state from the latent transition function
         next_transition_latent_state = self.relaxed_latent_transition(
@@ -753,7 +753,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             latent_state=latent_state,
             logits=logits,
             action=action if self.encode_action else None,
-            sample_probability=sample_probability,)
+            latent_action=latent_action,
+            sample_probability=sample_probability, )
 
         # priority support
         if self.priority_handler is not None and sample_key is not None:
@@ -777,7 +778,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.loss_metrics['gradient_penalty'](
             steady_state_gradient_penalty + transition_loss_gradient_penalty)
         self.loss_metrics['marginal_state_encoder_entropy'](
-                self.marginal_state_encoder_entropy(logits=logits, sample_probability=sample_probability))
+            self.marginal_state_encoder_entropy(logits=logits, sample_probability=sample_probability))
         self.loss_metrics['latent_policy_entropy'](
             self.discrete_latent_policy(latent_state).entropy())
         self.loss_metrics['transition_log_probs'](
@@ -793,7 +794,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             ).log_prob(tf.round(latent_state)[..., self.atomic_props_dims:]))
         if self.encode_action:
             self.loss_metrics['marginal_action_encoder_entropy'](
-                self.marginal_action_encoder_entropy(latent_state, action))
+                self.marginal_action_encoder_entropy(latent_state, action, latent_action))
         else:
             self.loss_metrics['marginal_variance'](marginal_variance)
         self.loss_metrics['entropy_regularizer'](entropy_regularizer)
@@ -825,7 +826,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             logits: Optional[Float] = None,
             sample_probability: Optional[Float] = None,
     ) -> Float:
-        
+
         if logits is None:
             if state is None or latent_state is None:
                 raise ValueError("A state and its encoding (i.e., as a latent state) "
@@ -851,32 +852,51 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     def marginal_action_encoder_entropy(
             self,
             latent_state: Float,
-            action: Float,
+            action: Optional[Float] = None,
+            latent_action: Optional[Float] = None,
     ) -> Float:
         if self.encode_action and action is not None:
-            return self.action_entropy_regularizer_scaling * tf.reduce_mean(
+            if latent_action is None:
+                return self.action_entropy_regularizer_scaling * tf.reduce_mean(
                     tfd.Categorical(
                         logits=self.action_encoder_network([latent_state, action])
-                ).entropy(),
-            axis=0)
+                    ).entropy(),
+                    axis=0)
+            else:
+                # relaxed entropy
+                return self.action_entropy_regularizer_scaling * tf.reduce_mean(
+                    -1. * tfd.MixtureSameFamily(
+                        mixture_distribution=tfd.Categorical(
+                            logits=tf.ones(tf.shape(latent_action)[:-1])),
+                        components_distribution=self.relaxed_action_encoding(
+                            latent_state, action,
+                            temperature=self.action_encoder_temperature)
+                    ).log_prob(latent_action + epsilon),
+                    axis=0)
         else:
-            return self.action_entropy_regularizer_scaling * tf.reduce_mean(self.discrete_latent_policy(latent_state).entropy())
+            return self.action_entropy_regularizer_scaling * tf.reduce_mean(
+                self.discrete_latent_policy(latent_state).entropy())
 
     @tf.function
     def entropy_regularizer(
             self,
             state: tf.Tensor,
-            labels: Optional[Float] = None,
+            label: Optional[Float] = None,
             latent_state: Optional[Float] = None,
             logits: Optional[Float] = None,
             action: Optional[Float] = None,
+            latent_action: Optional[Float] = None,
             sample_probability: Optional[Float] = None,
             include_state_entropy: bool = True,
             include_action_entropy: bool = True,
             *args, **kwargs
     ) -> Float:
         if latent_state is None:
-            raise ValueError("a latent state should be provided")
+            if label is None:
+                raise ValueError("either a latent state or a label should be provided")
+            else:
+                latent_state = self.relaxed_state_encoding(
+                    state, label=label, temperature=self.state_encoder_temperature)
 
         regularizer = 0.
 
@@ -892,7 +912,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             ).entropy()
 
         if include_action_entropy:
-            regularizer += self.marginal_action_encoder_entropy(latent_state, action)
+            regularizer += self.marginal_action_encoder_entropy(latent_state, action, latent_action)
         return regularizer
 
     @tf.function
