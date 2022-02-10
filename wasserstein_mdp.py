@@ -753,7 +753,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             latent_state=latent_state,
             logits=logits,
             action=action if self.encode_action else None,
-            latent_action=latent_action,
             sample_probability=sample_probability, )
 
         # priority support
@@ -794,7 +793,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             ).log_prob(tf.round(latent_state)[..., self.atomic_props_dims:]))
         if self.encode_action:
             self.loss_metrics['marginal_action_encoder_entropy'](
-                self.marginal_action_encoder_entropy(latent_state, action, latent_action))
+                self.marginal_action_encoder_entropy(latent_state, action))
         else:
             self.loss_metrics['marginal_variance'](marginal_variance)
         self.loss_metrics['entropy_regularizer'](entropy_regularizer)
@@ -851,31 +850,26 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
     def marginal_action_encoder_entropy(
             self,
-            latent_state: Float,
+            latent_state: Optional[Float] = None,
             action: Optional[Float] = None,
-            latent_action: Optional[Float] = None,
+            logits: Optional[Float] = None,
     ) -> Float:
-        if self.encode_action and action is not None:
-            if latent_action is None:
-                return self.action_entropy_regularizer_scaling * tf.reduce_mean(
-                    tfd.Categorical(
-                        logits=self.action_encoder_network([latent_state, action])
-                    ).entropy(),
-                    axis=0)
-            else:
-                # relaxed entropy
-                return self.action_entropy_regularizer_scaling * tf.reduce_mean(
-                    -1. * tfd.MixtureSameFamily(
-                        mixture_distribution=tfd.Categorical(
-                            logits=tf.ones(tf.shape(latent_action)[:-1])),
-                        components_distribution=self.relaxed_action_encoding(
-                            latent_state, action,
-                            temperature=self.action_encoder_temperature)
-                    ).log_prob(latent_action + epsilon),
-                    axis=0)
-        else:
-            return self.action_entropy_regularizer_scaling * tf.reduce_mean(
-                self.discrete_latent_policy(latent_state).entropy())
+        if logits is None and (latent_state is None or action is None):
+            raise ValueError("You should either provide the logits of the action distribution or a latent state"
+                             " and an action to compute the marginal entropy")
+        if logits is None:
+            logits = self.discrete_action_encoding(latent_state, action).logits_parameter()
+        batch_size = tf.cast(tf.shape(logits)[0], tf.float32)
+        return -1. * tf.reduce_mean(
+            tf.reduce_sum(
+                tf.nn.softmax(logits) * (
+                    tf.reduce_logsumexp(
+                        logits - tf.expand_dims(
+                            tf.reduce_logsumexp(logits, axis=-1),
+                            axis=-1),
+                        axis=0) - tf.math.log(batch_size)),
+                axis=-1),
+            axis=0)
 
     @tf.function
     def entropy_regularizer(
@@ -885,7 +879,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             latent_state: Optional[Float] = None,
             logits: Optional[Float] = None,
             action: Optional[Float] = None,
-            latent_action: Optional[Float] = None,
             sample_probability: Optional[Float] = None,
             include_state_entropy: bool = True,
             include_action_entropy: bool = True,
@@ -912,7 +905,14 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             ).entropy()
 
         if include_action_entropy:
-            regularizer += self.marginal_action_encoder_entropy(latent_state, action, latent_action)
+            if action is None:
+                regularizer += tf.reduce_mean(
+                    self.discrete_latent_policy(latent_state).entropy())
+            else:
+                logits = self.discrete_action_encoding(latent_state, action).logits_parameter()
+                regularizer += self.action_entropy_regularizer_scaling * (
+                               self.marginal_action_encoder_entropy(logits=logits) -
+                               tf.reduce_mean(tfd.Categorical(logits=logits).entropy(), axis=0))
         return regularizer
 
     @tf.function
