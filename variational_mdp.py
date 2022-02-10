@@ -6,6 +6,7 @@ from typing import Tuple, Optional, Callable, Dict, Iterator, NamedTuple
 import numpy as np
 import psutil
 from absl import logging
+import threading
 
 from util.io.video import VideoEmbeddingObserver
 
@@ -29,7 +30,7 @@ import tf_agents.agents.tf_agent
 from tensorflow.python.keras.layers import TimeDistributed, Flatten, LSTM
 from tensorflow.python.keras.models import Sequential
 from tf_agents import specs, trajectories
-from tf_agents.policies import tf_policy, py_tf_eager_policy
+from tf_agents.policies import tf_policy, py_tf_eager_policy, policy_saver
 from tf_agents.trajectories import time_step as ts
 from tf_agents.drivers import dynamic_step_driver, py_driver
 from tf_agents.environments import tf_py_environment, parallel_py_environment, tf_environment, py_environment
@@ -37,7 +38,6 @@ from tf_agents.replay_buffers import tf_uniform_replay_buffer, reverb_replay_buf
 from tf_agents.trajectories import trajectory
 from tf_agents.trajectories.policy_step import PolicyStep
 from tf_agents.trajectories.trajectory import Trajectory
-from tf_agents.utils import common
 
 from policies.latent_policy import LatentPolicyOverRealStateAndActionSpaces
 from policies.time_stacked_states import TimeStackedStatesPolicyWrapper
@@ -499,6 +499,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
             'transition_log_probs': tf.keras.metrics.Mean(name='transition_log_probs'),
             #  'decoder_variance': tf.keras.metrics.Mean(name='decoder_variance')
         }
+        # latent policy saver
+        self._policy_saver = policy_saver.PolicySaver(self.get_latent_policy())
 
     def reset_metrics(self):
         for value in self.loss_metrics.values():
@@ -1495,7 +1497,6 @@ class VariationalMarkovDecisionProcess(tf.Module):
             add_batch = replay_buffer.add_batch
             driver = dynamic_step_driver.DynamicStepDriver(
                 env, policy, observers=[add_batch], num_steps=collect_steps_per_iteration)
-            driver.run = common.function(driver.run)
             initial_collect_driver = dynamic_step_driver.DynamicStepDriver(
                 env, policy, observers=[add_batch], num_steps=initial_collect_steps)
 
@@ -2034,7 +2035,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             for step in range(eval_steps):
                 x = next(dataset_iterator)
 
-                if len(x) >= 8:
+                if len(x) >= 8:  # then sample_probability and sample_key are provided
                     is_weights = tf.reduce_min(x[7]) / x[7]  # we consider is_exponent=1 for evaluation
                 else:
                     is_weights = 1.
@@ -2048,17 +2049,23 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 eval_progressbar.add(batch_size, values=[('eval_ELBO', metrics['eval_elbo'].result())])
             tf.print('\n')
 
+        self._policy_saver.save(os.path.join(save_directory, 'policy', 'tmp'))
         if eval_policy_driver is not None:
-            avg_rewards = self.eval_policy(
-                eval_policy_driver=eval_policy_driver,
-                train_summary_writer=train_summary_writer,
-                global_step=global_step)
+            eval_policy_thread = threading.Thread(
+                target=self.eval_policy,
+                kwargs={
+                    "eval_policy_driver": eval_policy_driver,
+                    "train_summary_writer": train_summary_writer,
+                    "global_step": global_step,
+                    "policy_path": os.path.join(save_directory, 'policy', 'tmp')},
+                name="eval_policy")
+            eval_policy_thread.start()
 
         if local_losses_estimator is not None:
             local_losses_metrics = local_losses_estimator()
 
         if train_summary_writer is not None and eval_steps > 0:
-            buckets = {'states': 32, 'actions': tf.reduce_max(data['actions']) + 1}
+            buckets = {'states': 32, 'actions': self.number_of_discrete_actions}
             with train_summary_writer.as_default():
                 for key, value in metrics.items():
                     tf.summary.scalar(key, value.result(), step=global_step)
@@ -2098,7 +2105,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
         if eval_policy_driver is not None or eval_steps > 0:
             self.assign_score(
-                score=avg_rewards if eval_policy_driver is not None else metrics['eval_elbo'].result(),
+                score=avg_rewards if avg_rewards is not None else metrics['eval_elbo'].result(),
                 checkpoint_model=save_directory is not None and log_name is not None,
                 save_directory=save_directory,
                 model_name=log_name,
@@ -2117,9 +2124,15 @@ class VariationalMarkovDecisionProcess(tf.Module):
             train_summary_writer: Optional = None,
             global_step: Optional[tf.Variable] = None,
             render: bool = False,
+            policy_path: Optional[str] = None,
     ):
         if (eval_env is None) == (eval_policy_driver is None):
             raise ValueError('Must either pass an eval_tf_env or an eval_tf_driver.')
+
+        if policy_path is not None:
+            policy = tf.compat.v2.saved_model.load(policy_path)
+        else:
+            policy = self.get_latent_policy()
 
         eval_avg_rewards = tf_agents.metrics.tf_metrics.AverageReturnMetric()
         if eval_env is not None:
@@ -2132,8 +2145,10 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 latent_eval_env = self.wrap_tf_environment(eval_tf_env, labeling_function)
             latent_eval_env.reset()
             eval_policy_driver = tf_agents.drivers.dynamic_episode_driver.DynamicEpisodeDriver(
-                latent_eval_env, self.get_latent_policy(), num_episodes=num_eval_episodes,
+                latent_eval_env, policy, num_episodes=num_eval_episodes,
                 observers=[] if not render else [lambda _: eval_env.render(mode='human')])
+        else:
+            eval_policy_driver._policy = policy
 
         eval_policy_driver.observers.append(eval_avg_rewards)
         try:
