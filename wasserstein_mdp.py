@@ -1,5 +1,7 @@
 import gc
+import os
 from collections import namedtuple
+import threading
 
 import tensorflow as tf
 from typing import Tuple, Optional, Callable, NamedTuple, List, Union
@@ -1400,12 +1402,19 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                         metrics['eval_' + value](tf.reduce_mean(is_weights * evaluation[value]))
                 eval_progressbar.add(batch_size, values=[('eval_loss', metrics['eval_loss'].result())])
             tf.print('\n')
-
+        
+        if self._policy_saver is not None:
+            self._policy_saver.save(os.path.join(save_directory, 'policy', 'tmp'))
         if eval_policy_driver is not None:
-            avg_rewards = self.eval_policy(
-                eval_policy_driver=eval_policy_driver,
-                train_summary_writer=train_summary_writer,
-                global_step=global_step)
+            eval_policy_thread = threading.Thread(
+                target=self.eval_policy,
+                kwargs={
+                    "eval_policy_driver": eval_policy_driver,
+                    "train_summary_writer": train_summary_writer,
+                    "global_step": int(global_step),
+                    "policy_path": os.path.join(save_directory, 'policy', 'tmp')},
+                name="eval_policy",)
+            eval_policy_thread.start()
 
         if local_losses_estimator is not None:
             local_losses_metrics = local_losses_estimator()
@@ -1448,7 +1457,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         if eval_policy_driver is not None or eval_steps > 0:
             self.assign_score(
-                score=avg_rewards if eval_policy_driver is not None else metrics['eval_elbo'].result(),
+                score=avg_rewards if avg_rewards is not None else metrics['eval_loss'].result(),
                 checkpoint_model=save_directory is not None and log_name is not None,
                 save_directory=save_directory,
                 model_name=log_name,

@@ -500,7 +500,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             #  'decoder_variance': tf.keras.metrics.Mean(name='decoder_variance')
         }
         # latent policy saver
-        self._policy_saver = policy_saver.PolicySaver(self.get_latent_policy())
+        self._policy_saver = None
 
     def reset_metrics(self):
         for value in self.loss_metrics.values():
@@ -1651,6 +1651,9 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
         # attach optimizer
         self.attach_optimizer(optimizer)
+        
+        # policy saver 
+        self._policy_saver = policy_saver.PolicySaver(self.get_latent_policy())
 
         if global_step is None:
             if checkpoint is not None:
@@ -2048,17 +2051,17 @@ class VariationalMarkovDecisionProcess(tf.Module):
                     metrics['eval_' + value](tf.reduce_mean(is_weights * evaluation[value]))
                 eval_progressbar.add(batch_size, values=[('eval_ELBO', metrics['eval_elbo'].result())])
             tf.print('\n')
-
-        self._policy_saver.save(os.path.join(save_directory, 'policy', 'tmp'))
+        if self._policy_saver is not None:
+            self._policy_saver.save(os.path.join(save_directory, 'policy', 'tmp'))
         if eval_policy_driver is not None:
             eval_policy_thread = threading.Thread(
                 target=self.eval_policy,
                 kwargs={
                     "eval_policy_driver": eval_policy_driver,
                     "train_summary_writer": train_summary_writer,
-                    "global_step": global_step,
+                    "global_step": int(global_step),
                     "policy_path": os.path.join(save_directory, 'policy', 'tmp')},
-                name="eval_policy")
+                name="eval_policy",)
             eval_policy_thread.start()
 
         if local_losses_estimator is not None:
@@ -2129,10 +2132,10 @@ class VariationalMarkovDecisionProcess(tf.Module):
         if (eval_env is None) == (eval_policy_driver is None):
             raise ValueError('Must either pass an eval_tf_env or an eval_tf_driver.')
 
-        if policy_path is not None:
-            policy = tf.compat.v2.saved_model.load(policy_path)
-        else:
+        if policy_path is None:
             policy = self.get_latent_policy()
+        else:
+            policy = tf.compat.v2.saved_model.load(policy_path)
 
         eval_avg_rewards = tf_agents.metrics.tf_metrics.AverageReturnMetric()
         if eval_env is not None:
@@ -2151,12 +2154,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             eval_policy_driver._policy = policy
 
         eval_policy_driver.observers.append(eval_avg_rewards)
-        try:
-            eval_policy_driver.run()
-        except Exception as e:
-            tf.print("NaN values occurred in the environment while the driver was running:")
-            tf.print(e)
-            eval_avg_rewards.result = lambda: -1. * np.inf
+        eval_policy_driver.run()
 
         eval_policy_driver.observers.remove(eval_avg_rewards)
 
@@ -2270,7 +2268,10 @@ class VariationalMarkovDecisionProcess(tf.Module):
                     tf.cast(time_step.observation, dtype=tf.float32))
                 return PolicyStep(tfd.Categorical(logits=one_hot_categorical_distribution.logits_parameter()), (), ())
 
-        return LatentPolicy(time_step_spec, action_spec, self.discrete_latent_policy)
+        latent_policy = LatentPolicy(time_step_spec, action_spec, self.discrete_latent_policy)
+        latent_policy._latent_policy_network = self.latent_policy_network
+
+        return latent_policy
 
     def estimate_local_losses_from_samples(
             self,
