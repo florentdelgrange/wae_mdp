@@ -48,9 +48,8 @@ from util.io.dataset_generator import reset_state
 from util.io.dataset_generator import ErgodicMDPTransitionGenerator
 from util.replay_buffer_tools import PriorityBuckets, LossPriority, PriorityHandler
 from verification.local_losses import estimate_local_losses_from_samples
-
-tfd = tfp.distributions
-tfb = tfp.bijectors
+import tensorflow_probability.python.distributions as tfd
+import tensorflow_probability.python.bijectors as tfb
 
 debug = False
 debug_verbosity = -1
@@ -2246,16 +2245,22 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
         class LatentPolicy(tf_policy.TFPolicy):
 
-            def __init__(self, time_step_spec, action_spec, discrete_latent_policy):
+            def __init__(
+                    self,
+                    time_step_spec,
+                    action_spec,
+                    latent_policy_network
+            ):
                 super().__init__(time_step_spec, action_spec)
-                self.discrete_latent_policy = discrete_latent_policy
+                self._latent_policy_network = latent_policy_network
 
             def _distribution(self, time_step, policy_state):
-                one_hot_categorical_distribution = self.discrete_latent_policy(
-                    tf.cast(time_step.observation, dtype=tf.float32))
-                return PolicyStep(tfd.Categorical(logits=one_hot_categorical_distribution.logits_parameter()), (), ())
+                latent_state = tf.cast(time_step.observation, dtype=tf.float32)
+                return PolicyStep(
+                    tfd.Categorical(logits=self._latent_policy_network(latent_state)),
+                    (), ())
 
-        return LatentPolicy(time_step_spec, action_spec, self.discrete_latent_policy)
+        return LatentPolicy(time_step_spec, action_spec, self.latent_policy_network)
 
     def estimate_local_losses_from_samples(
             self,
