@@ -219,9 +219,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     latent_state=latent_state,
                     action=action,
                     number_of_discrete_actions=self.number_of_discrete_actions,
-                    action_encoder_network=action_encoder_network,
-                    relaxed_exp_one_hot_action_encoding=relaxed_exp_one_hot_action_encoding,
-                    epsilon=epsilon, )
+                    action_encoder_network=action_encoder_network,)
             else:
                 self.action_encoder_network = None
             # transition network
@@ -248,9 +246,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.latent_policy_network = LatentPolicyNetwork(
                 latent_state=latent_state,
                 latent_policy_network=latent_policy_network,
-                number_of_discrete_actions=self.number_of_discrete_actions,
-                relaxed_exp_one_hot_action_encoding=self.relaxed_exp_one_hot_action_encoding,
-                epsilon=epsilon)
+                number_of_discrete_actions=self.number_of_discrete_actions,)
             # reward function
             self.reward_network = RewardNetwork(
                 latent_state=latent_state,

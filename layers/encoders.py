@@ -275,8 +275,6 @@ class ActionEncoderNetwork(DiscreteDistributionModel):
             action: tfk.Input,
             number_of_discrete_actions: int,
             action_encoder_network: tfk.Model,
-            relaxed_exp_one_hot_action_encoding: bool = True,
-            epsilon: Float = 1e-12,
     ):
 
         action_encoder = tfkl.Concatenate(name='action_encoder_input')(
@@ -285,15 +283,13 @@ class ActionEncoderNetwork(DiscreteDistributionModel):
         action_encoder = tfkl.Dense(
             units=number_of_discrete_actions,
             activation=None,
-            name='action_encoder_exp_one_hot_logits'
+            name='action_encoder_categorical_logits'
         )(action_encoder)
 
         super(ActionEncoderNetwork, self).__init__(
             inputs=[latent_state, action],
             outputs=action_encoder,
             name="action_encoder")
-        self.relaxed_exp_one_hot_action_encoding = relaxed_exp_one_hot_action_encoding
-        self.epsilon = tf.Variable(epsilon, trainable=False)
 
     def relaxed_distribution(
             self,
@@ -301,37 +297,18 @@ class ActionEncoderNetwork(DiscreteDistributionModel):
             action: Float,
             temperature: Float,
     ) -> tfd.Distribution:
-        logits = self([latent_state, action])
-        if self.relaxed_exp_one_hot_action_encoding:
-            return tfd.TransformedDistribution(
-                distribution=tfd.ExpRelaxedOneHotCategorical(
-                    temperature=temperature,
-                    logits=logits,
-                    allow_nan_stats=False),
-                bijector=tfb.Exp())
-        else:
-            return tfd.RelaxedOneHotCategorical(
-                logits=logits,
-                temperature=temperature,
-                allow_nan_stats=False)
+        return tfd.RelaxedOneHotCategorical(
+            logits=self([latent_state, action]),
+            temperature=temperature,
+            allow_nan_stats=False)
 
     def discrete_distribution(
             self,
             latent_state: Float,
             action: Float,
     ) -> tfd.Distribution:
-        logits = self([latent_state, action])
-        if self.relaxed_exp_one_hot_action_encoding:
-            relaxed_distribution = tfd.ExpRelaxedOneHotCategorical(
-                temperature=1e-5,
-                logits=logits,
-                allow_nan_stats=False)
-            log_probs = tf.math.log(relaxed_distribution.probs_parameter() + self.epsilon)
-            return tfd.OneHotCategorical(logits=log_probs, allow_nan_stats=False)
-        else:
-            return tfd.OneHotCategorical(logits=logits, allow_nan_stats=False)
+        return tfd.OneHotCategorical(logits=self([latent_state, action]), allow_nan_stats=False)
 
     def get_config(self):
         config = super(ActionEncoderNetwork, self).get_config()
-        config.update({"relaxed_exp_one_hot_action_encoding": self.relaxed_exp_one_hot_action_encoding})
         return config
