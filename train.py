@@ -499,6 +499,7 @@ def main(argv):
             discretize_action_space=params['action_discretizer'],
             state_encoder_network=network.encoder,
             action_encoder_network=action_network.encoder if params['encode_actions'] else None,
+            policy_based_decoding=params['policy_based_decoding'],
             action_decoder_network=action_network.decoder,
             transition_network=network.transition,
             reward_network=network.reward,
@@ -1101,10 +1102,10 @@ if __name__ == '__main__':
         help='Learning rate for the optimizer of the Wasserstein regularizers.'
     )
     flags.DEFINE_bool(
-        'encode_actions',
-        default=True,
-        help='Whether to use an action encoder or not to learn a latent action space.'
-             'If not, the latent policy alone will be used.'
+        'policy_based_decoding',
+        default=False,
+        help='Whether to use the latent policy instead of an action encoding/decoding scheme'
+             ' to learn to reconstruct the action.'
     )
     flags.DEFINE_bool(
         'enforce_upper_bound',
@@ -1131,7 +1132,7 @@ if __name__ == '__main__':
         'state_encoder_type',
         'autoregressive',
         ['autoregressive', 'lstm', 'normal'],
-        'State encoder type, defining which technique to use to encode states. If normal, independent logits are generated.')
+        'State encoder type, defining which technique to use to encode states. If normal, independent logits are generated.'),
 
     FLAGS = flags.FLAGS
 
