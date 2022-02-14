@@ -543,11 +543,30 @@ def main(argv):
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
 
     if params['logs']:
-        path = os.path.join(params['logdir'], environment_name, vae_name)
-        if not os.path.exists(path):
-            os.makedirs(path)
-        with open(os.path.join(path, 'parameters.json'), 'w+') as fp:
+        # initialize logs
+        train_log_dir = os.path.join(params['log_dir'], environment_name, vae_name)
+        print('log path:', train_log_dir)
+        if not os.path.exists(train_log_dir):
+            os.makedirs(train_log_dir)
+        with open(os.path.join(train_log_dir, 'parameters.json'), 'w+') as fp:
             json.dump(params, fp)
+
+        train_summary_writer = tf.summary.create_file_writer(train_log_dir)
+        with train_summary_writer.as_default():
+            hyperparameters = [tf.convert_to_tensor([k, str(v)]) for k, v in params.items()]
+            tf.summary.text('hyperparameters', tf.stack(hyperparameters))
+            tf.summary.text('tf version', tf.__version__)
+            tf.summary.text('tf_agent version', tf_agents.__version__)
+            tf.summary.text('tf probability version', tfp.__version__)
+
+            try:
+                import git
+                repo = git.Repo('.')
+                tf.summary.text('git head', str(repo.head.commit))
+            except Exception as exc:
+                print(exc)
+    else:
+        train_summary_writer = None
 
     for phase, vae_mdp_model in enumerate(models):
         checkpoint_directory = os.path.join(
@@ -574,8 +593,7 @@ def main(argv):
             epsilon_greedy_decay_rate=params['epsilon_greedy_decay_rate'],
             batch_size=batch_size, optimizer=optimizer, checkpoint=checkpoint,
             manager=manager,
-            log_name=vae_name,
-            log_dir=params['logdir'],
+            train_summary_writer=train_summary_writer,
             start_annealing_step=(
                 params['start_annealing_step'] + params['max_steps'] // 2
                 if phase == 1 and params['action_discretizer'] else
