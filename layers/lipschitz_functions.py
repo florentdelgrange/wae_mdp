@@ -13,6 +13,7 @@ class SteadyStateLipschitzFunction(tfk.Model):
             latent_action: Optional[tfkl.Input] = None,
     ):
         inputs = [latent_state] + ([latent_action] if latent_action is not None else []) + [next_latent_state]
+        network_input = tfkl.Concatenate()(inputs)
         _steady_state_lipschitz_network = steady_state_lipschitz_network(network_input)
         _steady_state_lipschitz_network = tfkl.Dense(
             units=1,
@@ -36,9 +37,10 @@ class TransitionLossLipschitzFunction(tfk.Model):
             transition_loss_lipschitz_network: tfk.Model,
             latent_action: Optional[tfkl.Input] = None,
     ):
-        inputs = [state, action, latent_state] + \
-                 (latent_action if latent_action is not None else []) + \
-                 [next_latent_state]
+        inputs = [state, action, latent_state]
+        if latent_action is not None:
+            inputs.append(latent_action)
+        inputs.append(next_latent_state)
         _transition_loss_lipschitz_network = tfkl.Concatenate()(inputs)
         _transition_loss_lipschitz_network = transition_loss_lipschitz_network(_transition_loss_lipschitz_network)
         _transition_loss_lipschitz_network = tfkl.Dense(
