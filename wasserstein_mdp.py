@@ -1079,7 +1079,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
     @property
     def inference_variables(self):
-        if self.action_discretizer and self.policy_based_decoding:
+        if self.action_discretizer and not self.policy_based_decoding:
             return self.state_encoder_network.trainable_variables + self.action_encoder_network.trainable_variables
         else:
             return self.state_encoder_network.trainable_variables
