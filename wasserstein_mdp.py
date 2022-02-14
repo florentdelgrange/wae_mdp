@@ -823,11 +823,15 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         batch_size = tf.cast(tf.shape(logits)[0], tf.float32)
         return -1. * tf.reduce_mean(
             tf.reduce_sum(
-                tf.nn.softmax(logits) * tf.reduce_logsumexp(
-                    tf.nn.log_softmax(logits, axis=-1),
-                    axis=0) - tf.math.log(batch_size),
+                tf.nn.softmax(logits) * (
+                    tf.reduce_logsumexp(
+                        logits - tf.expand_dims(
+                            tf.reduce_logsumexp(logits, axis=-1),
+                            axis=-1),
+                        axis=0) - tf.math.log(batch_size)),
                 axis=-1),
             axis=0)
+
 
     @tf.function
     def entropy_regularizer(
