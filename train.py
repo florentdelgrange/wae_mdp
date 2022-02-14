@@ -206,9 +206,9 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
                 params['entropy_regularizer_scale_factor'] * params['action_entropy_regularizer_scaling'],
                 params['action_encoder_temperature'],
                 params['latent_policy_temperature'],
-                str(params['encode_actions']))
+                str(params['policy_based_decoding']))
         )
-    if not params['encode_actions'] and params['enforce_upper_bound']:
+    if params['policy_based_decoding'] and params['enforce_upper_bound']:
         wae_name += '_UB'
 
     if params['prioritized_experience_replay']:
@@ -498,7 +498,7 @@ def main(argv):
             label_shape=label_shape,
             discretize_action_space=params['action_discretizer'],
             state_encoder_network=network.encoder,
-            action_encoder_network=action_network.encoder if params['encode_actions'] else None,
+            action_encoder_network=action_network.encoder if not params['policy_based_decoding'] else None,
             policy_based_decoding=params['policy_based_decoding'],
             action_decoder_network=action_network.decoder,
             transition_network=network.transition,
@@ -528,7 +528,6 @@ def main(argv):
             entropy_regularizer_scale_factor=params['entropy_regularizer_scale_factor'],
             entropy_regularizer_decay_rate=params['entropy_regularizer_decay_rate'],
             entropy_regularizer_scale_factor_min_value=params["entropy_regularizer_scale_factor_min_value"],
-            relaxed_exp_one_hot_action_encoding=True,
             action_entropy_regularizer_scaling = params["action_entropy_regularizer_scaling"],
             enforce_upper_bound=params['enforce_upper_bound'],
             squared_wasserstein=params['squared_wasserstein'],
@@ -544,7 +543,7 @@ def main(argv):
 
     if params['logs']:
         # initialize logs
-        train_log_dir = os.path.join(params['log_dir'], environment_name, vae_name)
+        train_log_dir = os.path.join(params['logdir'], environment_name, vae_name)
         print('log path:', train_log_dir)
         if not os.path.exists(train_log_dir):
             os.makedirs(train_log_dir)
@@ -554,15 +553,15 @@ def main(argv):
         train_summary_writer = tf.summary.create_file_writer(train_log_dir)
         with train_summary_writer.as_default():
             hyperparameters = [tf.convert_to_tensor([k, str(v)]) for k, v in params.items()]
-            tf.summary.text('hyperparameters', tf.stack(hyperparameters))
-            tf.summary.text('tf version', tf.__version__)
-            tf.summary.text('tf_agent version', tf_agents.__version__)
-            tf.summary.text('tf probability version', tfp.__version__)
+            tf.summary.text('hyperparameters', tf.stack(hyperparameters), step=0)
+            tf.summary.text('tf version', tf.__version__, step=0)
+            tf.summary.text('tf_agent version', tf_agents.__version__, step=0)
+            tf.summary.text('tf probability version', tfp.__version__, step=0)
 
             try:
                 import git
                 repo = git.Repo('.')
-                tf.summary.text('git head', str(repo.head.commit))
+                tf.summary.text('git head', str(repo.head.commit), step=0)
             except Exception as exc:
                 print(exc)
     else:
@@ -606,7 +605,6 @@ def main(argv):
                 params['entropy_regularizer_scale_factor'] if phase == 1 and (
                         params['action_discretizer'] or
                         params['latent_policy']) else None),
-            logs=params['logs'],
             training_steps=(
                 params['max_steps'] if not params['decompose_training'] or phase == 1
                 else params['max_steps'] // 2),
