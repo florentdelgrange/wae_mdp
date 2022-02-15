@@ -293,6 +293,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     print("No action encoder")
                 self.transition_network.summary()
                 self.latent_stationary_network.summary()
+                self.latent_policy_network.summary()
                 self.reward_network.summary()
                 self.reconstruction_network.summary()
                 if self.action_discretizer:
@@ -394,7 +395,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self,
             latent_state: tf.Tensor,
             action: tf.Tensor,
-            temperature: Optional[Float] = 0.
+            temperature
     ) -> tfd.Distribution:
         if self.action_discretizer:
             return self.action_encoder_network.relaxed_distribution(
@@ -713,7 +714,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             latent_state=latent_state,
             logits=logits,
             action=action if not self.policy_based_decoding else None,
-            include_action_entropy=self.action_discretizer,
             sample_probability=sample_probability, )
 
         # priority support
@@ -755,7 +755,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         if self.action_discretizer and not self.policy_based_decoding:
             self.loss_metrics['marginal_action_encoder_entropy'](
                 self.marginal_action_encoder_entropy(latent_state, action))
-        else:
+        elif self.policy_based_decoding:
             self.loss_metrics['marginal_variance'](marginal_variance)
         self.loss_metrics['entropy_regularizer'](entropy_regularizer)
 
@@ -867,9 +867,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             ).entropy()
 
         if include_action_entropy:
-            if action is None:
-                regularizer += tf.reduce_mean(
-                    self.discrete_latent_policy(latent_state).entropy())
+            if action is None or not self.action_discretizer:
+                regularizer += self.action_entropy_regularizer_scaling * tf.reduce_mean(
+                    self.discrete_latent_policy(latent_state).entropy(),
+                    axis=0)
             else:
                 logits = self.discrete_action_encoding(latent_state, action).logits_parameter()
                 regularizer += self.action_entropy_regularizer_scaling * (
@@ -992,7 +993,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 (self.wasserstein_regularizer_scale_factor.stationary.scaling * steady_state_regularizer +
                  self.wasserstein_regularizer_scale_factor.local_transition_loss.scaling * transition_loss_regularizer),
             'latent_states': tf.concat([tf.cast(latent_state, tf.int64), tf.cast(next_latent_state, tf.int64)], axis=0),
-            'latent_actions': tf.cast(tf.argmax(latent_action, axis=1), tf.int64)
+            'latent_actions': (tf.cast(tf.argmax(latent_action, axis=1), tf.int64)
+                               if self.action_discretizer else
+                               tf.cast(tf.argmax(stationary_latent_action, axis=1), tf.int64))
         }
 
     @tf.function
@@ -1245,10 +1248,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             *args,
             **kwargs
     ) -> tf_environment.TFEnvironment:
-        return variational_action_discretizer.VariationalTFEnvironmentDiscretizer(
-            variational_action_discretizer=self,
-            tf_env=tf_env,
-            labeling_function=labeling_function)
+        if self.action_discretizer:
+            return variational_action_discretizer.VariationalTFEnvironmentDiscretizer(
+                variational_action_discretizer=self,
+                tf_env=tf_env,
+                labeling_function=labeling_function)
+        else:
+            return super().wrap_tf_environment(tf_env, labeling_function)
 
     def estimate_local_losses_from_samples(
             self,
