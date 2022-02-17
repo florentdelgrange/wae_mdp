@@ -538,7 +538,7 @@ def main(argv):
             state_encoder_type={
                 'autoregressive': EncodingType.AUTOREGRESSIVE,
                 'lstm': EncodingType.LSTM,
-                'normal': EncodingType.NORMAL}[params['state_encoder_type']],
+                'normal': EncodingType.INDEPENDENT}[params['state_encoder_type']],
         )
         models = [wae_mdp]
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
@@ -1149,8 +1149,9 @@ if __name__ == '__main__':
     flags.DEFINE_enum(
         'state_encoder_type',
         'autoregressive',
-        ['autoregressive', 'lstm', 'normal'],
-        'State encoder type, defining which technique to use to encode states. If normal, independent logits are generated.'),
+        ['autoregressive', 'lstm', 'independent'],
+        'State encoder type, defining which technique to use to encode states.'
+    )
 
     FLAGS = flags.FLAGS
 
