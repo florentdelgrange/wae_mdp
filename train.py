@@ -40,7 +40,7 @@ def generate_network_components(params, name='', wasserstein_networks=False):
     else:
         other_activations = {
             'smooth_elu': lambda x: tf.nn.softplus(2. * x + 2.) / 2. - 1.,
-            'SmoothELU': tfb.Chain([tfb.Shift(-1.), tfb.Scale(2.), tfb.Softplus(), tfb.Shift(2.), tfb.Scale(2.)])
+            'SmoothELU': tfb.Chain([tfb.Shift(-1.), tfb.Scale(.5), tfb.Softplus(), tfb.Shift(2.), tfb.Scale(2.)])
         }
         activation = other_activations.get(
             params["activation"],
@@ -335,31 +335,8 @@ def main(argv):
     if params['collect_steps_per_iteration'] <= 0:
         params['collect_steps_per_iteration'] = params['batch_size'] // 8
 
-    state_encoder_temperature = params['state_encoder_temperature']
-    state_prior_temperature = params['state_prior_temperature']
-    if params['action_encoder_temperature'] < 0.:
-        if params['action_discretizer']:
-            params['action_encoder_temperature'] = 1. / (params['number_of_discrete_actions'] - 1)
-        else:
-            params['action_encoder_temperature'] = 0.99
-    if params['latent_policy_temperature'] < 0.:
-        if params['action_discretizer']:
-            params['latent_policy_temperature'] = params['action_encoder_temperature'] / 1.5
-        else:
-            params['latent_policy_temperature'] = 0.95
-    if state_encoder_temperature < 0:
-        params['state_encoder_temperature'] = 2. / 3.
-    if state_prior_temperature < 0:
-        params['state_prior_temperature'] = 1. / 2.
 
     environment_name = params['environment']
-
-    batch_size = params['batch_size']
-    mixture_components = params['mixture_components']
-    latent_state_size = params['latent_size']  # depends on the number of bits reserved for labels
-
-    vae_name = generate_vae_name(params)
-
     if params['env_suite'] != '':
         try:
             environment_suite = importlib.import_module('tf_agents.environments.' + params['env_suite'])
@@ -378,6 +355,29 @@ def main(argv):
     state_shape, action_shape, reward_shape, label_shape, time_step_spec, action_spec = \
         specs.state_shape, specs.action_shape, specs.reward_shape, specs.label_shape, \
         specs.time_step_spec, specs.action_spec
+
+    state_encoder_temperature = params['state_encoder_temperature']
+    state_prior_temperature = params['state_prior_temperature']
+    if params['action_encoder_temperature'] < 0.:
+        if params['action_discretizer']:
+            params['action_encoder_temperature'] = 1. / (params['number_of_discrete_actions'] - 1)
+        else:
+            params['action_encoder_temperature'] = 0.99
+    if params['latent_policy_temperature'] < 0.:
+        if params['action_discretizer']:
+            params['latent_policy_temperature'] = params['action_encoder_temperature'] / 1.5
+        else:
+            params['latent_policy_temperature'] = 2. / (3 * (action_shape[0] - 1))
+    if state_encoder_temperature < 0:
+        params['state_encoder_temperature'] = 2. / 3.
+    if state_prior_temperature < 0:
+        params['state_prior_temperature'] = 1. / 2.
+
+    batch_size = params['batch_size']
+    mixture_components = params['mixture_components']
+    latent_state_size = params['latent_size']  # depends on the number of bits reserved for labels
+
+    vae_name = generate_vae_name(params)
 
     if params['reward_lower_bound'] is None or params['reward_upper_bound'] is None:
         reward_bounds = None
@@ -543,32 +543,6 @@ def main(argv):
         models = [wae_mdp]
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
 
-    if params['logs']:
-        # initialize logs
-        train_log_dir = os.path.join(params['logdir'], environment_name, vae_name)
-        print('log path:', train_log_dir)
-        if not os.path.exists(train_log_dir):
-            os.makedirs(train_log_dir)
-        with open(os.path.join(train_log_dir, 'parameters.json'), 'w+') as fp:
-            json.dump(params, fp)
-
-        train_summary_writer = tf.summary.create_file_writer(train_log_dir)
-        with train_summary_writer.as_default():
-            hyperparameters = [tf.convert_to_tensor([k, str(v)]) for k, v in params.items()]
-            tf.summary.text('hyperparameters', tf.stack(hyperparameters), step=0)
-            tf.summary.text('tf version', tf.__version__, step=0)
-            tf.summary.text('tf_agent version', tf_agents.__version__, step=0)
-            tf.summary.text('tf probability version', tfp.__version__, step=0)
-
-            try:
-                import git
-                repo = git.Repo('.')
-                tf.summary.text('git head', str(repo.head.commit), step=0)
-            except Exception as exc:
-                print(exc)
-    else:
-        train_summary_writer = None
-
     for phase, vae_mdp_model in enumerate(models):
         checkpoint_directory = os.path.join(
             params['save_dir'], 'saves', environment_name, 'training_checkpoints', vae_name)
@@ -583,6 +557,33 @@ def main(argv):
             vae_mdp_model.latent_policy_training_phase = True
 
         policy = policies.saved_policy.SavedTFPolicy(params['policy_path'], time_step_spec, action_spec)
+
+        if params['logs']:
+            # initialize logs
+            train_log_dir = os.path.join(params['logdir'], environment_name, vae_name)
+            print('log path:', train_log_dir)
+            if not os.path.exists(train_log_dir):
+                os.makedirs(train_log_dir)
+            with open(os.path.join(train_log_dir, 'parameters.json'), 'w+') as fp:
+                json.dump(params, fp)
+
+            train_summary_writer = tf.summary.create_file_writer(train_log_dir)
+            with train_summary_writer.as_default():
+                hyperparameters = [tf.convert_to_tensor([k, str(v)]) for k, v in params.items()]
+                tf.summary.text('hyperparameters', tf.stack(hyperparameters), step=step)
+                tf.summary.text('tf version', tf.__version__, step=step)
+                tf.summary.text('tf_agent version', tf_agents.__version__, step=step)
+                tf.summary.text('tf probability version', tfp.__version__, step=step)
+
+                try:
+                    import git
+                    repo = git.Repo('.')
+                    tf.summary.text('git head', str(repo.head.commit), step=step)
+                except Exception as exc:
+                    print(exc)
+        else:
+            train_summary_writer = None
+
 
         vae_mdp_model.train_from_policy(
             policy=policy,
@@ -1143,7 +1144,7 @@ if __name__ == '__main__':
     )
     flags.DEFINE_bool(
         'trainable_prior',
-        default=True,
+        default=False,
         help='Whether to allow for training the latent steady state distribution or not.',
     )
     flags.DEFINE_enum(
