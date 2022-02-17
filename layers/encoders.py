@@ -12,10 +12,12 @@ from layers.autoregressive_bernoulli import AutoRegressiveBernoulliNetwork
 from layers.base_models import DiscreteDistributionModel
 from util.io import scan_model
 
+
 class EncodingType(enum.Enum):
-    NORMAL = enum.auto()
+    INDEPENDENT = enum.auto()
     AUTOREGRESSIVE = enum.auto()
     LSTM = enum.auto()
+
 
 class StateEncoderNetwork(DiscreteDistributionModel):
 
@@ -85,7 +87,7 @@ class StateEncoderNetwork(DiscreteDistributionModel):
                     tfd.Logistic(
                         loc=logits / temperature,
                         scale=tf.pow(temperature, -1.)),
-                    reinterpreted_batch_ndims=1,),
+                    reinterpreted_batch_ndims=1, ),
                 bijector=tfb.Sigmoid())
         else:
             distribution = tfd.Independent(
@@ -276,7 +278,6 @@ class ActionEncoderNetwork(DiscreteDistributionModel):
             number_of_discrete_actions: int,
             action_encoder_network: tfk.Model,
     ):
-
         action_encoder = tfkl.Concatenate(name='action_encoder_input')(
             [latent_state, action])
         action_encoder = action_encoder_network(action_encoder)
