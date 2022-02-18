@@ -108,3 +108,5 @@ for d in [labeling_functions, reward_scaling]:
     d['MountainCarContinuous-v0'] = d['MountainCar-v0']
     d['PendulumRandomInit-v0'] = d['Pendulum-v0']
     d['AcrobotRandomInit-v1'] = d['Acrobot-v1']
+    d['Pendulum-v1'] = d['Pendulum-v0']
+    d['PendulumRandomInit-v1'] = d['Pendulum-v1']
