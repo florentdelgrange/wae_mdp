@@ -324,16 +324,19 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             'latent_policy_entropy': Mean('latent_policy_entropy'),
             'steady_state_regularizer': Mean('steady_state_wasserstein_regularizer'),
             'gradient_penalty': Mean('gradient_penalty'),
-            'marginal_state_encoder_entropy': Mean('state_encoder_entropy'),
-            # 'latent_sationary_distribution_entropy': Mean('latent_sationary_distribution_entropy'),
+            'marginal_state_encoder_entropy': Mean('marginal_state_encoder_entropy'),
+            'state_encoder_entropy': Mean('state_encoder_entropy'),
             'entropy_regularizer': Mean('entropy_regularizer'),
             'transition_log_probs': Mean('transition_log_probs'),
             'binary_encoding_log_probs': Mean('binary_encoding_log_probs'),
         }
         if self.policy_based_decoding:
             self.loss_metrics['marginal_variance'] = Mean(name='marginal_variance')
-        else:
-            self.loss_metrics['marginal_action_encoder_entropy'] = Mean('action_encoder_entropy')
+        elif self.action_discretizer:
+            self.loss_metrics.update({
+                'marginal_action_encoder_entropy': Mean('marginal_action_encoder_entropy'),
+                'action_encoder_entropy': Mean('action_encoder_entropy'),
+            })
 
     def anneal(self):
         super().anneal()
@@ -575,7 +578,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             next_label: Float,
             sample_key: Optional[Float] = None,
             sample_probability: Optional[Float] = None,
-            additional_transition_batch: Optional[Tuple[Float, ...]] = None,
             *args, **kwargs
     ):
         batch_size = tf.shape(state)[0]
@@ -739,6 +741,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             steady_state_gradient_penalty + transition_loss_gradient_penalty)
         self.loss_metrics['marginal_state_encoder_entropy'](
             self.marginal_state_encoder_entropy(logits=logits, sample_probability=sample_probability))
+        self.loss_metrics['state_encoder_entropy'](
+            tfd.Independent(
+                tfd.Bernoulli(logits=logits),
+                reinterpreted_batch_ndims=1
+            ).entropy())
         self.loss_metrics['latent_policy_entropy'](
             self.discrete_latent_policy(latent_state).entropy())
         self.loss_metrics['transition_log_probs'](
@@ -755,6 +762,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         if self.action_discretizer and not self.policy_based_decoding:
             self.loss_metrics['marginal_action_encoder_entropy'](
                 self.marginal_action_encoder_entropy(latent_state, action))
+            self.loss_metrics['action_encoder_entropy'](
+                self.discrete_action_encoding(latent_state, action).entropy())
         elif self.policy_based_decoding:
             self.loss_metrics['marginal_variance'](marginal_variance)
         self.loss_metrics['entropy_regularizer'](entropy_regularizer)
