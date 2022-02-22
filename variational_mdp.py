@@ -48,9 +48,8 @@ from util.io.dataset_generator import reset_state
 from util.io.dataset_generator import ErgodicMDPTransitionGenerator
 from util.replay_buffer_tools import PriorityBuckets, LossPriority, PriorityHandler
 from verification.local_losses import estimate_local_losses_from_samples
-
-tfd = tfp.distributions
-tfb = tfp.bijectors
+import tensorflow_probability.python.distributions as tfd
+import tensorflow_probability.python.bijectors as tfb
 
 debug = False
 debug_verbosity = -1
@@ -499,8 +498,6 @@ class VariationalMarkovDecisionProcess(tf.Module):
             'transition_log_probs': tf.keras.metrics.Mean(name='transition_log_probs'),
             #  'decoder_variance': tf.keras.metrics.Mean(name='decoder_variance')
         }
-        # latent policy saver
-        self._policy_saver = None
 
     def reset_metrics(self):
         for value in self.loss_metrics.values():
@@ -1586,8 +1583,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             checkpoint_interval: int = 250,
             eval_steps: int = int(1e4),
             eval_and_save_model_interval: int = int(1e4),
-            logs: bool = True,
-            log_dir: str = 'log',
+            train_summary_writer: Optional[tf.summary.SummaryWriter] = None,
             log_name: str = 'vae_training',
             annealing_period: int = 1,
             start_annealing_step: int = 0,
@@ -1639,21 +1635,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
             else:
                 print("Initializing from scratch.")
 
-        # initialize logs
-        if logs:
-            train_log_dir = os.path.join(log_dir, env_name, log_name)
-            print('log path:', train_log_dir)
-            if not os.path.exists(train_log_dir) and logs:
-                os.makedirs(train_log_dir)
-            train_summary_writer = tf.summary.create_file_writer(train_log_dir)
-        else:
-            train_summary_writer = None
-
         # attach optimizer
         self.attach_optimizer(optimizer)
-        
-        # policy saver 
-        self._policy_saver = policy_saver.PolicySaver(self.get_latent_policy())
 
         if global_step is None:
             if checkpoint is not None:
@@ -1833,7 +1816,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 eval_and_save_model_interval=eval_and_save_model_interval,
                 eval_steps=eval_steps * batch_size,
                 save_directory=save_directory, log_name=log_name, train_summary_writer=train_summary_writer,
-                log_interval=log_interval, logs=logs, start_annealing_step=start_annealing_step,
+                log_interval=log_interval, start_annealing_step=start_annealing_step,
                 additional_metrics=additional_training_metrics,
                 eval_policy_driver=policy_evaluation_driver,
                 aggressive_training=aggressive_training and global_step.numpy() < aggressive_training_steps,
@@ -1885,7 +1868,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
     def training_step(
             self, dataset, dataset_iterator, batch_size, annealing_period, global_step,
             display_progressbar, start_step, epoch, progressbar, eval_and_save_model_interval,
-            eval_steps, save_directory, log_name, train_summary_writer, log_interval, logs,
+            eval_steps, save_directory, log_name, train_summary_writer, log_interval,
             start_annealing_step, additional_metrics: Optional[Dict[str, tf.Tensor]] = None,
             eval_policy_driver: Optional[tf_agents.drivers.dynamic_episode_driver.DynamicEpisodeDriver] = None,
             aggressive_training=False, aggressive_update=True, prioritized_experience_replay=False,
@@ -1945,7 +1928,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                                eval_policy_driver=eval_policy_driver,
                                local_losses_estimator=local_losses_estimator)
         if global_step.numpy() % log_interval == 0:
-            if logs:
+            if train_summary_writer is not None:
                 with train_summary_writer.as_default():
                     for key, value in metrics_key_values:
                         tf.summary.scalar(key, value, step=global_step)
@@ -2051,18 +2034,11 @@ class VariationalMarkovDecisionProcess(tf.Module):
                     metrics['eval_' + value](tf.reduce_mean(is_weights * evaluation[value]))
                 eval_progressbar.add(batch_size, values=[('eval_ELBO', metrics['eval_elbo'].result())])
             tf.print('\n')
-        if self._policy_saver is not None:
-            self._policy_saver.save(os.path.join(save_directory, 'policy', 'tmp'))
         if eval_policy_driver is not None:
-            eval_policy_thread = threading.Thread(
-                target=self.eval_policy,
-                kwargs={
-                    "eval_policy_driver": eval_policy_driver,
-                    "train_summary_writer": train_summary_writer,
-                    "global_step": int(global_step),
-                    "policy_path": os.path.join(save_directory, 'policy', 'tmp')},
-                name="eval_policy",)
-            eval_policy_thread.start()
+            avg_rewards = self.eval_policy(
+                eval_policy_driver=eval_policy_driver,
+                train_summary_writer=train_summary_writer,
+                global_step=global_step)
 
         if local_losses_estimator is not None:
             local_losses_metrics = local_losses_estimator()
@@ -2136,6 +2112,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             policy = self.get_latent_policy()
         else:
             policy = tf.compat.v2.saved_model.load(policy_path)
+        _policy = None
 
         eval_avg_rewards = tf_agents.metrics.tf_metrics.AverageReturnMetric()
         if eval_env is not None:
@@ -2150,7 +2127,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
             eval_policy_driver = tf_agents.drivers.dynamic_episode_driver.DynamicEpisodeDriver(
                 latent_eval_env, policy, num_episodes=num_eval_episodes,
                 observers=[] if not render else [lambda _: eval_env.render(mode='human')])
-        else:
+        elif policy_path is not None:
+            _policy = eval_policy_driver._policy
             eval_policy_driver._policy = policy
 
         eval_policy_driver.observers.append(eval_avg_rewards)
@@ -2162,6 +2140,9 @@ class VariationalMarkovDecisionProcess(tf.Module):
             with train_summary_writer.as_default():
                 tf.summary.scalar('policy_evaluation_avg_rewards', eval_avg_rewards.result(), step=global_step)
         tf.print('eval policy', eval_avg_rewards.result())
+
+        if _policy is not None:
+            eval_policy_driver._policy = _policy
 
         return eval_avg_rewards.result()
 
@@ -2259,19 +2240,22 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
         class LatentPolicy(tf_policy.TFPolicy):
 
-            def __init__(self, time_step_spec, action_spec, discrete_latent_policy):
+            def __init__(
+                    self,
+                    time_step_spec,
+                    action_spec,
+                    latent_policy_network
+            ):
                 super().__init__(time_step_spec, action_spec)
-                self.discrete_latent_policy = discrete_latent_policy
+                self._latent_policy_network = latent_policy_network
 
             def _distribution(self, time_step, policy_state):
-                one_hot_categorical_distribution = self.discrete_latent_policy(
-                    tf.cast(time_step.observation, dtype=tf.float32))
-                return PolicyStep(tfd.Categorical(logits=one_hot_categorical_distribution.logits_parameter()), (), ())
+                latent_state = tf.cast(time_step.observation, dtype=tf.float32)
+                return PolicyStep(
+                    tfd.Categorical(logits=self._latent_policy_network(latent_state)),
+                    (), ())
 
-        latent_policy = LatentPolicy(time_step_spec, action_spec, self.discrete_latent_policy)
-        latent_policy._latent_policy_network = self.latent_policy_network
-
-        return latent_policy
+        return LatentPolicy(time_step_spec, action_spec, self.latent_policy_network)
 
     def estimate_local_losses_from_samples(
             self,
