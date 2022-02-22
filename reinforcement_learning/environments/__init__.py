@@ -75,7 +75,7 @@ register(
 register(
     id='PendulumRandomInit-v1',
     entry_point='reinforcement_learning.environments.pendulum:PendulumRandomInit',
-    max_episode_steps=200,
+    max_episode_steps=150,
 )
 
 register(
