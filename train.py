@@ -40,7 +40,7 @@ def generate_network_components(params, name='', wasserstein_networks=False):
     else:
         other_activations = {
             'smooth_elu': lambda x: tf.nn.softplus(2. * x + 2.) / 2. - 1.,
-            'SmoothELU': tfb.Chain([tfb.Shift(-1.), tfb.Scale(2.), tfb.Softplus(), tfb.Shift(2.), tfb.Scale(2.)])
+            'SmoothELU': tfb.Chain([tfb.Shift(-1.), tfb.Scale(.5), tfb.Softplus(), tfb.Shift(2.), tfb.Scale(2.)])
         }
         activation = other_activations.get(
             params["activation"],
@@ -201,15 +201,17 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
             base_model_name,
             os.path.split(params['policy_path'])[-1],
             'action_discretizer',
-            'LA{}_ER{}_TD{:.2f}-{:.2f}_encode={}'.format(
+            'LA{}_ER{}_TD{:.2f}-{:.2f}'.format(
                 params['number_of_discrete_actions'],
                 params['entropy_regularizer_scale_factor'] * params['action_entropy_regularizer_scaling'],
                 params['action_encoder_temperature'],
                 params['latent_policy_temperature'],
-                str(params['encode_actions']))
+                str(params['policy_based_decoding']))
         )
-    if not params['encode_actions'] and params['enforce_upper_bound']:
-        wae_name += '_UB'
+    if params['policy_based_decoding']:
+        wae_name += '_policy_based_decoding'
+        if params['enforce_upper_bound']:
+            wae_name += '_UB'
 
     if params['prioritized_experience_replay']:
         wae_name += '_PER-P_exp={:g}-WIS_exponent={:g}-WIS_growth={:g}'.format(
@@ -333,31 +335,8 @@ def main(argv):
     if params['collect_steps_per_iteration'] <= 0:
         params['collect_steps_per_iteration'] = params['batch_size'] // 8
 
-    state_encoder_temperature = params['state_encoder_temperature']
-    state_prior_temperature = params['state_prior_temperature']
-    if params['action_encoder_temperature'] < 0.:
-        if params['action_discretizer']:
-            params['action_encoder_temperature'] = 1. / (params['number_of_discrete_actions'] - 1)
-        else:
-            params['action_encoder_temperature'] = 0.99
-    if params['latent_policy_temperature'] < 0.:
-        if params['action_discretizer']:
-            params['latent_policy_temperature'] = params['action_encoder_temperature'] / 1.5
-        else:
-            params['latent_policy_temperature'] = 0.95
-    if state_encoder_temperature < 0:
-        params['state_encoder_temperature'] = 2. / 3.
-    if state_prior_temperature < 0:
-        params['state_prior_temperature'] = 1. / 2.
 
     environment_name = params['environment']
-
-    batch_size = params['batch_size']
-    mixture_components = params['mixture_components']
-    latent_state_size = params['latent_size']  # depends on the number of bits reserved for labels
-
-    vae_name = generate_vae_name(params)
-
     if params['env_suite'] != '':
         try:
             environment_suite = importlib.import_module('tf_agents.environments.' + params['env_suite'])
@@ -376,6 +355,29 @@ def main(argv):
     state_shape, action_shape, reward_shape, label_shape, time_step_spec, action_spec = \
         specs.state_shape, specs.action_shape, specs.reward_shape, specs.label_shape, \
         specs.time_step_spec, specs.action_spec
+
+    state_encoder_temperature = params['state_encoder_temperature']
+    state_prior_temperature = params['state_prior_temperature']
+    if params['action_encoder_temperature'] < 0.:
+        if params['action_discretizer']:
+            params['action_encoder_temperature'] = 1. / (params['number_of_discrete_actions'] - 1)
+        else:
+            params['action_encoder_temperature'] = 0.99
+    if params['latent_policy_temperature'] < 0.:
+        if params['action_discretizer']:
+            params['latent_policy_temperature'] = params['action_encoder_temperature'] / 1.5
+        else:
+            params['latent_policy_temperature'] = 2. / (3 * (action_shape[0] - 1))
+    if state_encoder_temperature < 0:
+        params['state_encoder_temperature'] = 2. / 3.
+    if state_prior_temperature < 0:
+        params['state_prior_temperature'] = 1. / 2.
+
+    batch_size = params['batch_size']
+    mixture_components = params['mixture_components']
+    latent_state_size = params['latent_size']  # depends on the number of bits reserved for labels
+
+    vae_name = generate_vae_name(params)
 
     if params['reward_lower_bound'] is None or params['reward_upper_bound'] is None:
         reward_bounds = None
@@ -498,7 +500,8 @@ def main(argv):
             label_shape=label_shape,
             discretize_action_space=params['action_discretizer'],
             state_encoder_network=network.encoder,
-            action_encoder_network=action_network.encoder if params['encode_actions'] else None,
+            action_encoder_network=action_network.encoder if not params['policy_based_decoding'] else None,
+            policy_based_decoding=params['policy_based_decoding'],
             action_decoder_network=action_network.decoder,
             transition_network=network.transition,
             reward_network=network.reward,
@@ -527,7 +530,6 @@ def main(argv):
             entropy_regularizer_scale_factor=params['entropy_regularizer_scale_factor'],
             entropy_regularizer_decay_rate=params['entropy_regularizer_decay_rate'],
             entropy_regularizer_scale_factor_min_value=params["entropy_regularizer_scale_factor_min_value"],
-            relaxed_exp_one_hot_action_encoding=True,
             action_entropy_regularizer_scaling = params["action_entropy_regularizer_scaling"],
             enforce_upper_bound=params['enforce_upper_bound'],
             squared_wasserstein=params['squared_wasserstein'],
@@ -536,17 +538,10 @@ def main(argv):
             state_encoder_type={
                 'autoregressive': EncodingType.AUTOREGRESSIVE,
                 'lstm': EncodingType.LSTM,
-                'normal': EncodingType.NORMAL}[params['state_encoder_type']],
+                'normal': EncodingType.INDEPENDENT}[params['state_encoder_type']],
         )
         models = [wae_mdp]
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
-
-    if params['logs']:
-        path = os.path.join(params['logdir'], environment_name, vae_name)
-        if not os.path.exists(path):
-            os.makedirs(path)
-        with open(os.path.join(path, 'parameters.json'), 'w+') as fp:
-            json.dump(params, fp)
 
     for phase, vae_mdp_model in enumerate(models):
         checkpoint_directory = os.path.join(
@@ -563,6 +558,33 @@ def main(argv):
 
         policy = policies.saved_policy.SavedTFPolicy(params['policy_path'], time_step_spec, action_spec)
 
+        if params['logs']:
+            # initialize logs
+            train_log_dir = os.path.join(params['logdir'], environment_name, vae_name)
+            print('log path:', train_log_dir)
+            if not os.path.exists(train_log_dir):
+                os.makedirs(train_log_dir)
+            with open(os.path.join(train_log_dir, 'parameters.json'), 'w+') as fp:
+                json.dump(params, fp)
+
+            train_summary_writer = tf.summary.create_file_writer(train_log_dir)
+            with train_summary_writer.as_default():
+                hyperparameters = [tf.convert_to_tensor([k, str(v)]) for k, v in params.items()]
+                tf.summary.text('hyperparameters', tf.stack(hyperparameters), step=step)
+                tf.summary.text('tf version', tf.__version__, step=step)
+                tf.summary.text('tf_agent version', tf_agents.__version__, step=step)
+                tf.summary.text('tf probability version', tfp.__version__, step=step)
+
+                try:
+                    import git
+                    repo = git.Repo('.')
+                    tf.summary.text('git head', str(repo.head.commit), step=step)
+                except Exception as exc:
+                    print(exc)
+        else:
+            train_summary_writer = None
+
+
         vae_mdp_model.train_from_policy(
             policy=policy,
             environment_suite=environment_suite,
@@ -573,8 +595,7 @@ def main(argv):
             epsilon_greedy_decay_rate=params['epsilon_greedy_decay_rate'],
             batch_size=batch_size, optimizer=optimizer, checkpoint=checkpoint,
             manager=manager,
-            log_name=vae_name,
-            log_dir=params['logdir'],
+            train_summary_writer=train_summary_writer,
             start_annealing_step=(
                 params['start_annealing_step'] + params['max_steps'] // 2
                 if phase == 1 and params['action_discretizer'] else
@@ -587,7 +608,6 @@ def main(argv):
                 params['entropy_regularizer_scale_factor'] if phase == 1 and (
                         params['action_discretizer'] or
                         params['latent_policy']) else None),
-            logs=params['logs'],
             training_steps=(
                 params['max_steps'] if not params['decompose_training'] or phase == 1
                 else params['max_steps'] // 2),
@@ -1101,10 +1121,10 @@ if __name__ == '__main__':
         help='Learning rate for the optimizer of the Wasserstein regularizers.'
     )
     flags.DEFINE_bool(
-        'encode_actions',
-        default=True,
-        help='Whether to use an action encoder or not to learn a latent action space.'
-             'If not, the latent policy alone will be used.'
+        'policy_based_decoding',
+        default=False,
+        help='Whether to use the latent policy instead of an action encoding/decoding scheme'
+             ' to learn to reconstruct the action.'
     )
     flags.DEFINE_bool(
         'enforce_upper_bound',
@@ -1124,14 +1144,15 @@ if __name__ == '__main__':
     )
     flags.DEFINE_bool(
         'trainable_prior',
-        default=True,
+        default=False,
         help='Whether to allow for training the latent steady state distribution or not.',
     )
     flags.DEFINE_enum(
         'state_encoder_type',
         'autoregressive',
-        ['autoregressive', 'lstm', 'normal'],
-        'State encoder type, defining which technique to use to encode states. If normal, independent logits are generated.')
+        ['autoregressive', 'lstm', 'independent'],
+        'State encoder type, defining which technique to use to encode states.'
+    )
 
     FLAGS = flags.FLAGS
 
