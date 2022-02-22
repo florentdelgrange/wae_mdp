@@ -2139,12 +2139,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             eval_policy_driver._policy = policy
 
         eval_policy_driver.observers.append(eval_avg_rewards)
-        try:
-            eval_policy_driver.run()
-        except Exception as e:
-            tf.print("NaN values occurred in the environment while the driver was running:")
-            tf.print(e)
-            eval_avg_rewards.result = lambda: -1. * np.inf
+        eval_policy_driver.run()
 
         eval_policy_driver.observers.remove(eval_avg_rewards)
 

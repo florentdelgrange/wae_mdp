@@ -538,7 +538,7 @@ def main(argv):
             state_encoder_type={
                 'autoregressive': EncodingType.AUTOREGRESSIVE,
                 'lstm': EncodingType.LSTM,
-                'normal': EncodingType.INDEPENDENT}[params['state_encoder_type']],
+                'independent': EncodingType.INDEPENDENT}[params['state_encoder_type']],
         )
         models = [wae_mdp]
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
