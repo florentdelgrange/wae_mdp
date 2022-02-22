@@ -213,6 +213,11 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
         if params['enforce_upper_bound']:
             wae_name += '_UB'
 
+    if params['deterministic_state_embedding']:
+        wae_name += '_deterministic_embedding'
+    else:
+        wae_name += '_stochastic_embedding'
+
     if params['prioritized_experience_replay']:
         wae_name += '_PER-P_exp={:g}-WIS_exponent={:g}-WIS_growth={:g}'.format(
             params['priority_exponent'],
@@ -234,8 +239,6 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
 
     additional_parameters = [
         'one_output_per_action',
-        # 'full_vae_optimization',
-        # 'relaxed_state_encoding',
         'latent_policy',
     ]
     nb_additional_params = sum(
@@ -539,6 +542,7 @@ def main(argv):
                 'autoregressive': EncodingType.AUTOREGRESSIVE,
                 'lstm': EncodingType.LSTM,
                 'independent': EncodingType.INDEPENDENT}[params['state_encoder_type']],
+            deterministic_state_embedding=params['deterministic_state_embedding'],
         )
         models = [wae_mdp]
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
@@ -1140,7 +1144,7 @@ if __name__ == '__main__':
     flags.DEFINE_integer(
         'n_critic',
         default=5,
-        help='Number of critic (Wasserstein networks) updates to perform before updating the autoencoders components.'
+        help='Number of critic (Wasserstein networks) updates to perform before updating the auto-encoders components.'
     )
     flags.DEFINE_bool(
         'trainable_prior',
@@ -1152,6 +1156,12 @@ if __name__ == '__main__':
         'autoregressive',
         ['autoregressive', 'lstm', 'independent'],
         'State encoder type, defining which technique to use to encode states.'
+    )
+    flags.DEFINE_bool(
+        'deterministic_state_embedding',
+        default=True,
+        help='Whether to use the mode of the probabilistic encoder to deploy the policy in the original environment or'
+             'not. If not, the probabilistic state encoding will be used.'
     )
 
     FLAGS = flags.FLAGS

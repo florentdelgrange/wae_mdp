@@ -124,6 +124,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             trainable_prior: bool = True,
             state_encoder_type: EncodingType = EncodingType.AUTOREGRESSIVE,
             policy_based_decoding: bool = False,
+            deterministic_state_embedding: bool = True,
     ):
         super(WassersteinMarkovDecisionProcess, self).__init__(
             state_shape=state_shape, action_shape=action_shape, reward_shape=reward_shape, label_shape=label_shape,
@@ -155,6 +156,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.squared_wasserstein = squared_wasserstein
         self.n_critic = n_critic
         self.trainable_prior = trainable_prior
+        self.deterministic_state_embedding = deterministic_state_embedding
 
         if self.action_discretizer:
             self.number_of_discrete_actions = number_of_discrete_actions
@@ -176,7 +178,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         self._sample_additional_transition = False
         # softclipping for latent states logits; 3 offers an probability error of about 5e-2
-        scale = 10.
+        # scale = 10.
         # self.softclip = tfb.Chain([tfb.Scale(scale), tfb.Tanh(), tfb.Scale(1. / scale)], name="softclip")
         # self.softclip = tfb.SoftClip(low=-scale, high=scale)
         self.softclip = tfb.Identity()
@@ -1263,9 +1265,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             return variational_action_discretizer.VariationalTFEnvironmentDiscretizer(
                 variational_action_discretizer=self,
                 tf_env=tf_env,
-                labeling_function=labeling_function)
+                labeling_function=labeling_function,
+                deterministic_embedding_functions=self.deterministic_state_embedding)
         else:
-            return super().wrap_tf_environment(tf_env, labeling_function)
+            return super().wrap_tf_environment(
+                tf_env=tf_env,
+                labeling_function=labeling_function,
+                deterministic_embedding_functions=self.deterministic_state_embedding)
 
     def estimate_local_losses_from_samples(
             self,
