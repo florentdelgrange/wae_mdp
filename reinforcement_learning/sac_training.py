@@ -41,7 +41,7 @@ from tf_agents.policies import policy_saver, py_tf_eager_policy
 import tf_agents.trajectories.time_step as ts
 
 from reinforcement_learning.environments import EnvironmentLoader
-from reinforcement_learning.environments.perturbed_env import PerturbedEnvironment
+from reinforcement_learning.environments.perturbed_env import NoisyEnvironment
 
 from util.io import dataset_generator
 
@@ -246,7 +246,7 @@ class SACLearner:
         env_loader = EnvironmentLoader(env_suite, seed=seed)
         if state_perturbation > 0. or action_perturbation > 0.:
             _load = env_loader.load
-            env_loader.load = lambda env_name: PerturbedEnvironment(
+            env_loader.load = lambda env_name: NoisyEnvironment(
                 env=_load(env_name),
                 state_noise=state_perturbation,
                 action_noise=action_perturbation)
