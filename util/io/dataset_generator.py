@@ -10,9 +10,12 @@ from typing import List, Dict, Tuple, Optional
 import numpy as np
 import tensorflow as tf
 import tf_agents.replay_buffers.replay_buffer
+from tensorflow.python.util.deprecation import deprecated
 from tf_agents.trajectories.trajectory import Trajectory
 import tf_agents.trajectories.time_step as ts
 import time
+
+from tf_agents.typing.types import Float
 
 
 def gather_rl_observations(
@@ -71,13 +74,16 @@ def map_rl_trajectory_to_vae_input(
         trajectory: Trajectory,
         labeling_function: Callable[[tf.Tensor], tf.Tensor],
         discrete_action: bool = False,
-        num_discrete_actions: Optional[int] = 0
+        include_latent_states: bool = False,
+        num_discrete_actions: Optional[int] = 0,
+        sample_info: Optional = None,
 ):
     """
     Maps a tf-agent trajectory of 2 time steps to a transition tuple of the form
     <state, state label, action, reward, next state, next state label>
     """
-    state = trajectory.observation[0, ...]
+    observation = trajectory.observation['state'] if include_latent_states else trajectory.observation
+    state = observation[0, ...]
     labels = tf.cast(labeling_function(trajectory.observation), tf.float32)
     if tf.rank(labels) == 1:
         labels = tf.expand_dims(labels, axis=-1)
@@ -88,10 +94,24 @@ def map_rl_trajectory_to_vae_input(
     reward = trajectory.reward[0, ...]
     if tf.rank(reward) == 0:
         reward = tf.expand_dims(reward, axis=-1)
-    next_state = trajectory.observation[1, ...]
+    next_state = observation[1, ...]
     next_label = labels[1, ...]
 
-    return state, label, action, reward, next_state, next_label
+    if include_latent_states:
+        return (state,
+                label,
+                trajectory.observation['latent_state'][0, ...],
+                action,
+                reward,
+                next_state,
+                next_label,
+                trajectory.observation['latent_state'][1, ...],)
+    elif sample_info is not None:
+        key = sample_info.key[0]
+        sample_probability = tf.cast(sample_info.probability[0], tf.float32)
+        return state, label, action, reward, next_state, next_label, key, sample_probability
+    else:
+        return state, label, action, reward, next_state, next_label
 
 
 def reset_state(state_shape):
@@ -102,7 +122,10 @@ def reset_state(state_shape):
     return tf.zeros(shape=state_shape, dtype=tf.float32)
 
 
-def ergodic_batched_labeling_function(labeling_function: Callable[[tf.Tensor], tf.Tensor]):
+def ergodic_batched_labeling_function(
+        labeling_function: Callable[[tf.Tensor], tf.Tensor],
+        reset_state: Optional[tf.Tensor] = None
+) -> Callable[[tf.Tensor], Float]:
     """
     Wrap the given labeling function to the same (batched) labeling function taking into account reset states.
     Input states are assumed to be batched and to be produced from the original environment.
@@ -110,19 +133,27 @@ def ergodic_batched_labeling_function(labeling_function: Callable[[tf.Tensor], t
     """
 
     def _labeling_function(state: tf.Tensor):
+        if reset_state is None:
+            _reset_state = tf.zeros_like(state[0, ...])
+        else:
+            _reset_state = reset_state
+
         label = tf.cast(labeling_function(state), dtype=tf.float32)
         label = tf.cond(
             tf.rank(label) == 1,
             lambda: tf.expand_dims(label, axis=-1),
             lambda: label)
-        return tf.concat(
-            [label, tf.zeros(shape=tf.concat([tf.shape(label)[:-1], tf.constant([1], dtype=tf.int32)], axis=-1),
-                             dtype=tf.float32)],
-            axis=-1)
+        reset_atomic_prop = tf.cast(
+            tf.reduce_all(state == _reset_state, axis=-1),
+            dtype=tf.float32)
+        return tf.concat([label, reset_atomic_prop], axis=-1)
 
     return _labeling_function
 
 
+@deprecated(
+    date='2022-02-23',
+    instructions='Use function map_rl_trajectories_to_vae_input instead, coupled with a perturbed Environment.')
 class ErgodicMDPTransitionGenerator:
     """
     Generates a dataset from 2-steps transitions contained in a replay buffer.
