@@ -1161,9 +1161,9 @@ class VariationalTFEnvironmentDiscretizer(tf_environment.TFEnvironment):
         ]
         self._current_latent_state = None
         if deterministic_embedding_functions:
-            self._get_embedding = lambda distribution: tf.cast(distribution.mode(), dtype=tf.int32)
+            self._get_embedding = lambda distribution: distribution.mode()
         else:
-            self._get_embedding = lambda distribution: tf.cast(distribution.sample(), dtype=tf.int32)
+            self._get_embedding = lambda distribution: distribution.sample()
         self.deterministic_embedding_functions = deterministic_embedding_functions
         self.labeling_function = dataset_generator.ergodic_batched_labeling_function(labeling_function)
 
