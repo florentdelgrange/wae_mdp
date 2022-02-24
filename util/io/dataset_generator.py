@@ -134,7 +134,7 @@ def ergodic_batched_labeling_function(
 
     def _labeling_function(state: tf.Tensor):
         if reset_state is None:
-            _reset_state = tf.zeros_like(state[0, ...])
+            _reset_state = tf.zeros_like(state)
         else:
             _reset_state = reset_state
 
