@@ -1522,15 +1522,14 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 #  deterministic=False  # TF version >= 2.2.0
             )
 
-        def transition_generator(trajectory: Trajectory, sample_info=None):
-            return map_rl_trajectory_to_vae_input(
-                trajectory=trajectory,
-                labeling_function=ergodic_batched_labeling_function(labeling_function),
-                discrete_action=discrete_action_space,
-                num_discrete_actions=self.action_shape[0],
-                sample_info=sample_info)
-
-        dataset = dataset_generator(transition_generator)
+        dataset = dataset_generator(
+                lambda trajectory, buffer_info:
+                map_rl_trajectory_to_vae_input(
+                    trajectory=trajectory,
+                    labeling_function=ergodic_batched_labeling_function(labeling_function),
+                    discrete_action=discrete_action_space,
+                    num_discrete_actions=self.action_shape[0],
+                    sample_info=buffer_info if use_prioritized_replay_buffer else None))
         dataset_iterator = iter(
             dataset.batch(
                 batch_size=batch_size,
