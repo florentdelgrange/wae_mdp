@@ -1033,7 +1033,8 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
         _labeling_function = dataset_generator.ergodic_batched_labeling_function(labeling_function)
 
         return estimate_local_losses_from_samples(
-            environment=environment, latent_policy=self.get_latent_policy(),
+            environment=environment,
+            latent_policy=self.get_latent_policy(),
             steps=steps,
             latent_state_size=self.latent_state_size,
             number_of_discrete_actions=self.number_of_discrete_actions,

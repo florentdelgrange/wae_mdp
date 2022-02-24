@@ -1293,7 +1293,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         return estimate_local_losses_from_samples(
             environment=environment,
-            latent_policy=self.get_latent_policy(),
+            latent_policy=self.get_latent_policy(action_dtype=tf.int64),
             steps=steps,
             latent_state_size=self.latent_state_size,
             number_of_discrete_actions=self.number_of_discrete_actions,

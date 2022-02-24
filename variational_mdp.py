@@ -2214,19 +2214,23 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
         return VariationalTFEnvironmentDiscretizer(self, tf_env, labeling_function, deterministic_embedding_functions)
 
-    def get_latent_policy(self) -> tf_policy.TFPolicy:
+    def get_latent_policy(
+            self,
+            observation_dtype: tf.dtypes = tf.int32,
+            action_dtype: tf.dtypes = tf.int32
+    ) -> tf_policy.TFPolicy:
 
         assert self.latent_policy_network is not None
         action_spec = specs.BoundedTensorSpec(
             shape=(),
-            dtype=tf.int32,
+            dtype=action_dtype,
             minimum=0,
             maximum=self.number_of_discrete_actions - 1,
             name='action'
         )
         observation_spec = specs.BoundedTensorSpec(
             shape=(self.latent_state_size,),
-            dtype=tf.int32,
+            dtype=observation_dtype,
             minimum=0,
             maximum=1,
             name='observation'
@@ -2247,7 +2251,9 @@ class VariationalMarkovDecisionProcess(tf.Module):
             def _distribution(self, time_step, policy_state):
                 latent_state = tf.cast(time_step.observation, dtype=tf.float32)
                 return PolicyStep(
-                    tfd.Categorical(logits=self._latent_policy_network(latent_state)),
+                    tfd.Categorical(
+                        logits=self._latent_policy_network(latent_state),
+                        dtype=action_dtype),
                     (), ())
 
         return LatentPolicy(time_step_spec, action_spec, self.latent_policy_network)
@@ -2269,7 +2275,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             environment=environment,
             steps=steps,
             latent_state_size=self.latent_state_size,
-            latent_policy=self.get_latent_policy(),
+            latent_policy=self.get_latent_policy(action_dtype=tf.int64),
             number_of_discrete_actions=self.number_of_discrete_actions,
             state_embedding_function=self.state_embedding_function,
             action_embedding_function=self.action_embedding_function,
