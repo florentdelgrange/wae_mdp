@@ -8,6 +8,7 @@ import psutil
 from absl import logging
 import threading
 
+from reinforcement_learning.environments.perturbed_env import PerturbedEnvironment
 from util.io.video import VideoEmbeddingObserver
 
 try:
@@ -44,7 +45,7 @@ from policies.time_stacked_states import TimeStackedStatesPolicyWrapper
 from policies.epsilon_mimic import EpsilonMimicPolicy
 from reinforcement_learning.environments import EnvironmentLoader
 from util.io import dataset_generator
-from util.io.dataset_generator import reset_state
+from util.io.dataset_generator import reset_state, map_rl_trajectory_to_vae_input, ergodic_batched_labeling_function
 from util.io.dataset_generator import ErgodicMDPTransitionGenerator
 from util.replay_buffer_tools import PriorityBuckets, LossPriority, PriorityHandler
 from verification.local_losses import estimate_local_losses_from_samples
@@ -738,7 +739,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
             self,
             state: tf.Tensor,
             label: Optional[tf.Tensor] = None,
-            labeling_function: Optional[Callable[[tf.Tensor], tf.Tensor]] = None
+            labeling_function: Optional[Callable[[tf.Tensor], tf.Tensor]] = None,
+            deterministic_embedding: bool = True,
     ) -> tf.Tensor:
 
         if labeling_function is not None:
@@ -747,7 +749,10 @@ class VariationalMarkovDecisionProcess(tf.Module):
         if label is not None:
             label = tf.cast(label, dtype=tf.float32)
 
-        return self.binary_encode_state(state, label).mode()
+        if deterministic_embedding:
+            return self.binary_encode_state(state, label).mode()
+        else:
+            return self.binary_encode_state(state, label).sample()
 
     def action_embedding_function(
             self,
@@ -815,7 +820,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
         next_latent_state = tf.concat([next_label, tf.sigmoid(next_logistic_latent_state)], axis=-1)
 
         if self.latent_policy_network is not None and self.full_optimization:
-            # log P(a, r, s' | z, z') =  log π(a | z) + log P(r | z, a, z') + log P(s' | z')
+                # log P(a, r, s' | z, z') =  log π(a | z) + log P(r | z, a, z') + log P(s' | z')
             reconstruction_distribution = tfd.JointDistributionSequential([
                 self.discrete_latent_policy(latent_state),
                 lambda _action: self.reward_distribution(latent_state, _action, next_latent_state),
@@ -1267,7 +1272,9 @@ class VariationalMarkovDecisionProcess(tf.Module):
             local_losses_eval_replay_buffer_size: Optional[int] = int(1e5),
             local_losses_reward_scaling: Optional[float] = 1.,
             embed_video_policy_evaluation: bool = False,
-            video_path: str = 'video'
+            video_path: str = 'video',
+            environment_perturbation: float = 2./3,
+            recursive_environment_perturbation: bool = True,
     ):
         # reverb replay buffers are not compatible with batched environments
         parallel_environments = parallel_environments and not use_prioritized_replay_buffer
@@ -1285,11 +1292,19 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
         if parallel_environments:
             py_env = parallel_py_environment.ParallelPyEnvironment(
-                [lambda: env_loader.load(env_name)] * num_parallel_environments)
+                [lambda: PerturbedEnvironment(
+                    env=env_loader.load(env_name),
+                    perturbation=environment_perturbation,
+                    recursive_perturbation=recursive_environment_perturbation)
+                 ] * num_parallel_environments)
             env = tf_py_environment.TFPyEnvironment(py_env)
             env.reset()
         else:
             py_env = env_loader.load(env_name)
+            py_env = PerturbedEnvironment(
+                py_env,
+                perturbation=environment_perturbation,
+                recursive_perturbation=recursive_environment_perturbation)
             py_env.reset()
             env = tf_py_environment.TFPyEnvironment(py_env) if not use_prioritized_replay_buffer else py_env
 
@@ -1420,37 +1435,12 @@ class VariationalMarkovDecisionProcess(tf.Module):
                     max_priority=10., )
                 priority_handler: PriorityHandler = self.priority_handler
 
-            _add_environment_step = reverb_utils.ReverbTrajectorySequenceObserver(
+            add_environment_step = reverb_utils.ReverbTrajectorySequenceObserver(
                 py_client=replay_buffer.py_client,
                 table_name=table_name,
                 sequence_length=2,
                 stride_length=1,
                 priority=priority_handler.max_priority)
-
-            reset_trajectory = Trajectory(
-                step_type=ts.StepType.MID,
-                observation=reset_state(state_shape=self.state_shape),
-                action=(np.zeros(shape=self.action_shape, dtype=np.float32)
-                        if not discrete_action_space else np.zeros(shape=(), dtype=np.int64)),
-                policy_info=(),
-                next_step_type=ts.StepType.MID,
-                reward=(np.zeros(shape=(), dtype=np.float32)
-                        if self.reward_shape == (1,) else np.zeros(shape=self.reward_shape, dtype=np.float32)),
-                discount=())
-
-            def add_environment_step(trajectory: Trajectory):
-                if trajectory.is_first():
-                    _add_environment_step(trajectory.replace(step_type=ts.StepType.MID))
-                elif trajectory.is_last():
-                    _add_environment_step(trajectory.replace(next_step_type=ts.StepType.MID))
-                elif trajectory.is_boundary():
-                    _add_environment_step(trajectory.replace(next_step_type=ts.StepType.MID))
-                    _add_environment_step(
-                        reset_trajectory.replace(policy_info=trajectory.policy_info, discount=trajectory.discount))
-                else:
-                    _add_environment_step(trajectory)
-
-            add_environment_step.close = _add_environment_step.close
 
             driver = py_driver.PyDriver(
                 env=env,
@@ -1478,7 +1468,6 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
             def close():
                 env.close()
-                add_environment_step.close()
                 reverb_server.stop()
 
         else:
@@ -1518,32 +1507,30 @@ class VariationalMarkovDecisionProcess(tf.Module):
             print("Initial collect steps...")
             initial_collect_driver.run(env.current_time_step())
 
-        def dataset_generator(generator: Optional = None):
-            if generator is None:
-                generator = ErgodicMDPTransitionGenerator(
-                    labeling_function,
-                    replay_buffer,
-                    discrete_action=discrete_action_space,
-                    num_discrete_actions=tf.cast(self.action_shape[0]))
+        def dataset_generator(generator_fn):
             return replay_buffer.as_dataset(
                 num_parallel_calls=tf.data.experimental.AUTOTUNE,
                 num_steps=2
             ).map(
-                map_func=generator,
+                map_func=generator_fn,
                 num_parallel_calls=tf.data.experimental.AUTOTUNE,
                 #  deterministic=False  # TF version >= 2.2.0
             )
 
-        transition_generator = ErgodicMDPTransitionGenerator(
-            labeling_function=labeling_function,
-            replay_buffer=replay_buffer,
-            discrete_action=discrete_action_space,
-            num_discrete_actions=self.action_shape[0],
-            prioritized_replay_buffer=use_prioritized_replay_buffer)
+        def transition_generator(trajectory: Trajectory, sample_info=None):
+            return map_rl_trajectory_to_vae_input(
+                trajectory=trajectory,
+                labeling_function=ergodic_batched_labeling_function(labeling_function),
+                discrete_action=discrete_action_space,
+                num_discrete_actions=self.action_shape[0],
+                sample_info=sample_info)
 
         dataset = dataset_generator(transition_generator)
         dataset_iterator = iter(
-            dataset.batch(batch_size=batch_size, drop_remainder=True).prefetch(tf.data.experimental.AUTOTUNE))
+            dataset.batch(
+                batch_size=batch_size,
+                drop_remainder=True
+            ).prefetch(tf.data.experimental.AUTOTUNE))
 
         return DatasetComponents(
             replay_buffer=replay_buffer,
