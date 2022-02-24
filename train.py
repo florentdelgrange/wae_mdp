@@ -640,7 +640,9 @@ def main(argv):
             local_losses_eval_steps=params['local_losses_evaluation_steps'],
             local_losses_eval_replay_buffer_size=params['local_losses_replay_buffer_size'],
             local_losses_reward_scaling=reinforcement_learning.reward_scaling.get(environment_name, 1.),
-            embed_video_evaluation=params['generate_videos'])
+            embed_video_evaluation=params['generate_videos'],
+            environment_perturbation=params['environment_perturbation'],
+            recursive_environment_perturbation=params['recursive_environment_perturbation'])
 
     return 0
 
@@ -1162,6 +1164,18 @@ if __name__ == '__main__':
         default=True,
         help='Whether to use the mode of the probabilistic encoder to deploy the policy in the original environment or'
              'not. If not, the probabilistic state encoding will be used.'
+    )
+    flags.DEFINE_float(
+        'environment_perturbation',
+        lower_bound=0.,
+        upper_bound=1.,
+        help="Environment perturbation to enforce an ergodic episodic RL process (see Huang et al. 2020).",
+        default=.75
+    )
+    flags.DEFINE_bool(
+        'recursive_environment_perturbation',
+        help='Whether to apply recursive perturbations to the environment to enforce an ergodic episodic RL process.',
+        default=True
     )
 
     FLAGS = flags.FLAGS
