@@ -122,7 +122,9 @@ class VariationalMarkovDecisionProcess(tf.Module):
                  importance_sampling_exponent: Optional[float] = 1.,
                  importance_sampling_exponent_growth_rate: Optional[float] = 0.,
                  time_stacked_lstm_units: int = 128,
-                 reward_bounds: Optional[Tuple[float, float]] = None):
+                 reward_bounds: Optional[Tuple[float, float]] = None,
+                 deterministic_state_embedding: bool = True,
+    ):
 
         super(VariationalMarkovDecisionProcess, self).__init__()
 
@@ -139,6 +141,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
         self._optimizer = optimizer
         self.time_stacked_states = time_stacked_states
         self.time_stacked_lstm_units = time_stacked_lstm_units
+        self.deterministic_state_embedding = deterministic_state_embedding
 
         # initialize all tf variables
         self._entropy_regularizer_scale_factor = None
@@ -756,10 +759,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
     def action_embedding_function(
             self,
-            state: tf.Tensor,
+            latent_state: tf.Tensor,
             latent_action: tf.Tensor,
-            label: Optional[tf.Tensor] = None,
-            labeling_function: Optional[Callable[[tf.Tensor], tf.Tensor]] = None
     ) -> tf.Tensor:
         return latent_action
 
@@ -820,7 +821,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
         next_latent_state = tf.concat([next_label, tf.sigmoid(next_logistic_latent_state)], axis=-1)
 
         if self.latent_policy_network is not None and self.full_optimization:
-                # log P(a, r, s' | z, z') =  log π(a | z) + log P(r | z, a, z') + log P(s' | z')
+            # log P(a, r, s' | z, z') =  log π(a | z) + log P(r | z, a, z') + log P(s' | z')
             reconstruction_distribution = tfd.JointDistributionSequential([
                 self.discrete_latent_policy(latent_state),
                 lambda _action: self.reward_distribution(latent_state, _action, next_latent_state),
@@ -1273,7 +1274,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             local_losses_reward_scaling: Optional[float] = 1.,
             embed_video_policy_evaluation: bool = False,
             video_path: str = 'video',
-            environment_perturbation: float = 2./3,
+            environment_perturbation: float = 3. / 4.,
             recursive_environment_perturbation: bool = True,
     ):
         # reverb replay buffers are not compatible with batched environments
@@ -1336,7 +1337,11 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
         if local_losses_evaluation and self.latent_policy_network is not None:
             py_local_loss_eval_env = parallel_py_environment.ParallelPyEnvironment(
-                [lambda: env_loader.load(env_name)] * _num_parallel_environments)
+                [lambda: PerturbedEnvironment(
+                    env=env_loader.load(env_name),
+                    perturbation=environment_perturbation,
+                    recursive_perturbation=recursive_environment_perturbation)
+                 ] * num_parallel_environments)
             local_losses_eval_env = tf_py_environment.TFPyEnvironment(py_local_loss_eval_env)
             local_losses_eval_env.reset()
 
@@ -1596,7 +1601,9 @@ class VariationalMarkovDecisionProcess(tf.Module):
             local_losses_eval_steps: Optional[int] = int(3e4),
             local_losses_eval_replay_buffer_size: Optional[int] = int(1e5),
             local_losses_reward_scaling: Optional[float] = 1.,
-            embed_video_evaluation: bool = False
+            embed_video_evaluation: bool = False,
+            environment_perturbation: float = 3. / 4.,
+            recursive_environment_perturbation: bool = True,
     ):
         if wall_time is not None:
             if start_time is None:
@@ -1670,7 +1677,9 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 local_losses_eval_replay_buffer_size=local_losses_eval_replay_buffer_size,
                 local_losses_reward_scaling=local_losses_reward_scaling,
                 embed_video_policy_evaluation=embed_video_evaluation,
-                video_path=os.path.join(save_directory, 'videos') if save_directory is not None else None)
+                video_path=os.path.join(save_directory, 'videos') if save_directory is not None else None,
+                environment_perturbation=environment_perturbation,
+                recursive_environment_perturbation=recursive_environment_perturbation,)
 
             env = environment if environment is not None else environments.training
             policy_evaluation_driver = policy_evaluation_driver if policy_evaluation_driver is not None \
@@ -1788,7 +1797,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
             if use_prioritized_replay_buffer and not buckets_based_priorities:
                 diff = (self.priority_handler.max_loss.result() - self.priority_handler.min_loss.result())
                 if diff != 0:
-                    additional_training_metrics['priority_logistic_smoothness'] = self.priority_handler.max_priority / diff
+                    additional_training_metrics[
+                        'priority_logistic_smoothness'] = self.priority_handler.max_priority / diff
                 additional_training_metrics['priority_logistic_mean'] = diff / 2
                 additional_training_metrics['priority_logistic_max'] = self.priority_handler.max_loss.result()
                 additional_training_metrics['priority_logistic_min'] = self.priority_handler.min_loss.result()
@@ -1841,7 +1851,6 @@ class VariationalMarkovDecisionProcess(tf.Module):
             for key, value in loss.items():
                 if tf.reduce_any(tf.logical_or(tf.math.is_nan(value), tf.math.is_inf(value))):
                     logging.warning("{} is NaN or Inf: {}".format(key, value))
-                    
 
         # save the final model
         if save_directory is not None:
@@ -1891,7 +1900,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                              [(key, value) for key, value in loss.items()] + \
                              [(key, value.result()) for key, value in self.loss_metrics.items()] + \
                              [(key, value) for key, value in additional_metrics.items()]
-                             # [(key, value) for key, value in self.mean_latent_bits_used(dataset_batch).items()]
+        # [(key, value) for key, value in self.mean_latent_bits_used(dataset_batch).items()]
         if annealing_period != 0:
             metrics_key_values.append(('t_1', self.encoder_temperature))
             metrics_key_values.append(('t_2', self.prior_temperature))
@@ -2042,9 +2051,9 @@ class VariationalMarkovDecisionProcess(tf.Module):
                                 data[value] * 2 ** tf.range(tf.cast(self.latent_state_size, dtype=tf.int64)),
                                 axis=-1)
                         tf.summary.histogram('{}_frequency'.format(value[:-1]),
-                                data[value],
-                                step=global_step,
-                                buckets=buckets[value])
+                                             data[value],
+                                             step=global_step,
+                                             buckets=buckets[value])
                 if local_losses_metrics is not None:
                     tf.summary.scalar('local_reward_loss', local_losses_metrics.local_reward_loss, step=global_step)
                     if (local_losses_metrics.local_probability_loss_transition_function_estimation is not None and
@@ -2260,6 +2269,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
         return estimate_local_losses_from_samples(
             environment=environment,
             steps=steps,
+            latent_state_size=self.latent_state_size,
             latent_policy=self.get_latent_policy(),
             number_of_discrete_actions=self.number_of_discrete_actions,
             state_embedding_function=self.state_embedding_function,
@@ -2269,8 +2279,9 @@ class VariationalMarkovDecisionProcess(tf.Module):
                     tf.cast(latent_state, dtype=tf.float32),
                     action,
                     tf.cast(next_latent_state, dtype=tf.float32)).mode()),
-            labeling_function=
-            (lambda x: labeling_function(x)[:, -1, ...]) if self.time_stacked_states else labeling_function,
+            labeling_function=(
+                lambda x: labeling_function(x)[:, -1, ...]
+            ) if self.time_stacked_states else labeling_function,
             latent_transition_function=(
                 lambda latent_state, action:
                 self.discrete_latent_transition(
@@ -2308,7 +2319,7 @@ def load(tf_model_path: str, discrete_action=False, step: Optional[int] = None) 
             pre_loaded_model=True,
             action_label_transition_network=tf_model.action_label_transition_network,
             action_transition_network=tf_model.action_transition_network,
-            evaluation_window_size=tf.shape(tf_model.evaluation_window)[0],)
+            evaluation_window_size=tf.shape(tf_model.evaluation_window)[0], )
 
     else:
         model = VariationalMarkovDecisionProcess(

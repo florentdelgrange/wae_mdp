@@ -143,7 +143,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             reward_bounds=reward_bounds,
             entropy_regularizer_scale_factor=entropy_regularizer_scale_factor,
             entropy_regularizer_scale_factor_min_value=entropy_regularizer_scale_factor_min_value,
-            entropy_regularizer_decay_rate=entropy_regularizer_decay_rate)
+            entropy_regularizer_decay_rate=entropy_regularizer_decay_rate,
+            deterministic_state_embedding=deterministic_state_embedding)
 
         self.wasserstein_regularizer_scale_factor = wasserstein_regularizer_scale_factor
         self.mixture_components = None
@@ -156,7 +157,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.squared_wasserstein = squared_wasserstein
         self.n_critic = n_critic
         self.trainable_prior = trainable_prior
-        self.deterministic_state_embedding = deterministic_state_embedding
 
         if self.action_discretizer:
             self.number_of_discrete_actions = number_of_discrete_actions
@@ -540,26 +540,22 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
     def action_embedding_function(
             self,
-            state: tf.Tensor,
+            latent_state: tf.Tensor,
             latent_action: tf.Tensor,
-            label: Optional[tf.Tensor] = None,
-            labeling_function: Optional[Callable[[tf.Tensor], tf.Tensor]] = None
     ) -> tf.Tensor:
-        if (label is None) == (labeling_function is None):
-            raise ValueError("Must either pass a label or a labeling_function")
-
-        if labeling_function is not None:
-            label = labeling_function(state)
 
         if self.action_discretizer:
-            return self.decode_action(
-                latent_state=tf.cast(self.state_embedding_function(state, label=label), dtype=tf.float32),
+            decoder = self.decode_action(
+                latent_state=tf.cast(latent_state, dtype=tf.float32),
                 latent_action=tf.cast(
                     tf.one_hot(
                         latent_action,
                         depth=self.number_of_discrete_actions),
-                    dtype=tf.float32),
-            ).mode()
+                    dtype=tf.float32),)
+            if self.deterministic_state_embedding:
+                return decoder.mode()
+            else:
+                return decoder.sample()
         else:
             return latent_action
 
@@ -1285,7 +1281,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     ):
         if self.time_stacked_states:
             labeling_function = lambda x: labeling_function(x)[:, -1, ...]
-        _labeling_function = dataset_generator.ergodic_batched_labeling_function(labeling_function)
 
         class LatentTransitionFunction:
             def __init__(self, discrete_latent_transition, latent_state, latent_action):
@@ -1300,10 +1295,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             environment=environment,
             latent_policy=self.get_latent_policy(),
             steps=steps,
+            latent_state_size=self.latent_state_size,
             number_of_discrete_actions=self.number_of_discrete_actions,
             state_embedding_function=self.state_embedding_function,
-            action_embedding_function=lambda state, latent_action: self.action_embedding_function(
-                state, latent_action, labeling_function=_labeling_function),
+            action_embedding_function=self.action_embedding_function,
             latent_reward_function=lambda latent_state, latent_action, next_latent_state: (
                 self.reward_distribution(
                     latent_state=tf.cast(latent_state, dtype=tf.float32),
