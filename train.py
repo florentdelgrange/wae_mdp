@@ -3,6 +3,7 @@ import importlib
 import json
 import os
 import random
+import sys
 from collections import namedtuple
 
 import numpy as np
@@ -30,6 +31,7 @@ import reinforcement_learning.environments
 from layers.encoders import EncodingType
 
 FLAGS = flags.FLAGS
+default_flags = FLAGS.flag_values_dict()
 
 
 def generate_network_components(params, name='', wasserstein_networks=False):
@@ -59,7 +61,7 @@ def generate_network_components(params, name='', wasserstein_networks=False):
 
     for component_name in component_names:
         x = Sequential(name="{}{}_network_body".format(name, component_name))
-        
+
         if params["global_network_layers"] is not None:
             params[component_name + "_layers"] = params["global_network_layers"]
 
@@ -189,7 +191,7 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
         params['state_encoder_type'])
     if params['wasserstein_optimizer'] is not None:
         wae_name += '_wopt={}_lr={:g}'.format(
-                params['wasserstein_optimizer'], params['wasserstein_learning_rate'])
+            params['wasserstein_optimizer'], params['wasserstein_learning_rate'])
     if params['squared_wasserstein']:
         wae_name += '_W2'
     if not params['trainable_prior']:
@@ -337,7 +339,6 @@ def main(argv):
 
     if params['collect_steps_per_iteration'] <= 0:
         params['collect_steps_per_iteration'] = params['batch_size'] // 8
-
 
     environment_name = params['environment']
     if params['env_suite'] != '':
@@ -533,7 +534,7 @@ def main(argv):
             entropy_regularizer_scale_factor=params['entropy_regularizer_scale_factor'],
             entropy_regularizer_decay_rate=params['entropy_regularizer_decay_rate'],
             entropy_regularizer_scale_factor_min_value=params["entropy_regularizer_scale_factor_min_value"],
-            action_entropy_regularizer_scaling = params["action_entropy_regularizer_scaling"],
+            action_entropy_regularizer_scaling=params["action_entropy_regularizer_scaling"],
             enforce_upper_bound=params['enforce_upper_bound'],
             squared_wasserstein=params['squared_wasserstein'],
             n_critic=params['n_critic'],
@@ -573,11 +574,16 @@ def main(argv):
 
             train_summary_writer = tf.summary.create_file_writer(train_log_dir)
             with train_summary_writer.as_default():
-                hyperparameters = [tf.convert_to_tensor([k, str(v)]) for k, v in params.items()]
+                hyperparameters = [
+                    tf.convert_to_tensor([k, str(v)])
+                    for k, v in
+                    dict(set(params.items()) - set(default_flags.items())).items()
+                ]
                 tf.summary.text('hyperparameters', tf.stack(hyperparameters), step=step)
                 tf.summary.text('tf version', tf.__version__, step=step)
                 tf.summary.text('tf_agent version', tf_agents.__version__, step=step)
                 tf.summary.text('tf probability version', tfp.__version__, step=step)
+                tf.summary.text('python version', sys.version)
 
                 try:
                     import git
@@ -587,7 +593,6 @@ def main(argv):
                     print(exc)
         else:
             train_summary_writer = None
-
 
         vae_mdp_model.train_from_policy(
             policy=policy,
