@@ -11,8 +11,9 @@ from tf_agents.trajectories import policy_step, trajectory
 from tf_agents.utils import common
 import tensorflow_probability as tfp
 
-from util.io.dataset_generator import ErgodicMDPTransitionGenerator
-from verification.latent_environment import DiscreteActionTFEnvironmentWrapper
+from util.io.dataset_generator import ErgodicMDPTransitionGenerator, map_rl_trajectory_to_vae_input, \
+    ergodic_batched_labeling_function
+from verification.latent_environment import DiscreteActionTFEnvironmentWrapper, LatentEmbeddingTFEnvironmentWrapper
 from policies.latent_policy import LatentPolicyOverRealStateSpace
 from verification.transition_function import TransitionFrequencyEstimator
 
@@ -23,6 +24,7 @@ def estimate_local_losses_from_samples(
         environment: TFPyEnvironment,
         latent_policy: tf_policy.TFPolicy,
         steps: int,
+        latent_state_size: int,
         number_of_discrete_actions: int,
         state_embedding_function: Callable[[tf.Tensor, Optional[tf.Tensor]], tf.Tensor],
         action_embedding_function: Callable[[tf.Tensor, tf.Tensor], tf.Tensor],
@@ -71,17 +73,16 @@ def estimate_local_losses_from_samples(
     if latent_transition_function is None and not estimate_transition_function_from_samples:
         raise ValueError('no latent transition function provided')
     # generate environment wrapper for discrete actions
-    latent_environment = DiscreteActionTFEnvironmentWrapper(
+    latent_environment = LatentEmbeddingTFEnvironmentWrapper(
         tf_env=environment,
-        action_embedding_function=action_embedding_function,
-        number_of_discrete_actions=number_of_discrete_actions, )
-    # set the latent policy over real states
-    policy = LatentPolicyOverRealStateSpace(
-        time_step_spec=latent_environment.time_step_spec(),
+        state_embedding_fn=state_embedding_function,
+        action_embedding_fn=action_embedding_function,
         labeling_function=labeling_function,
-        latent_policy=latent_policy,
-        state_embedding_function=state_embedding_function)
-    # policy_step_spec = policy_step.PolicyStep(action=latent_environment.action_spec(), state=(), info=())
+        latent_state_size=latent_state_size,
+        number_of_discrete_actions=number_of_discrete_actions,
+        reward_scaling=reward_scaling)
+    # set the latent policy over real states
+    policy = latent_environment.wrap_latent_policy(latent_policy)
     trajectory_spec = trajectory.from_transition(
         time_step=latent_environment.time_step_spec(),
         action_step=policy.policy_step_spec,
@@ -108,11 +109,11 @@ def estimate_local_losses_from_samples(
     collect_time = time.time() - start_time
 
     # retrieve dataset from the replay buffer
-    generator = ErgodicMDPTransitionGenerator(
-        labeling_function,
-        replay_buffer,
-        discrete_action=True,
-        num_discrete_actions=number_of_discrete_actions)
+    generator = lambda trajectory: map_rl_trajectory_to_vae_input(
+        trajectory=trajectory,
+        include_latent_states=True,
+        discrete_actions=True,
+        labeling_function=ergodic_batched_labeling_function(labeling_function))
 
     def sample_from_replay_buffer(num_transitions: Optional[int] = None, single_deterministic_pass=False):
         dataset = replay_buffer.as_dataset(
@@ -128,20 +129,15 @@ def estimate_local_losses_from_samples(
             drop_remainder=False)
         dataset_iterator = iter(dataset)
 
-        state, label, latent_action, reward, next_state, next_label = next(dataset_iterator)
-        latent_state = tf.cast(state_embedding_function(state, label), tf.int32)
-        next_latent_state_no_label = state_embedding_function(next_state, None)
-        next_latent_state = tf.concat(
-                [tf.cast(next_label, dtype=tf.int32),
-                 tf.cast(next_latent_state_no_label, dtype=tf.int32)],
-                axis=-1)
+        state, label, latent_state, latent_action, reward, next_state, next_label, next_latent_state = \
+            next(dataset_iterator)
 
         return namedtuple(
             'ErgodicMDPTransitionSample',
             ['state', 'label', 'latent_state', 'latent_action', 'reward', 'next_state', 'next_label',
              'next_latent_state_no_label', 'next_latent_state', 'batch_size'])(
-            state, label, latent_state, latent_action, reward, next_state, next_label, next_latent_state_no_label,
-            next_latent_state, tf.shape(state)[0])
+            state, label, latent_state, latent_action, reward, next_state, next_label,
+            next_latent_state[..., -latent_state_size:], next_latent_state, tf.shape(state)[0])
 
     local_reward_loss_time = time.time()
 
