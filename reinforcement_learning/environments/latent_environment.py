@@ -51,7 +51,7 @@ class LatentEmbeddingTFEnvironmentWrapper(TFEnvironment):
             tf_env: TFEnvironment,
             state_embedding_fn: Callable[[tf.Tensor, tf.Tensor], tf.Tensor],
             action_embedding_fn: Callable[[tf.Tensor, tf.Tensor], tf.Tensor],
-            labeling_function: Callable[[tf.Tensor], tf.Tensor],
+            labeling_fn: Callable[[tf.Tensor], tf.Tensor],
             latent_state_size: int,
             number_of_discrete_actions: int,
             reward_scaling: Optional[float] = 1.,
@@ -78,7 +78,7 @@ class LatentEmbeddingTFEnvironmentWrapper(TFEnvironment):
         self.state_embedding_fn = state_embedding_fn
         self.action_embedding_fn = action_embedding_fn
         self.reward_scaling = reward_scaling
-        self.labeling_fn = dataset_generator.ergodic_batched_labeling_function(labeling_function)
+        self.labeling_fn = dataset_generator.ergodic_batched_labeling_function(labeling_fn)
         self._current_latent_state = None
 
     def _current_time_step(self):

@@ -1,7 +1,5 @@
 import gc
-import os
 from collections import namedtuple
-import threading
 
 import tensorflow as tf
 from typing import Tuple, Optional, Callable, NamedTuple, List, Union
@@ -17,9 +15,7 @@ from tf_agents.typing.types import Float, Int
 from tf_agents.environments import tf_py_environment, tf_environment
 
 import variational_action_discretizer
-from layers import autoregressive_bernoulli
-from layers.autoregressive_bernoulli import ConditionalTransformedDistribution, \
-    AutoRegressiveBernoulliNetwork
+from layers.autoregressive_bernoulli import AutoRegressiveBernoulliNetwork
 from layers.latent_policy import LatentPolicyNetwork
 from layers.decoders import RewardNetwork, ActionReconstructionNetwork, StateReconstructionNetwork
 from layers.encoders import StateEncoderNetwork, ActionEncoderNetwork, AutoRegressiveStateEncoderNetwork, EncodingType
@@ -1249,25 +1245,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
             mbu.update({'mean_action_bits_used': mean_bits_used})
         return mbu
-
-    def wrap_tf_environment(
-            self,
-            tf_env: tf_environment.TFEnvironment,
-            labeling_function: Callable[[tf.Tensor], tf.Tensor],
-            *args,
-            **kwargs
-    ) -> tf_environment.TFEnvironment:
-        if self.action_discretizer:
-            return variational_action_discretizer.VariationalTFEnvironmentDiscretizer(
-                variational_action_discretizer=self,
-                tf_env=tf_env,
-                labeling_function=labeling_function,
-                deterministic_embedding_functions=self.deterministic_state_embedding)
-        else:
-            return super().wrap_tf_environment(
-                tf_env=tf_env,
-                labeling_function=labeling_function,
-                deterministic_embedding_functions=self.deterministic_state_embedding)
 
     def estimate_local_losses_from_samples(
             self,

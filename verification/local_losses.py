@@ -7,14 +7,13 @@ from tf_agents.environments.tf_py_environment import TFPyEnvironment
 from tf_agents.drivers.dynamic_step_driver import DynamicStepDriver
 from tf_agents.policies import tf_policy
 from tf_agents.replay_buffers.tf_uniform_replay_buffer import TFUniformReplayBuffer
-from tf_agents.trajectories import policy_step, trajectory
+from tf_agents.trajectories import trajectory
 from tf_agents.utils import common
 import tensorflow_probability as tfp
 
-from util.io.dataset_generator import ErgodicMDPTransitionGenerator, map_rl_trajectory_to_vae_input, \
+from util.io.dataset_generator import map_rl_trajectory_to_vae_input, \
     ergodic_batched_labeling_function
-from verification.latent_environment import DiscreteActionTFEnvironmentWrapper, LatentEmbeddingTFEnvironmentWrapper
-from policies.latent_policy import LatentPolicyOverRealStateSpace
+from reinforcement_learning.environments.latent_environment import LatentEmbeddingTFEnvironmentWrapper
 from verification.transition_function import TransitionFrequencyEstimator
 
 tfd = tfp.distributions
@@ -79,7 +78,7 @@ def estimate_local_losses_from_samples(
         tf_env=environment,
         state_embedding_fn=state_embedding_function,
         action_embedding_fn=action_embedding_function,
-        labeling_function=labeling_function,
+        labeling_fn=labeling_function,
         latent_state_size=latent_state_size,
         number_of_discrete_actions=number_of_discrete_actions,
         reward_scaling=reward_scaling)
