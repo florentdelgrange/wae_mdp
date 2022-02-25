@@ -1275,6 +1275,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             latent_state_size=self.latent_state_size,
             number_of_discrete_actions=self.number_of_discrete_actions,
             state_embedding_function=self.state_embedding_function,
+            probabilistic_state_embedding=None if self.deterministic_state_embedding else self.binary_encode_state,
             action_embedding_function=self.action_embedding_function,
             latent_reward_function=lambda latent_state, latent_action, next_latent_state: (
                 self.reward_distribution(
@@ -1290,7 +1291,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             estimate_transition_function_from_samples=estimate_transition_function_from_samples,
             replay_buffer_max_frames=replay_buffer_max_frames,
             reward_scaling=reward_scaling,
-            atomic_prop_dims=self.atomic_props_dims)
+            atomic_prop_dims=self.atomic_props_dims,)
 
     def eval_and_save(
             self,
