@@ -743,19 +743,19 @@ class VariationalMarkovDecisionProcess(tf.Module):
             state: tf.Tensor,
             label: Optional[tf.Tensor] = None,
             labeling_function: Optional[Callable[[tf.Tensor], tf.Tensor]] = None,
-            deterministic_embedding: bool = True,
+            dtype: tf.dtypes = tf.int32,
     ) -> tf.Tensor:
-
-        if labeling_function is not None:
-            label = labeling_function(state)
 
         if label is not None:
             label = tf.cast(label, dtype=tf.float32)
+        elif labeling_function is not None:
+            label = labeling_function(state)
 
-        if deterministic_embedding:
-            return self.binary_encode_state(state, label).mode()
+        if self.deterministic_state_embedding:
+            latent_state = self.binary_encode_state(state, label).mode()
         else:
-            return self.binary_encode_state(state, label).sample()
+            latent_state = self.binary_encode_state(state, label).sample()
+        return tf.cast(latent_state, dtype)
 
     def action_embedding_function(
             self,

@@ -106,7 +106,7 @@ class LatentEmbeddingTFEnvironmentWrapper(TFEnvironment):
         self._current_latent_state = next_latent_state
         return next_time_step._replace(
             observation={
-                'observation': next_time_step.observation,
+                'state': next_time_step.observation,
                 'latent_state': next_latent_state},
             reward=self.reward_scaling * next_time_step.reward)
 

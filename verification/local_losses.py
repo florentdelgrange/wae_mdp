@@ -35,7 +35,8 @@ def estimate_local_losses_from_samples(
         assert_transition_distribution: bool = False,
         fill_in_replay_buffer: bool = True,
         replay_buffer_max_frames: int = int(1e5),
-        reward_scaling: Optional[float] = 1.
+        reward_scaling: Optional[float] = 1.,
+        atomic_prop_dims: Optional[int] = None,
 ):
     """
     Estimates reward and probability local losses from samples.
@@ -64,9 +65,10 @@ def estimate_local_losses_from_samples(
                                                       or not. If True, the latent transition function estimated this
                                                       way stores the probability matrix into a sparse tensor.
     :param assert_transition_distribution: whether to assert the transition function is correctly computed or not
-    :return: a dictionary containing an estimation of the local reward and probability losses
     :param fill_in_replay_buffer: whether to fill in the replay buffer or not before the loss estimation.
     :param replay_buffer_max_frames: maximum number of frames to be contained in the replay buffer.
+    :param atomic_prop_dims: number of atomic propositions; in other words the rightmost label shape.
+    :return: a namedtuple containing an estimation of the local reward and probability losses
     """
     start_time = time.time()
 
@@ -109,10 +111,11 @@ def estimate_local_losses_from_samples(
     collect_time = time.time() - start_time
 
     # retrieve dataset from the replay buffer
-    generator = lambda trajectory: map_rl_trajectory_to_vae_input(
+    generator = lambda trajectory, _: map_rl_trajectory_to_vae_input(
         trajectory=trajectory,
         include_latent_states=True,
-        discrete_actions=True,
+        discrete_action=True,
+        num_discrete_actions=number_of_discrete_actions,
         labeling_function=ergodic_batched_labeling_function(labeling_function))
 
     def sample_from_replay_buffer(num_transitions: Optional[int] = None, single_deterministic_pass=False):
@@ -135,17 +138,24 @@ def estimate_local_losses_from_samples(
         return namedtuple(
             'ErgodicMDPTransitionSample',
             ['state', 'label', 'latent_state', 'latent_action', 'reward', 'next_state', 'next_label',
-             'next_latent_state_no_label', 'next_latent_state', 'batch_size'])(
+             'next_latent_state', 'batch_size'])(
             state, label, latent_state, latent_action, reward, next_state, next_label,
-            next_latent_state[..., -latent_state_size:], next_latent_state, tf.shape(state)[0])
+            next_latent_state, tf.shape(state)[0])
 
     local_reward_loss_time = time.time()
 
     samples = sample_from_replay_buffer(num_transitions=steps)
-    (state, label, latent_state, latent_action, reward, next_state, next_label, next_latent_state_no_label,
+    (state, label, latent_state, latent_action, reward, next_state, next_label,
      next_latent_state) = (
         samples.state, samples.label, samples.latent_state, samples.latent_action, samples.reward,
-        samples.next_state, samples.next_label, samples.next_latent_state_no_label, samples.next_latent_state)
+        samples.next_state, samples.next_label, samples.next_latent_state)
+
+    if atomic_prop_dims is None:
+        atomic_prop_dims = latent_state_size - tf.shape(
+            state_embedding_function(state, None)
+        )[-1]
+    
+    next_latent_state_no_label = next_latent_state[..., atomic_prop_dims:]
 
     local_reward_loss = estimate_local_reward_loss(
         state, label, latent_action, reward, next_state, next_label,
@@ -240,7 +250,7 @@ def estimate_local_reward_loss(
         latent_state = state_embedding_function(state, label)
     if next_latent_state is None:
         next_latent_state = state_embedding_function(next_state, next_label)
-
+    
     return tf.reduce_mean(reward_scaling * tf.abs(
         reward - latent_reward_function(latent_state, latent_action, next_latent_state)))
 

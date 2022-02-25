@@ -1312,7 +1312,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 latent_action=latent_action),
             estimate_transition_function_from_samples=estimate_transition_function_from_samples,
             replay_buffer_max_frames=replay_buffer_max_frames,
-            reward_scaling=reward_scaling)
+            reward_scaling=reward_scaling,
+            atomic_prop_dims=self.atomic_props_dims)
 
     def eval_and_save(
             self,
@@ -1407,16 +1408,20 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                                              step=global_step, buckets=32)
                 if local_losses_metrics is not None:
                     tf.summary.scalar('local_reward_loss', local_losses_metrics.local_reward_loss, step=global_step)
-                    tf.summary.scalar('local_transition_loss', local_losses_metrics.local_transition_loss, step=global_step)
+                    tf.summary.scalar('local_transition_loss',
+                            local_losses_metrics.local_transition_loss, step=global_step)
                     if local_losses_metrics.local_transition_loss_transition_function_estimation is not None:
                         tf.summary.scalar('local_transition_loss_empirical_transition_function',
                                 local_losses_metrics.local_transition_loss_transition_function_estimation,
                                 step=global_step)
-                    tf.print('Local reward loss: {:.2f}'.format(local_losses_metrics.local_reward_loss))
-                    tf.print('Local transition loss: {:.2f}'.format(local_losses_metrics.local_transition_loss))
-                    tf.print('Local transition loss (empirical transition function): {:.2f}'
-                             ''.format(local_losses_metrics.local_transition_loss_transition_function_estimation))
 
+        if local_losses_metrics is not None:
+            tf.print('Local reward loss: {:.2f}'.format(local_losses_metrics.local_reward_loss))
+            tf.print('Local transition loss: {:.2f}'.format(local_losses_metrics.local_transition_loss))
+            tf.print('Local transition loss (empirical transition function): {:.2f}'
+                        ''.format(local_losses_metrics.local_transition_loss_transition_function_estimation))
+
+        if eval_steps > 0:
             print('eval loss: ', metrics['eval_loss'].result().numpy())
 
         if eval_policy_driver is not None or eval_steps > 0:

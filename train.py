@@ -5,6 +5,7 @@ import os
 import random
 import sys
 from collections import namedtuple
+import datetime
 
 import numpy as np
 import tensorflow as tf
@@ -576,14 +577,16 @@ def main(argv):
             with train_summary_writer.as_default():
                 hyperparameters = [
                     tf.convert_to_tensor([k, str(v)])
-                    for k, v in
-                    dict(set(params.items()) - set(default_flags.items())).items()
+                    for k, v in {
+                        key: value for key, value in params.items()
+                        if key not in default_flags
+                    }.items()
                 ]
                 tf.summary.text('hyperparameters', tf.stack(hyperparameters), step=step)
                 tf.summary.text('tf version', tf.__version__, step=step)
                 tf.summary.text('tf_agent version', tf_agents.__version__, step=step)
                 tf.summary.text('tf probability version', tfp.__version__, step=step)
-                tf.summary.text('python version', sys.version)
+                tf.summary.text('python version', sys.version, step=step)
 
                 try:
                     import git
@@ -628,7 +631,7 @@ def main(argv):
             eval_and_save_model_interval=params['evaluation_interval'],
             policy_evaluation_num_episodes=(
                 0 if not (params['action_discretizer'] or params['latent_policy'])
-                     or (phase == 0 and len(models) > 1) else 30),
+                     or (phase == 0 and len(models) > 1) else params['num_eval_episodes']),
             policy_evaluation_env_name=params['policy_environment'],
             annealing_period=params['annealing_period'],
             aggressive_training=params['aggressive_training'],
@@ -803,6 +806,11 @@ if __name__ == '__main__':
         "do_not_eval",
         default=False,
         help="Set this flag to not perform an evaluation of the ELBO (using discrete latent variables) during training."
+    )
+    flags.DEFINE_integer(
+        "num_eval_episodes",
+        default=30,
+        help='Number of episodes to achieve during the latent policy evaluation.'
     )
     flags.DEFINE_bool(
         "full_vae_optimization",

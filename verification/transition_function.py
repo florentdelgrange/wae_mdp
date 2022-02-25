@@ -16,6 +16,8 @@ class TransitionFrequencyEstimator:
             backup_transition_function: Callable[[tf.Tensor, tf.Tensor], tfd.Distribution],
             assert_distribution: bool = False
     ):
+        latent_states = tf.cast(latent_states, dtype=tf.int32)
+        next_latent_states = tf.cast(next_latent_states, dtype=tf.int32)
         self.latent_state_size = tf.shape(latent_states)[1]  # first axis is batch, second is latent state size
         self.num_states = 2 ** self.latent_state_size
         self.num_actions = tf.shape(latent_actions)[1]  # first axis is batch, second is a one-hot vector
@@ -90,6 +92,7 @@ class TransitionFrequencyEstimator:
             tf.assert_less(tf.abs(1. - state_action_pairs.values), epsilon)
 
     def __call__(self, latent_state: tf.Tensor, latent_action: tf.Tensor):
+        latent_state = tf.cast(latent_state, tf.int32)
         state = tf.reduce_sum(latent_state * 2 ** tf.range(self.latent_state_size), axis=-1)
         action = tf.argmax(latent_action, axis=-1)
 

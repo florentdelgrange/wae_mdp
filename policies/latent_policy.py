@@ -61,6 +61,6 @@ class LatentPolicyOverRealStateAndActionSpaces(tf_policy.TFPolicy):
             policy_state
         ).action.sample()
         action = tf.cast(
-            self.action_embedding_function(time_step.observation, latent_action, label),
+            self.action_embedding_function(latent_state, latent_action),
             dtype=self.action_spec.dtype)
         return PolicyStep(action=tfd.Deterministic(action), state=policy_state, info=())

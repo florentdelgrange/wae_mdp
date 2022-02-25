@@ -69,8 +69,8 @@ class PerturbedEnvironment(PyEnvironmentBaseWrapper):
                 self._initialized = True
                 try:
                     self.render(mode='rgb_array')
-                except Exception as e:
-                    print(e)
+                except Exception:
+                    pass
             return time_step
 
     def _step(self, action):
