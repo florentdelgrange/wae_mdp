@@ -187,7 +187,7 @@ def estimate_local_losses_from_samples(
     local_transition_loss = estimate_local_transition_loss(
         state, label, latent_action, next_state, next_label,
         latent_transition_function, latent_state, next_latent_state_no_label,
-        probabilistic_state_embedding)
+        probabilistic_state_embedding=probabilistic_state_embedding)
 
     local_transition_loss_time = time.time() - local_transition_loss_time
 
@@ -196,7 +196,7 @@ def estimate_local_losses_from_samples(
         local_transition_loss_transition_fn_estimation = estimate_local_transition_loss(
             state, label, latent_action, next_state, next_label,
             empirical_latent_transition_function, latent_state, next_latent_state_no_label,
-            probabilistic_state_embedding)
+            probabilistic_state_embedding=probabilistic_state_embedding)
     else:
         local_transition_loss_transition_fn_estimation = None
 
@@ -209,8 +209,12 @@ def estimate_local_losses_from_samples(
         print("Time to estimate the local transition loss function (from {:d} transitions):"
               " {:.3f}".format(steps, local_transition_loss_time))
         if estimate_transition_function_from_samples:
-            print("Time to estimate the transition function (from {:d} transitions): {:3f}".format(
-                _transition_function_estimation_num_frames, local_transition_loss_time2))
+            print("Time to build the transition function via frequency estimation"
+                  "(from {:d} transitions): {:3f}".format(
+                _transition_function_estimation_num_frames, transition_function_estimation_time))
+            print("Time to estimate the local transition loss function via the frequency "
+                  "estimated transition function (from {:d} transitions):"
+                  " {:.3f}".format(steps, local_transition_loss_time2))
 
     time_metrics = {
         'fill_replay_buffer': collect_time,
@@ -281,25 +285,40 @@ def estimate_local_transition_loss(
         latent_state = state_embedding_function(state, label)
     if next_latent_state_no_label is None:
         next_latent_state_no_label = state_embedding_function(next_state, None)
-
+    
     next_label = tf.cast(next_label, tf.float32)
     next_latent_state_no_label = tf.cast(next_latent_state_no_label, tf.float32)
+
+
     if probabilistic_state_embedding:
         latent_state_space = binary_latent_space(tf.shape(latent_state)[-1], dtype=tf.float32)
-        state_embedding_probs = probabilistic_state_embedding(next_state, next_label).prob(latent_state_space)
-        return .5 * tf.map_fn(
-            fn=(lambda latent_state_action_pair:
-                tf.reduce_sum(
-                    tf.abs(
-                        state_embedding_probs -
-                        latent_transition_function(
-                            tf.expand_dims(latent_state_action_pair[0], 0),
-                            tf.expand_dims(latent_state_action_pair[1], 0)
-                        ).prob(
-                            latent_state_space[..., :tf.shape(next_label)[-1]],
-                            latent_state_space[..., tf.shape(next_label)[-1]:])))),
-            elems=[latent_state, latent_action],
-            dtype=tf.float32)
+
+        @tf.function
+        def total_variation(transition):
+            _latent_state, _latent_action, _next_state, _next_label = transition
+            tile = lambda t: tf.tile(
+                tf.expand_dims(t, 0),
+                [tf.shape(latent_state_space)[0], 1])
+
+            latent_transition_distribution = latent_transition_function(
+                    tile(_latent_state), tile(_latent_action))
+            embedding_distribution = probabilistic_state_embedding(
+                    tile(_next_state), tile(_next_label))
+            return .5 * tf.reduce_sum(
+                tf.abs(
+                    embedding_distribution.prob(latent_state_space) -
+                    latent_transition_distribution.prob(
+                        latent_state_space[..., :tf.shape(next_label)[-1]],
+                        latent_state_space[..., tf.shape(next_label)[-1]:],
+                        full_latent_state_space=True)),
+                axis=0)
+
+        return tf.reduce_mean(
+            tf.map_fn(
+                fn=total_variation,
+                elems=[latent_state, latent_action, next_state, next_label],
+                fn_output_signature=tf.float32))
+
     else:
         latent_transition_distribution = latent_transition_function(latent_state, latent_action)
         return tf.reduce_mean(1. - latent_transition_distribution.prob(next_label, next_latent_state_no_label))

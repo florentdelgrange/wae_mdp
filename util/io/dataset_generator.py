@@ -84,7 +84,7 @@ def map_rl_trajectory_to_vae_input(
     """
     observation = trajectory.observation['state'] if include_latent_states else trajectory.observation
     state = observation[0, ...]
-    labels = tf.cast(labeling_function(trajectory.observation), tf.float32)
+    labels = tf.cast(labeling_function(observation), tf.float32)
     if tf.rank(labels) == 1:
         labels = tf.expand_dims(labels, axis=-1)
     label = labels[0, ...]
@@ -100,12 +100,12 @@ def map_rl_trajectory_to_vae_input(
     if include_latent_states:
         return (state,
                 label,
-                trajectory.observation['latent_state'][0, ...],
+                tf.cast(trajectory.observation['latent_state'][0, ...], tf.float32),
                 action,
                 reward,
                 next_state,
                 next_label,
-                trajectory.observation['latent_state'][1, ...],)
+                tf.cast(trajectory.observation['latent_state'][1, ...], tf.float32))
     elif sample_info is not None:
         key = sample_info.key[0]
         sample_probability = tf.cast(sample_info.probability[0], tf.float32)
@@ -143,9 +143,11 @@ def ergodic_batched_labeling_function(
             tf.rank(label) == 1,
             lambda: tf.expand_dims(label, axis=-1),
             lambda: label)
-        reset_atomic_prop = tf.cast(
-            tf.reduce_all(state == _reset_state, axis=-1),
-            dtype=tf.float32)
+        reset_atomic_prop = tf.expand_dims(
+            tf.cast(
+                tf.reduce_all(state == _reset_state, axis=-1),
+                dtype=tf.float32),
+            axis=-1)
         return tf.concat([label, reset_atomic_prop], axis=-1)
 
     return _labeling_function

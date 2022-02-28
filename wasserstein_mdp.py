@@ -1265,7 +1265,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     latent_state=tf.cast(latent_state, tf.float32),
                     latent_action=tf.cast(latent_action, tf.float32))
 
-            def prob(self, label, state_without_label) -> Float:
+            def prob(self, label, state_without_label, **kwargs) -> Float:
                 return self._distribution.prob(tf.concat([label, state_without_label], axis=-1))
 
         return estimate_local_losses_from_samples(
@@ -1398,6 +1398,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             tf.print('Local transition loss: {:.2f}'.format(local_losses_metrics.local_transition_loss))
             tf.print('Local transition loss (empirical transition function): {:.2f}'
                         ''.format(local_losses_metrics.local_transition_loss_transition_function_estimation))
+            local_losses_metrics.print_time_metrics()
 
         if eval_steps > 0:
             print('eval loss: ', metrics['eval_loss'].result().numpy())

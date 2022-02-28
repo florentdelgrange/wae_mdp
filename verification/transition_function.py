@@ -14,7 +14,7 @@ class TransitionFrequencyEstimator:
             latent_actions: tf.Tensor,
             next_latent_states: tf.Tensor,
             backup_transition_function: Callable[[tf.Tensor, tf.Tensor], tfd.Distribution],
-            assert_distribution: bool = False
+            assert_distribution: bool = False,
     ):
         latent_states = tf.cast(latent_states, dtype=tf.int32)
         next_latent_states = tf.cast(next_latent_states, dtype=tf.int32)
@@ -71,17 +71,6 @@ class TransitionFrequencyEstimator:
 
             return tf.sparse.reorder(transition_tensor)
 
-            # probs = tf.reduce_sum(
-            #     tf.map_fn(
-            #         fn=lambda x: tf.where(
-            #             condition=tf.reduce_all(transition_counter.indices[..., :-1] == x[0], axis=-1),
-            #             x=transition_counter.values / x[1],
-            #             y=tf.zeros(tf.shape(transition_counter.values))),
-            #         elems=(state_action_pair_counter.indices,
-            #                state_action_pair_counter.values),
-            #         fn_output_signature=tf.float32),
-            #     axis=0)
-
         self.transitions = compute_transition_probabilities(transition_counter, probs, i, j)
         self.enabled_actions = tf.cast(
             tf.sparse.reduce_sum(self.transitions, axis=-1, output_is_sparse=True),
@@ -118,11 +107,30 @@ class TransitionFrequencyEstimator:
                            tf.expand_dims(next_latent_state_no_label, axis=0)))
 
         @tf.function
-        def _prob(*value):
+        def _prob(*value, **kwargs):
             next_label, next_latent_state_no_label = value
-            return tf.map_fn(
-                fn=_get_prob_value,
-                elems=(latent_state, state, action, next_latent_state_no_label, next_label),
-                fn_output_signature=tf.float32)
+            full_latent_state_space = kwargs['full_latent_state_space']
+            if full_latent_state_space:
+                return _probs_row(next_label, next_latent_state_no_label)
+            else:
+                return tf.map_fn(
+                    fn=_get_prob_value,
+                    elems=(latent_state, state, action, next_latent_state_no_label, next_label),
+                    fn_output_signature=tf.float32)
+        
+        @tf.function
+        def _probs_row(full_latent_state_space_labels, full_latent_state_space_no_label):
+            action_is_enabled = tf.squeeze(tf.sparse.slice(
+                self.enabled_actions, [state[0, ...], action[0, ...]], [1, 1]).values)
+            if tf.size(action_is_enabled) > 0 and action_is_enabled:
+                return tf.squeeze(tf.sparse.to_dense(tf.sparse.slice(
+                    self.transitions, [state[0, ...], action[0, ...], 0], [1, 1, self.num_states])))
+            else:
+                return self.backup_transition_function(
+                        latent_state,
+                        tf.one_hot(action, depth=self.num_actions)
+                    ).prob(
+                        full_latent_state_space_labels,
+                        full_latent_state_space_no_label)
 
         return namedtuple('next_state_transition_distribution', ['prob'])(_prob)
