@@ -41,7 +41,7 @@ class PerturbedEnvironment(PyEnvironmentBaseWrapper):
     allowing to enforce an ergodic episodic RL process.
     """
 
-    def __init__(self, env: Any, perturbation: float, recursive_perturbation: bool = False):
+    def __init__(self, env: Any, perturbation: float, recursive_perturbation: bool = False, rendering=False):
         super(PerturbedEnvironment, self).__init__(env)
         self.perturbation = np.clip(perturbation, a_min=1e-12, a_max=1. - 1e-12)
         self.recursive_perturbation = recursive_perturbation
@@ -49,6 +49,7 @@ class PerturbedEnvironment(PyEnvironmentBaseWrapper):
         self._initialized = False
         self._last_rendering = None
         self._handle_auto_reset = True
+        self.rendering = rendering
 
     def _reset(self):
         self._in_null_state = (
@@ -67,10 +68,11 @@ class PerturbedEnvironment(PyEnvironmentBaseWrapper):
             time_step = super(PerturbedEnvironment, self)._reset()
             if not self._initialized:
                 self._initialized = True
-                try:
-                    self.render(mode='rgb_array')
-                except Exception:
-                    pass
+                if self.rendering:
+                    try:
+                        self.render(mode='rgb_array')
+                    except Exception:
+                        pass
             return time_step
 
     def _step(self, action):
