@@ -109,7 +109,7 @@ class TransitionFrequencyEstimator:
         @tf.function
         def _prob(*value, **kwargs):
             next_label, next_latent_state_no_label = value
-            full_latent_state_space = kwargs['full_latent_state_space']
+            full_latent_state_space = kwargs.get('full_latent_state_space', False)
             if full_latent_state_space:
                 return _probs_row(next_label, next_latent_state_no_label)
             else:
