@@ -721,9 +721,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     keys=sample_key,
                     latent_states=tf.stop_gradient(tf.cast(tf.round(latent_state), tf.int32)),
                     loss=tf.stop_gradient(reconstruction_loss +
-                                          marginal_variance +
-                                          steady_state_regularizer +
-                                          transition_loss_regularizer)))
+                                          marginal_variance)))
 
         # loss metrics
         self.loss_metrics['reconstruction_loss'](reconstruction_loss)
