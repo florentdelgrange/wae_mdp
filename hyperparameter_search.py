@@ -6,6 +6,7 @@ import time
 from typing import Optional
 
 import tensorflow as tf
+import numpy as np
 import optuna
 import importlib
 
@@ -71,7 +72,6 @@ def search(
         entropy_regularizer_scale_factor = trial.suggest_float('entropy_regularizer_scale_factor', 1e-2, 10., log=True)
         action_entropy_regularizer_scaling = trial.suggest_float(
             'action_entropy_regularizer_scaling', 1e-1, 1., log=True)
-        entropy_regularizer_decay_rate = trial.suggest_float('entropy_regularizer_decay_rate', 1e-6, 1e-4, log=True)
         deterministic_state_embedding = trial.suggest_categorical('deterministic_state_embedding', [True, False])
 
         if fixed_parameters['epsilon_greedy'] > 0.:
@@ -83,7 +83,7 @@ def search(
 
 
         if fixed_parameters['wae']:
-            wasserstein_optimizer = trial.suggest_categorical('optimizer', ['Adam', 'RMSprop'])
+            wasserstein_optimizer = trial.suggest_categorical('wasserstein_optimizer', ['Adam', 'RMSprop'])
             wasserstein_learning_rate = trial.suggest_float('wasserstein_learning_rate', 1e-4, 1e-3, log=True)
 
             if fixed_parameters['policy_based_decoding']:
@@ -98,9 +98,9 @@ def search(
                 enforce_upper_bound = False
 
             global_wasserstein_regularizer_scale_factor = trial.suggest_categorical(
-                'global_wasserstein_regularizer_scale_factor', tf.range(10., 101., 10.))
+                'global_wasserstein_regularizer_scale_factor', np.arange(10., 101., 10.))
             global_gradient_penalty_scale_factor = trial.suggest_categorical(
-                'global_gradient_penalty_scale_factor', tf.range(10., 101., 10.))
+                'global_gradient_penalty_scale_factor', np.arange(10., 101., 10.))
             n_critic = trial.suggest_categorical('n_critic', [5, 10])
 
             if fixed_parameters['trainable_prior']:
@@ -109,9 +109,11 @@ def search(
                 trainable_prior = False
 
             state_encoder_type = trial.suggest_categorical(
-                'state_encoder_type', [EncodingType.AUTOREGRESSIVE, EncodingType.LSTM, EncodingType.INDEPENDENT])
+                'state_encoder_type', ['autoregressive', 'lstm', 'independent'])
+            entropy_regularizer_decay_rate = 0.
 
         else:
+            entropy_regularizer_decay_rate = trial.suggest_float('entropy_regularizer_decay_rate', 1e-6, 1e-4, log=True)
             label_transition_function = trial.suggest_categorical('label_transition_function', [True, False])
             kl_annealing_growth_rate = trial.suggest_float('kl_annealing_growth_rate', 1e-6, 1e-4, log=True)
 
@@ -281,7 +283,11 @@ def search(
                 squared_wasserstein=hyperparameters['squared_wasserstein'],
                 n_critic=hyperparameters['n_critic'],
                 trainable_prior=hyperparameters['trainable_prior'],
-                state_encoder_type=hyperparameters['state_encoder_type'],
+                state_encoder_type={
+                    'autoregressive': EncodingType.AUTOREGRESSIVE,
+                    'lstm': EncodingType.LSTM,
+                    'independent': EncodingType.INDEPENDENT
+                }[hyperparameters['state_encoder_type']],
                 policy_based_decoding=hyperparameters['policy_based_decoding'],
                 deterministic_state_embedding=hyperparameters['deterministic_state_embedding'])
         else:
