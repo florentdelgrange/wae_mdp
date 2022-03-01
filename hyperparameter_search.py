@@ -131,9 +131,9 @@ def search(
             'latent_state_size', specs.label_shape[0] + 2, max(20, specs.label_shape[0] + 8))
 
         if fixed_parameters['prioritized_experience_replay']:
-            prioritized_experience_replay = True
-        else:
             prioritized_experience_replay = trial.suggest_categorical('prioritized_experience_replay', [True, False])
+        else:
+            prioritized_experience_replay = False
 
         if prioritized_experience_replay:
             if fixed_parameters['collect_steps_per_iteration'] > 0:
