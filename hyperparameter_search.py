@@ -10,6 +10,7 @@ import optuna
 import importlib
 
 import wasserstein_mdp
+from layers.encoders import EncodingType
 from policies.saved_policy import SavedTFPolicy
 import reinforcement_learning
 import reinforcement_learning.environments
@@ -63,7 +64,7 @@ def search(
         defaults = {}
         optimizer = trial.suggest_categorical('optimizer', ['Adam', 'RMSprop'])
         learning_rate = trial.suggest_float('learning_rate', 1e-4, 1e-3, log=True)
-        batch_size = trial.suggest_categorical('batch_size', [64, 128, 256])
+        batch_size = trial.suggest_categorical('batch_size', [64, 128, 256, 512])
         neurons = trial.suggest_categorical('neurons', [64, 128, 256, 512])
         hidden = trial.suggest_int('hidden', 1, 3)
         activation = trial.suggest_categorical('activation', ['relu', 'leaky_relu', 'softplus', 'gelu', 'smooth_elu'])
@@ -71,28 +72,45 @@ def search(
         action_entropy_regularizer_scaling = trial.suggest_float(
             'action_entropy_regularizer_scaling', 1e-1, 1., log=True)
         entropy_regularizer_decay_rate = trial.suggest_float('entropy_regularizer_decay_rate', 1e-6, 1e-4, log=True)
+        deterministic_state_embedding = trial.suggest_categorical('deterministic_state_embedding', [True, False])
+
         if fixed_parameters['epsilon_greedy'] > 0.:
             epsilon_greedy = trial.suggest_float('epsilon_greedy', 0., fixed_parameters['epsilon_greedy'])
-            epsilon_greedy_decay_rate = 0.
+            epsilon_greedy_decay_rate = trial.suggest_float('epsilon_greedy_decay_rate', 1e-6, 1e-4, log=True)
         else:
             epsilon_greedy = 0.
-            epsilon_greedy_decay_rate = trial.suggest_float('epsilon_greedy_decay_rate', 1e-6, 1e-4, log=True)
+            epsilon_greedy_decay_rate = 0.
+
 
         if fixed_parameters['wae']:
-            wasserstein_optimizer = optimizer
+            wasserstein_optimizer = trial.suggest_categorical('optimizer', ['Adam', 'RMSprop'])
             wasserstein_learning_rate = trial.suggest_float('wasserstein_learning_rate', 1e-4, 1e-3, log=True)
-            encode_actions = trial.suggest_categorical('encode_actions', [True, False])
-            global_wasserstein_regularizer_scale_factor = trial.suggest_float(
-                'regularizer_scale_factor', 1., 100.)
-            global_gradient_penalty_scale_factor = 10.
-            n_critic = trial.suggest_int('n_critic', 1, 10)
-            trainable_prior = trial.suggest_categorical('trainable_prior', [True, False])
-            if encode_actions:
-                squared_wasserstein = trial.suggest_categorical('squared_wasserstein', [True, False])
-                enforce_upper_bound = False
+
+            if fixed_parameters['policy_based_decoding']:
+                policy_based_decoding = trial.suggest_categorical('policy_based_decoding', [True, False])
             else:
+                policy_based_decoding = False
+            if policy_based_decoding:
                 squared_wasserstein = True
                 enforce_upper_bound = trial.suggest_categorical('enforce_upper_bound', [True, False])
+            else:
+                squared_wasserstein = trial.suggest_categorical('squared_wasserstein', [True, False])
+                enforce_upper_bound = False
+
+            global_wasserstein_regularizer_scale_factor = trial.suggest_categorical(
+                'global_wasserstein_regularizer_scale_factor', tf.range(10., 101., 10.))
+            global_gradient_penalty_scale_factor = trial.suggest_categorical(
+                'global_gradient_penalty_scale_factor', tf.range(10., 101., 10.))
+            n_critic = trial.suggest_categorical('n_critic', [5, 10])
+
+            if fixed_parameters['trainable_prior']:
+                trainable_prior = trial.suggest_categorical('trainable_prior', [True, False])
+            else:
+                trainable_prior = False
+
+            state_encoder_type = trial.suggest_categorical(
+                'state_encoder_type', [EncodingType.AUTOREGRESSIVE, EncodingType.LSTM, EncodingType.INDEPENDENT])
+
         else:
             label_transition_function = trial.suggest_categorical('label_transition_function', [True, False])
             kl_annealing_growth_rate = trial.suggest_float('kl_annealing_growth_rate', 1e-6, 1e-4, log=True)
@@ -170,9 +188,10 @@ def search(
                          'time_stacked_states',
                          'state_encoder_pre_processing_network', 'state_decoder_pre_processing_network',
                          'optimizer'] + [
-                         'wasserstein_optimizer', 'wasserstein_learning_rate', 'encode_actions',
+                         'wasserstein_optimizer', 'wasserstein_learning_rate', 'policy_based_decoding',
                          'global_wasserstein_regularizer_scale_factor', 'global_gradient_penalty_scale_factor',
                          'n_critic', 'squared_wasserstein', 'enforce_upper_bound', 'trainable_prior',
+                         'state_encoder_type', 'deterministic_state_embedding'
                         ] + ([
                             'number_of_discrete_actions'] if fixed_parameters['action_discretizer'] else []):
                 defaults[attr] = locals()[attr]
@@ -183,7 +202,7 @@ def search(
                          'importance_sampling_exponent_growth_rate', 'specs',
                          'buckets_based_priorities', 'epsilon_greedy', 'epsilon_greedy_decay_rate', 'time_stacked_states',
                          'state_encoder_pre_processing_network', 'state_decoder_pre_processing_network',
-                         'optimizer', 'label_transition_function'] + ([
+                         'optimizer', 'label_transition_function', 'deterministic_state_embedding'] + ([
                             'number_of_discrete_actions', 'one_output_per_action']
                             if fixed_parameters['action_discretizer'] else []):
                 defaults[attr] = locals()[attr]
@@ -227,7 +246,7 @@ def search(
                 label_shape=specs.label_shape,
                 discretize_action_space=fixed_parameters['action_discretizer'],
                 state_encoder_network=network.encoder,
-                action_encoder_network=action_network.encoder if hyperparameters['encode_actions'] else None,
+                action_encoder_network=action_network.encoder if not hyperparameters['policy_based_decoding'] else None,
                 action_decoder_network=action_network.decoder,
                 transition_network=network.transition,
                 reward_network=network.reward,
@@ -257,12 +276,14 @@ def search(
                 entropy_regularizer_scale_factor=hyperparameters['entropy_regularizer_scale_factor'],
                 entropy_regularizer_decay_rate=hyperparameters['entropy_regularizer_decay_rate'],
                 entropy_regularizer_scale_factor_min_value=0.,
-                relaxed_exp_one_hot_action_encoding=True,
                 action_entropy_regularizer_scaling=hyperparameters["action_entropy_regularizer_scaling"],
                 enforce_upper_bound=hyperparameters['enforce_upper_bound'],
                 squared_wasserstein=hyperparameters['squared_wasserstein'],
                 n_critic=hyperparameters['n_critic'],
-                trainable_prior=hyperparameters['trainable_prior'],)
+                trainable_prior=hyperparameters['trainable_prior'],
+                state_encoder_type=hyperparameters['state_encoder_type'],
+                policy_based_decoding=hyperparameters['policy_based_decoding'],
+                deterministic_state_embedding=hyperparameters['deterministic_state_embedding'])
         else:
             vae_mdp = variational_mdp.VariationalMarkovDecisionProcess(
                 state_shape=specs.state_shape, action_shape=specs.action_shape,
@@ -358,8 +379,6 @@ def search(
                 env_name=environment_name,
                 labeling_function=reinforcement_learning.labeling_functions[environment_name],
                 training_steps=training_steps,
-                logs=fixed_parameters['logs'],
-                log_dir=os.path.join(fixed_parameters['save_dir'], 'studies', 'logs', fixed_parameters['environment']),
                 log_name='{:d}'.format(trial._trial_id),
                 use_prioritized_replay_buffer=hyperparameters['prioritized_experience_replay'],
                 global_step=global_step,
