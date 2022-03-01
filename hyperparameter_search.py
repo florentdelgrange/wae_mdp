@@ -75,8 +75,13 @@ def search(
         deterministic_state_embedding = trial.suggest_categorical('deterministic_state_embedding', [True, False])
 
         if fixed_parameters['epsilon_greedy'] > 0.:
+            use_epsilon_greedy = trial.suggest_categorical('use_epsilon_greedy', [True, False])
+        else:
+            use_epsilon_greedy = False
+
+        if use_epsilon_greedy:
             epsilon_greedy = trial.suggest_float('epsilon_greedy', 0., fixed_parameters['epsilon_greedy'])
-            epsilon_greedy_decay_rate = trial.suggest_float('epsilon_greedy_decay_rate', 1e-6, 1e-4, log=True)
+            epsilon_greedy_decay_rate = trial.suggest_float('epsilon_greedy_decay_rate', 1e-6, 1e-3, log=True)
         else:
             epsilon_greedy = 0.
             epsilon_greedy_decay_rate = 0.
@@ -99,7 +104,7 @@ def search(
 
             global_wasserstein_regularizer_scale_factor = trial.suggest_float(
                 'global_wasserstein_regularizer_scale_factor', 10., 100.)
-            global_gradient_penalty_scale_factor = trial.suggest_categorical(
+            global_gradient_penalty_scale_factor = trial.suggest_float(
                 'global_gradient_penalty_scale_factor', 10., 100.)
             n_critic = trial.suggest_categorical('n_critic', [5, 10])
 
