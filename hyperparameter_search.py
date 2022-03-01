@@ -347,7 +347,7 @@ def search(
             environment_seed=fixed_parameters['seed'],
             use_prioritized_replay_buffer=hyperparameters['prioritized_experience_replay'],
             labeling_function=reinforcement_learning.labeling_functions[environment_name],
-            policy_evaluation_num_episodes=30)
+            policy_evaluation_num_episodes=fixed_parameters['num_eval_episodes'])
 
         environment = environments.training
         policy_evaluation_driver = environments.policy_evaluation_driver
