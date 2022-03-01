@@ -97,10 +97,10 @@ def search(
                 squared_wasserstein = trial.suggest_categorical('squared_wasserstein', [True, False])
                 enforce_upper_bound = False
 
-            global_wasserstein_regularizer_scale_factor = trial.suggest_categorical(
-                'global_wasserstein_regularizer_scale_factor', np.arange(10., 101., 10.))
+            global_wasserstein_regularizer_scale_factor = trial.suggest_float(
+                'global_wasserstein_regularizer_scale_factor', 10., 100.)
             global_gradient_penalty_scale_factor = trial.suggest_categorical(
-                'global_gradient_penalty_scale_factor', np.arange(10., 101., 10.))
+                'global_gradient_penalty_scale_factor', 10., 100.)
             n_critic = trial.suggest_categorical('n_critic', [5, 10])
 
             if fixed_parameters['trainable_prior']:
