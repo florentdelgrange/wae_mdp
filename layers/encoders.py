@@ -239,10 +239,14 @@ class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):
                     d2.sample(sample_shape, seed=seed, name='latent_state_' + name, **kwargs)],
                     axis=-1)
 
+            def prob(latent_state, name='prob', **kwargs):
+                return tfd.Blockwise([d1, d2]).prob(latent_state, name=name, **kwargs)
+
             # dirty Blockwise; do not trigger any warning
             distribution = tfd.TransformedDistribution(d1, bijector=tfb.Identity())
             distribution.mode = mode
             distribution.sample = sample
+            distribution.prob = prob
             return distribution
         else:
             return d2
