@@ -411,6 +411,13 @@ def search(
                 epsilon_greedy=hyperparameters['epsilon_greedy'],
                 epsilon_greedy_decay_rate=hyperparameters['epsilon_greedy_decay_rate'])
 
+        def sanity_check(score: float) -> bool:
+            if math.isinf(score) or math.isnan(score):
+                optuna.TrialPruned()
+                return False
+            else:
+                return True
+
         try:
             result = train_model(initial_training_steps)
         except ValueError as ve:
@@ -418,6 +425,7 @@ def search(
             raise optuna.TrialPruned()
 
         score = float(result['score'])
+        result['continue'] = result['continue'] and sanity_check(score)
 
         if result['continue']:
             for step in range(initial_training_steps, num_steps, training_steps_per_iteration):
@@ -431,6 +439,7 @@ def search(
 
                 score = float(result['score'])
                 print("Step {} intermediate score: {}".format(step + training_steps_per_iteration, score))
+                result['continue'] = result['continue'] and sanity_check(score)
 
                 if math.isinf(score) or math.isnan(score):
                     optuna.TrialPruned()
