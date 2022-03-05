@@ -20,7 +20,7 @@ import variational_action_discretizer
 import variational_mdp
 
 
-def optimize_hyperparameters(study_name, optimize_trial, storage=None, n_trials=100):
+def optimize_hyperparameters(study_name, env_name, optimize_trial, storage=None, n_trials=100):
     # Add stream handler of stdout to show the messages
     optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
 
@@ -34,7 +34,7 @@ def optimize_hyperparameters(study_name, optimize_trial, storage=None, n_trials=
         storage,
         engine_kwargs={'connect_args': {'timeout': sqlite_timeout}})
     study = optuna.create_study(
-        study_name=study_name,
+        study_name=env_name,
         storage=storage,
         load_if_exists=True,
         direction='maximize')
@@ -184,6 +184,9 @@ def search(
             number_of_discrete_actions = trial.suggest_int(
                 'number_of_discrete_actions', 2, fixed_parameters['number_of_discrete_actions'])
             one_output_per_action = False  # trial.suggest_categorical('one_output_per_action', [True, False])
+        else:
+            number_of_discrete_actions = fixed_parameters['number_of_discrete_actions']
+            one_output_per_action = False  # trial.suggest_categorical('one_output_per_action', [True, False])
 
         if fixed_parameters['wae']:
             for attr in ['learning_rate', 'batch_size', 'collect_steps_per_iteration', 'latent_state_size',
@@ -198,9 +201,8 @@ def search(
                          'wasserstein_optimizer', 'wasserstein_learning_rate', 'policy_based_decoding',
                          'global_wasserstein_regularizer_scale_factor', 'global_gradient_penalty_scale_factor',
                          'n_critic', 'squared_wasserstein', 'enforce_upper_bound', 'trainable_prior',
-                         'state_encoder_type', 'deterministic_state_embedding'
-                        ] + ([
-                            'number_of_discrete_actions'] if fixed_parameters['action_discretizer'] else []):
+                         'state_encoder_type', 'deterministic_state_embedding', 'number_of_discrete_actions'
+                        ]:
                 defaults[attr] = locals()[attr]
         else:
             for attr in ['learning_rate', 'batch_size', 'collect_steps_per_iteration', 'latent_state_size',
@@ -425,7 +427,6 @@ def search(
             raise optuna.TrialPruned()
 
         score = float(result['score'])
-        result['continue'] = result['continue'] and sanity_check(score)
 
         if result['continue']:
             for step in range(initial_training_steps, num_steps, training_steps_per_iteration):
@@ -441,9 +442,6 @@ def search(
                 print("Step {} intermediate score: {}".format(step + training_steps_per_iteration, score))
                 result['continue'] = result['continue'] and sanity_check(score)
 
-                if math.isinf(score) or math.isnan(score):
-                    optuna.TrialPruned()
-
                 # Report intermediate objective value.
                 trial.report(score, step=step + training_steps_per_iteration)
 
@@ -455,7 +453,10 @@ def search(
                     break
 
         dataset_components.close_fn()
+        
+        if not sanity_check(score):
+            raise ValueError("Study stopped due to Inf values.")
 
         return score
 
-    return optimize_hyperparameters(study_name, optimize_trial, n_trials=n_trials)
+    return optimize_hyperparameters(study_name, environment_name, optimize_trial, n_trials=n_trials)
