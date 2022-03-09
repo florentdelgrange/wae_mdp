@@ -20,7 +20,7 @@ import variational_action_discretizer
 import variational_mdp
 
 
-def optimize_hyperparameters(study_name, optimize_trial, storage=None, n_trials=100):
+def optimize_hyperparameters(study_name, env_name, optimize_trial, storage=None, n_trials=100):
     # Add stream handler of stdout to show the messages
     optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
 
@@ -34,7 +34,7 @@ def optimize_hyperparameters(study_name, optimize_trial, storage=None, n_trials=
         storage,
         engine_kwargs={'connect_args': {'timeout': sqlite_timeout}})
     study = optuna.create_study(
-        study_name=study_name,
+        study_name=env_name,
         storage=storage,
         load_if_exists=True,
         direction='maximize')
@@ -74,13 +74,27 @@ def search(
             'action_entropy_regularizer_scaling', 1e-1, 1., log=True)
         deterministic_state_embedding = trial.suggest_categorical('deterministic_state_embedding', [True, False])
 
+        # temperatures
+        if fixed_parameters['state_encoder_temperature'] < 0:
+            state_encoder_temperature = trial.suggest_float('state_encoder_temperature', 1e-5, 1. - 1e-2)
+        else:
+            state_encoder_temperature = fixed_parameters['state_encoder_temperature']
+        if fixed_parameters['state_prior_temperature'] < 0:
+            state_prior_temperature = trial.suggest_float('state_prior_temperature', 1e-5, 1. - 1e-2)
+        else:
+            state_prior_temperature = fixed_parameters['state_prior_temperature']
+
         if fixed_parameters['epsilon_greedy'] > 0.:
+            use_epsilon_greedy = trial.suggest_categorical('use_epsilon_greedy', [True, False])
+        else:
+            use_epsilon_greedy = False
+
+        if use_epsilon_greedy:
             epsilon_greedy = trial.suggest_float('epsilon_greedy', 0., fixed_parameters['epsilon_greedy'])
-            epsilon_greedy_decay_rate = trial.suggest_float('epsilon_greedy_decay_rate', 1e-6, 1e-4, log=True)
+            epsilon_greedy_decay_rate = trial.suggest_float('epsilon_greedy_decay_rate', 1e-6, 1e-3, log=True)
         else:
             epsilon_greedy = 0.
             epsilon_greedy_decay_rate = 0.
-
 
         if fixed_parameters['wae']:
             wasserstein_optimizer = trial.suggest_categorical('wasserstein_optimizer', ['Adam', 'RMSprop'])
@@ -99,7 +113,7 @@ def search(
 
             global_wasserstein_regularizer_scale_factor = trial.suggest_float(
                 'global_wasserstein_regularizer_scale_factor', 10., 100.)
-            global_gradient_penalty_scale_factor = trial.suggest_categorical(
+            global_gradient_penalty_scale_factor = trial.suggest_float(
                 'global_gradient_penalty_scale_factor', 10., 100.)
             n_critic = trial.suggest_categorical('n_critic', [5, 10])
 
@@ -180,6 +194,25 @@ def search(
                 'number_of_discrete_actions', 2, fixed_parameters['number_of_discrete_actions'])
             one_output_per_action = False  # trial.suggest_categorical('one_output_per_action', [True, False])
 
+            if fixed_parameters['action_encoder_temperature'] < 0:
+                action_encoder_temperature = trial.suggest_float(
+                    "action_encoder_temperature", 1e-5, 1. / (number_of_discrete_actions - 1))
+            else:
+                action_encoder_temperature = fixed_parameters['action_encoder_temperature']
+            if fixed_parameters['latent_policy_temperature'] < 0:
+                latent_policy_temperature = trial.suggest_float(1e-5, 1. / (number_of_discrete_actions - 1))
+            else:
+                latent_policy_temperature = fixed_parameters['latent_policy_temperature']
+
+        else:
+            number_of_discrete_actions = fixed_parameters['number_of_discrete_actions']
+            one_output_per_action = False  # trial.suggest_categorical('one_output_per_action', [True, False])
+            action_encoder_temperature = -1.
+            if fixed_parameters['latent_policy_temperature'] < 0:
+                latent_policy_temperature = trial.suggest_float(1e-5, 1. / (specs.action_shape[0] - 1))
+            else:
+                latent_policy_temperature = fixed_parameters['latent_policy_temperature']
+
         if fixed_parameters['wae']:
             for attr in ['learning_rate', 'batch_size', 'collect_steps_per_iteration', 'latent_state_size',
                          'entropy_regularizer_scale_factor', 'entropy_regularizer_decay_rate',
@@ -189,24 +222,27 @@ def search(
                          'buckets_based_priorities', 'epsilon_greedy', 'epsilon_greedy_decay_rate',
                          'time_stacked_states',
                          'state_encoder_pre_processing_network', 'state_decoder_pre_processing_network',
-                         'optimizer'] + [
-                         'wasserstein_optimizer', 'wasserstein_learning_rate', 'policy_based_decoding',
-                         'global_wasserstein_regularizer_scale_factor', 'global_gradient_penalty_scale_factor',
-                         'n_critic', 'squared_wasserstein', 'enforce_upper_bound', 'trainable_prior',
-                         'state_encoder_type', 'deterministic_state_embedding'
-                        ] + ([
-                            'number_of_discrete_actions'] if fixed_parameters['action_discretizer'] else []):
+                         'optimizer', 'state_encoder_temperature', 'state_prior_temperature',
+                         'action_encoder_temperature', 'latent_policy_temperature'] + [
+                            'wasserstein_optimizer', 'wasserstein_learning_rate', 'policy_based_decoding',
+                            'global_wasserstein_regularizer_scale_factor', 'global_gradient_penalty_scale_factor',
+                            'n_critic', 'squared_wasserstein', 'enforce_upper_bound', 'trainable_prior',
+                            'state_encoder_type', 'deterministic_state_embedding', 'number_of_discrete_actions'
+                        ]:
                 defaults[attr] = locals()[attr]
         else:
             for attr in ['learning_rate', 'batch_size', 'collect_steps_per_iteration', 'latent_state_size',
                          'kl_annealing_growth_rate', 'entropy_regularizer_decay_rate', 'prioritized_experience_replay',
                          'neurons', 'hidden', 'activation', 'priority_exponent', 'importance_sampling_exponent',
                          'importance_sampling_exponent_growth_rate', 'specs',
-                         'buckets_based_priorities', 'epsilon_greedy', 'epsilon_greedy_decay_rate', 'time_stacked_states',
+                         'buckets_based_priorities', 'epsilon_greedy', 'epsilon_greedy_decay_rate',
+                         'time_stacked_states',
                          'state_encoder_pre_processing_network', 'state_decoder_pre_processing_network',
-                         'optimizer', 'label_transition_function', 'deterministic_state_embedding'] + ([
-                            'number_of_discrete_actions', 'one_output_per_action']
-                            if fixed_parameters['action_discretizer'] else []):
+                         'optimizer', 'label_transition_function', 'deterministic_state_embedding',
+                         'state_encoder_temperature', 'state_prior_temperature',
+                         'action_encoder_temperature', 'latent_policy_temperature'] + ([
+                'number_of_discrete_actions', 'one_output_per_action']
+            if fixed_parameters['action_discretizer'] else []):
                 defaults[attr] = locals()[attr]
 
         return defaults
@@ -221,10 +257,10 @@ def search(
 
         hyperparameters['global_network_layers'] = hyperparameters['hidden'] * [hyperparameters['neurons']]
         network = generate_network_components(
-                hyperparameters,
-                name='{}_mdp'.format(
-                    'wasserstein' if fixed_parameters['wae'] else 'variational'),
-                wasserstein_networks=fixed_parameters['wae'],)
+            hyperparameters,
+            name='{}_mdp'.format(
+                'wasserstein' if fixed_parameters['wae'] else 'variational'),
+            wasserstein_networks=fixed_parameters['wae'], )
 
         evaluation_window_size = fixed_parameters['evaluation_window_size']
         specs = hyperparameters['specs']
@@ -265,10 +301,10 @@ def search(
                     network.state_decoder_pre_processing
                     if hyperparameters['state_decoder_pre_processing_network'] else None),
                 time_stacked_states=hyperparameters['time_stacked_states'] > 1,
-                state_encoder_temperature=fixed_parameters['state_encoder_temperature'],
-                state_prior_temperature=fixed_parameters['state_prior_temperature'],
-                action_encoder_temperature=fixed_parameters['action_encoder_temperature'],
-                latent_policy_temperature=fixed_parameters['latent_policy_temperature'],
+                state_encoder_temperature=hyperparameters['state_encoder_temperature'],
+                state_prior_temperature=hyperparameters['state_prior_temperature'],
+                action_encoder_temperature=hyperparameters['action_encoder_temperature'],
+                latent_policy_temperature=hyperparameters['latent_policy_temperature'],
                 wasserstein_regularizer_scale_factor=wasserstein_regularizer_scale_factor,
                 encoder_temperature_decay_rate=0.,
                 prior_temperature_decay_rate=0.,
@@ -296,7 +332,8 @@ def search(
                 reward_shape=specs.reward_shape, label_shape=specs.label_shape,
                 encoder_network=network.encoder,
                 transition_network=network.transition,
-                label_transition_network=network.label_transition if hyperparameters['label_transition_function'] else None,
+                label_transition_network=network.label_transition if hyperparameters[
+                    'label_transition_function'] else None,
                 reward_network=network.reward, decoder_network=network.decoder,
                 state_encoder_pre_processing_network=(network.state_encoder_pre_processing
                                                       if hyperparameters['state_encoder_pre_processing_network']
@@ -307,11 +344,12 @@ def search(
                 latent_policy_network=(network.discrete_policy if fixed_parameters['latent_policy'] else None),
                 latent_state_size=hyperparameters['latent_state_size'],
                 mixture_components=fixed_parameters['mixture_components'],
-                encoder_temperature_decay_rate=fixed_parameters['encoder_temperature_decay_rate'],
-                prior_temperature_decay_rate=fixed_parameters['prior_temperature_decay_rate'],
+                encoder_temperature_decay_rate=0.,
+                prior_temperature_decay_rate=0.,
                 entropy_regularizer_scale_factor=fixed_parameters['entropy_regularizer_scale_factor'],
                 entropy_regularizer_decay_rate=hyperparameters['entropy_regularizer_decay_rate'],
-                entropy_regularizer_scale_factor_min_value=fixed_parameters['entropy_regularizer_scale_factor_min_value'],
+                entropy_regularizer_scale_factor_min_value=fixed_parameters[
+                    'entropy_regularizer_scale_factor_min_value'],
                 marginal_entropy_regularizer_ratio=fixed_parameters['marginal_entropy_regularizer_ratio'],
                 kl_scale_factor=fixed_parameters['kl_annealing_scale_factor'],
                 kl_annealing_growth_rate=hyperparameters['kl_annealing_growth_rate'],
@@ -321,7 +359,7 @@ def search(
                 importance_sampling_exponent_growth_rate=hyperparameters['importance_sampling_exponent_growth_rate'],
                 evaluation_window_size=evaluation_window_size,
                 evaluation_criterion=variational_mdp.EvaluationCriterion.MAX,
-                time_stacked_states=hyperparameters['time_stacked_states'] > 1,)
+                time_stacked_states=hyperparameters['time_stacked_states'] > 1, )
             optimizer = getattr(tf.optimizers, hyperparameters['optimizer'])(
                 learning_rate=hyperparameters['learning_rate'])
 
@@ -336,8 +374,8 @@ def search(
                                                      if hyperparameters['label_transition_function'] else None),
                     reward_network=network.reward, action_decoder_network=network.decoder,
                     latent_policy_network=network.discrete_policy,
-                    encoder_temperature_decay_rate=fixed_parameters['encoder_temperature_decay_rate'],
-                    prior_temperature_decay_rate=fixed_parameters['prior_temperature_decay_rate'],
+                    encoder_temperature_decay_rate=0.,
+                    prior_temperature_decay_rate=0.,
                     one_output_per_action=hyperparameters['one_output_per_action'],
                     relaxed_state_encoding=True,
                     full_optimization=True,
@@ -406,6 +444,13 @@ def search(
                 epsilon_greedy=hyperparameters['epsilon_greedy'],
                 epsilon_greedy_decay_rate=hyperparameters['epsilon_greedy_decay_rate'])
 
+        def sanity_check(score: float) -> bool:
+            if math.isinf(score) or math.isnan(score):
+                optuna.TrialPruned()
+                return False
+            else:
+                return True
+
         try:
             result = train_model(initial_training_steps)
         except ValueError as ve:
@@ -426,9 +471,7 @@ def search(
 
                 score = float(result['score'])
                 print("Step {} intermediate score: {}".format(step + training_steps_per_iteration, score))
-
-                if math.isinf(score) or math.isnan(score):
-                    optuna.TrialPruned()
+                result['continue'] = result['continue'] and sanity_check(score)
 
                 # Report intermediate objective value.
                 trial.report(score, step=step + training_steps_per_iteration)
@@ -442,6 +485,9 @@ def search(
 
         dataset_components.close_fn()
 
+        if not sanity_check(score):
+            raise ValueError("Study stopped due to Inf values.")
+
         return score
 
-    return optimize_hyperparameters(study_name, optimize_trial, n_trials=n_trials)
+    return optimize_hyperparameters(study_name, environment_name, optimize_trial, n_trials=n_trials)

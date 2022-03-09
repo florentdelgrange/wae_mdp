@@ -148,7 +148,7 @@ def plot_histograms_per_step(
         display_ylabel: bool = True
 ):
     df = df.sort_values(by='step')
-    tick = ticker.ScalarFormatter(useOffset=True, useMathText=use_math_text)
+    tick = ticker.ScalarFormatter(useOffset=True, useMathText=use_math_text, )
     tick.set_powerlimits((0, 0))
 
     # we assume that all buckets have the same range, according to the way tf summaries records histograms
@@ -181,11 +181,26 @@ def plot_histograms_per_step(
 
         xticks = np.linspace(0, df['step'].unique().max(), num=data.shape[0], dtype=np.int32)
         xticks = round_to_base(xticks, base=df['step'].unique().max() // (num_x_ticks * 2))
+
+        def filter_useless_zeros(_tick: str) -> str:
+            _res = []
+            e = False
+            for i in np.arange(len(_tick), 0, -1) - 1:
+                if not e:
+                    _res.append(_tick[i])
+                    if _tick[i] == 'e':
+                        e = True
+                elif e and _tick[i] != '0':
+                    _res.reverse()
+                    return _tick[:i + 1] + ''.join(_res)
+            return _tick
+
         if use_math_text:
             xticks = [u"${}$".format(tick.format_data(x) if x != 0. else str(0))
                       for x in np.flipud(xticks).astype(float)]
         else:
-            xticks = [tick.format_data(x) if x != 0. else str(0) for x in np.flipud(xticks).astype(float)]
+            xticks = [filter_useless_zeros(tick.format_data(np.round(x, 2))) if x != 0. else str(0)
+                      for x in np.flipud(xticks).astype(float)]
         power2 = np.power(2, np.ceil(np.log(buckets.flatten().max()) / np.log(2)))
         yticks = np.array([round_to_base(power2 / len(buckets) * (bucket + 1), power2 // num_y_ticks)
                            for bucket in range(len(buckets))],
@@ -219,7 +234,7 @@ def plot_histograms_per_step(
         return ax
 
     if nrows == 1 and ncols == 1:
-        plot_histogram(df, axs)
+        plot_histogram(df, axs, ax_title=df['event'].unique()[0] if 'event' in df else None)
     else:
         if nrows == 1:
             _axs = np.expand_dims(axs, 0)
