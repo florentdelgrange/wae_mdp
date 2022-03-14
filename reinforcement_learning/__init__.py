@@ -35,6 +35,7 @@ def lunar_lander_labels(s):
 
 
 labeling_functions = {
+    'Humanoid-v3': lambda observation: tf.math.logical_and(1. < observation[..., 0], observation[..., 0] < 2.),
     'HumanoidBulletEnv-v0':
         lambda observation: tf.stack([
             # falling down -- observation[0] is the head position, 0.8 is the initial position
