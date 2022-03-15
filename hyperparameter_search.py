@@ -15,7 +15,8 @@ from layers.encoders import EncodingType
 from policies.saved_policy import SavedTFPolicy
 import reinforcement_learning
 import reinforcement_learning.environments
-from train import get_environment_specs, generate_network_components, generate_wae_name
+from train import get_environment_specs, generate_network_components, generate_wae_name, initialize_summary_writer, \
+    generate_vae_name
 import variational_action_discretizer
 import variational_mdp
 
@@ -281,7 +282,7 @@ def search(
                 global_scaling=hyperparameters['global_wasserstein_regularizer_scale_factor'],
                 global_gradient_penalty_multiplier=hyperparameters["global_gradient_penalty_scale_factor"],)
 
-            print(generate_wae_name(params=_params, wasserstein_regularizer=wasserstein_regularizer_scale_factor))
+            vae_name = generate_wae_name(params=_params, wasserstein_regularizer=wasserstein_regularizer_scale_factor)
 
             autoencoder_optimizer = getattr(tf.optimizers, hyperparameters['optimizer'])(
                 learning_rate=hyperparameters['learning_rate'])
@@ -339,6 +340,7 @@ def search(
                 policy_based_decoding=hyperparameters['policy_based_decoding'],
                 deterministic_state_embedding=hyperparameters['deterministic_state_embedding'])
         else:
+            vae_name = generate_vae_name(_params)
             vae_mdp = variational_mdp.VariationalMarkovDecisionProcess(
                 state_shape=specs.state_shape, action_shape=specs.action_shape,
                 reward_shape=specs.reward_shape, label_shape=specs.label_shape,
@@ -438,7 +440,10 @@ def search(
                 env_name=environment_name,
                 labeling_function=reinforcement_learning.labeling_functions[environment_name],
                 training_steps=training_steps,
+                train_summary_writer=initialize_summary_writer(
+                    _params, environment_name, vae_name, dump_params_into_json=False),
                 log_name='{:d}'.format(trial._trial_id),
+                log_interval=fixed_parameters['log_interval'],
                 use_prioritized_replay_buffer=hyperparameters['prioritized_experience_replay'],
                 global_step=global_step,
                 optimizer=optimizer,

@@ -315,6 +315,41 @@ def get_environment_specs(
         state_shape, action_shape, reward_shape, label_shape, time_step_spec, action_spec)
 
 
+def initialize_summary_writer(params, environment_name, vae_name, dump_params_into_json=True, step=0):
+
+    train_log_dir = os.path.join(params['logdir'], environment_name, vae_name)
+    print('log path:', train_log_dir)
+    if not os.path.exists(train_log_dir):
+        os.makedirs(train_log_dir)
+    if dump_params_into_json:
+        with open(os.path.join(train_log_dir, 'parameters.json'), 'w+') as fp:
+            json.dump(params, fp)
+
+    train_summary_writer = tf.summary.create_file_writer(train_log_dir)
+    with train_summary_writer.as_default():
+        hyperparameters = [
+            tf.convert_to_tensor([k, str(v)])
+            for k, v in {
+                key: value for key, value in params.items()
+                if key not in default_flags
+            }.items()
+        ]
+        tf.summary.text('hyperparameters', tf.stack(hyperparameters), step=step)
+        tf.summary.text('tf version', tf.__version__, step=step)
+        tf.summary.text('tf_agent version', tf_agents.__version__, step=step)
+        tf.summary.text('tf probability version', tfp.__version__, step=step)
+        tf.summary.text('python version', sys.version, step=step)
+
+        try:
+            import git
+
+            repo = git.Repo('.')
+            tf.summary.text('git head', str(repo.head.commit), step=step)
+        except Exception as exc:
+            print(exc)
+
+    return train_summary_writer
+
 def main(argv):
     del argv
     params = FLAGS.flag_values_dict()
@@ -566,36 +601,9 @@ def main(argv):
 
         policy = policies.saved_policy.SavedTFPolicy(params['policy_path'], time_step_spec, action_spec)
 
-        if params['logs']:
+        if params['log']:
             # initialize logs
-            train_log_dir = os.path.join(params['logdir'], environment_name, vae_name)
-            print('log path:', train_log_dir)
-            if not os.path.exists(train_log_dir):
-                os.makedirs(train_log_dir)
-            with open(os.path.join(train_log_dir, 'parameters.json'), 'w+') as fp:
-                json.dump(params, fp)
-
-            train_summary_writer = tf.summary.create_file_writer(train_log_dir)
-            with train_summary_writer.as_default():
-                hyperparameters = [
-                    tf.convert_to_tensor([k, str(v)])
-                    for k, v in {
-                        key: value for key, value in params.items()
-                        if key not in default_flags
-                    }.items()
-                ]
-                tf.summary.text('hyperparameters', tf.stack(hyperparameters), step=step)
-                tf.summary.text('tf version', tf.__version__, step=step)
-                tf.summary.text('tf_agent version', tf_agents.__version__, step=step)
-                tf.summary.text('tf probability version', tfp.__version__, step=step)
-                tf.summary.text('python version', sys.version, step=step)
-
-                try:
-                    import git
-                    repo = git.Repo('.')
-                    tf.summary.text('git head', str(repo.head.commit), step=step)
-                except Exception as exc:
-                    print(exc)
+            train_summary_writer = initialize_summary_writer(params, environment_name, vae_name, step=step)
         else:
             train_summary_writer = None
         
@@ -605,6 +613,7 @@ def main(argv):
             environment_seed=params['seed'],
             env_name=environment_name,
             labeling_function=reinforcement_learning.labeling_functions[environment_name],
+            log_interval=params['log_interval'],
             epsilon_greedy=params['epsilon_greedy'] if phase == 0 else 0.,
             epsilon_greedy_decay_rate=params['epsilon_greedy_decay_rate'],
             batch_size=batch_size, optimizer=optimizer, checkpoint=checkpoint,
@@ -788,7 +797,7 @@ if __name__ == '__main__':
     flags.DEFINE_string(
         "logdir",
         default="log",
-        help="logs directory"
+        help="log directory"
     )
     flags.DEFINE_bool(
         "display_progressbar",
@@ -913,7 +922,7 @@ if __name__ == '__main__':
     flags.DEFINE_bool(
         'log',
         default=True,
-        help="Enable logging training metrics to the logs directory."
+        help="Enable logging training metrics."
     )
     flags.DEFINE_integer(
         'log_interval',
