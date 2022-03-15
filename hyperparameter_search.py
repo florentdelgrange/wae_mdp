@@ -282,7 +282,7 @@ def search(
         if fixed_parameters['wae']:
             wasserstein_regularizer_scale_factor = wasserstein_mdp.WassersteinRegularizerScaleFactor(
                 global_scaling=hyperparameters['global_wasserstein_regularizer_scale_factor'],
-                global_gradient_penalty_multiplier=hyperparameters["global_gradient_penalty_scale_factor"],)
+                global_gradient_penalty_multiplier=hyperparameters["global_gradient_penalty_scale_factor"], )
 
             vae_name = generate_wae_name(params=_params, wasserstein_regularizer=wasserstein_regularizer_scale_factor)
 
@@ -443,7 +443,10 @@ def search(
                 labeling_function=reinforcement_learning.labeling_functions[environment_name],
                 training_steps=training_steps,
                 train_summary_writer=initialize_summary_writer(
-                    _params, environment_name, vae_name, dump_params_into_json=False),
+                    _params,
+                    environment_name,
+                    vae_name,
+                    dump_params_into_json=False) if fixed_parameters['log'] else None,
                 log_name='{:d}'.format(trial._trial_id),
                 log_interval=fixed_parameters['log_interval'],
                 use_prioritized_replay_buffer=hyperparameters['prioritized_experience_replay'],
