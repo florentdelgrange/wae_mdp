@@ -69,13 +69,15 @@ def search(
         neurons = trial.suggest_categorical('neurons', [64, 128, 256, 512])
         hidden = trial.suggest_int('hidden', 1, 3)
         activation = trial.suggest_categorical('activation', ['relu', 'leaky_relu', 'softplus', 'gelu', 'smooth_elu'])
-        entropy_regularizer_scale_factor = trial.suggest_float(
-            'entropy_regularizer_scale_factor', 0., fixed_parameters['entropy_regularizer_scale_factor'], log=True)
-        if entropy_regularizer_scale_factor > 0.:
+        if fixed_parameters['entropy_regularizer_scale_factor'] > 0.:
+            entropy_regularizer_scale_factor = trial.suggest_float(
+                'entropy_regularizer_scale_factor', 1e-5,
+                fixed_parameters['entropy_regularizer_scale_factor'], log=True)
             action_entropy_regularizer_scaling = trial.suggest_float(
                 'action_entropy_regularizer_scaling',
-                0., fixed_parameters['action_entropy_regularizer_scaling'], log=True)
+                1e-5, fixed_parameters['action_entropy_regularizer_scaling'], log=True)
         else:
+            entropy_regularizer_scale_factor = 0.
             action_entropy_regularizer_scaling = 0.
         deterministic_state_embedding = trial.suggest_categorical('deterministic_state_embedding', [True, False])
 
