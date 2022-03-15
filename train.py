@@ -911,9 +911,14 @@ if __name__ == '__main__':
         'seed', help='set seed', default=42
     )
     flags.DEFINE_bool(
-        'logs',
+        'log',
         default=True,
         help="Enable logging training metrics to the logs directory."
+    )
+    flags.DEFINE_integer(
+        'log_interval',
+        default=200,
+        help="Number of time steps between each log."
     )
     flags.DEFINE_bool(
         'checkpoint',
