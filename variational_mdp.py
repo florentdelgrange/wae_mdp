@@ -1343,11 +1343,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
         if local_losses_evaluation and self.latent_policy_network is not None:
             py_local_loss_eval_env = parallel_py_environment.ParallelPyEnvironment(
-                [lambda: PerturbedEnvironment(
-                    env=env_loader.load(env_name),
-                    perturbation=environment_perturbation,
-                    recursive_perturbation=recursive_environment_perturbation)
-                 ] * num_parallel_environments)
+                [lambda: env_loader.load(env_name, env_wrappers=env_wrappers)] * num_parallel_environments)
             local_losses_eval_env = tf_py_environment.TFPyEnvironment(py_local_loss_eval_env)
             local_losses_eval_env.reset()
 
@@ -1864,8 +1860,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
             save(os.path.join(log_name, 'step{:d}'.format(global_step.numpy())))
         if close_at_the_end:
             close()
-
-        return {'score': tf.reduce_mean(tf.where(self.evaluation_window > - np.inf)),
+        
+        return {'score': tf.reduce_mean(self.evaluation_window[self.evaluation_window > - np.inf]),
                 'continue': not (wall_time_exceeded or close_at_the_end or memory_limit_exceeded)}
 
     def training_step(
