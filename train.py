@@ -171,10 +171,10 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
     if params['policy_path'][-1] == os.path.sep:
         params['policy_path'] = params['policy_path'][:-1]
 
-    wae_name = 'wae_LS{}_TD{:.2f}-{:.2f}_activ={}_opt={}_lr={:g}_seed={:d}' \
-               '_ER={:g}_decay={:g}' \
-               '_SR={:g}_GP={:g}' \
-               '_TL={:g}_GP={:g}_n_critic={:d}' \
+    wae_name = 'wae_LS{}_TD{:.2f}-{:.2f}_activ={}_opt={}_lr={:.2g}_seed={:d}' \
+               '_ER={:.2g}_decay={:.2g}' \
+               '_SR={:.2g}_GP={:.2g}' \
+               '_TL={:.2g}_GP={:.2g}_n_critic={:d}' \
                '_encoding_type={}'.format(
         params['latent_size'],
         params['state_encoder_temperature'],
@@ -192,7 +192,7 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
         params['n_critic'],
         params['state_encoder_type'])
     if params['wasserstein_optimizer'] is not None:
-        wae_name += '_wopt={}_lr={:g}'.format(
+        wae_name += '_wopt={}_lr={:.2g}'.format(
             params['wasserstein_optimizer'], params['wasserstein_learning_rate'])
     if params['squared_wasserstein']:
         wae_name += '_W2'
@@ -223,7 +223,7 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
         wae_name += '_stochastic_embedding'
 
     if params['prioritized_experience_replay']:
-        wae_name += '_PER-P_exp={:g}-WIS_exponent={:g}-WIS_growth={:g}'.format(
+        wae_name += os.sep + 'PER-P_exp={:.2g}-WIS_exponent={:.2g}-WIS_growth={:.2g}'.format(
             params['priority_exponent'],
             params['importance_sampling_exponent'],
             params['importance_sampling_exponent_growth_rate'])
@@ -234,10 +234,10 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
     if params['max_state_decoder_variance'] > 0:
         wae_name += '_max_state_decoder_variance={:g}'.format(params['max_state_decoder_variance'])
     if params['epsilon_greedy'] > 0:
-        wae_name += '_epsilon_greedy={:g}-decay={:g}'.format(params['epsilon_greedy'],
+        wae_name += '_epsilon_greedy={:.2g}-decay={:.2g}'.format(params['epsilon_greedy'],
                                                              params['epsilon_greedy_decay_rate'])
     if params['marginal_entropy_regularizer_ratio'] > 0:
-        wae_name += '_marginal_state_entropy_ratio={:g}'.format(params['marginal_entropy_regularizer_ratio'])
+        wae_name += '_marginal_state_entropy_ratio={:.2g}'.format(params['marginal_entropy_regularizer_ratio'])
     if params['time_stacked_states'] > 1:
         wae_name += '_time_stacked_states={}'.format(params['time_stacked_states'])
 
@@ -328,9 +328,9 @@ def main(argv):
 
     if params['hyperparameter_search']:
         hyperparameter_search.search(
-            fixed_parameters=params,
-            num_steps=params['max_steps'],
-            study_name=params['environment'] + '_seed={}'.format(params['seed']),
+                fixed_parameters=params,
+                num_steps=params['max_steps'],
+                study_name='study_seed={}'.format(params['seed']),
             n_trials=params['hyperparameter_search_trials'],
             wall_time=None if params['wall_time'] == '.' else params['wall_time'])
         return 0
@@ -549,6 +549,7 @@ def main(argv):
         )
         models = [wae_mdp]
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
+    print(params)
 
     for phase, vae_mdp_model in enumerate(models):
         checkpoint_directory = os.path.join(

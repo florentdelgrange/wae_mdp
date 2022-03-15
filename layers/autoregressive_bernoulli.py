@@ -49,6 +49,7 @@ def discrete_distribution(
     if conditional_input is None:
         sample0 = tf.zeros(shape=event_shape, dtype=dtype)
     else:
+        conditional_input = tf.cast(conditional_input, dtype)
         sample0 = tf.zeros(tf.concat([tf.shape(conditional_input)[:-1], event_shape], axis=0), dtype=dtype)
 
     def distribution_fn(x: Optional[Float] = None):

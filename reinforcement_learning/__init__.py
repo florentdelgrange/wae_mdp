@@ -35,6 +35,7 @@ def lunar_lander_labels(s):
 
 
 labeling_functions = {
+    'Humanoid-v3': lambda observation: tf.math.logical_and(1. < observation[..., 0], observation[..., 0] < 2.),
     'HumanoidBulletEnv-v0':
         lambda observation: tf.stack([
             # falling down -- observation[0] is the head position, 0.8 is the initial position
@@ -91,7 +92,8 @@ reward_scaling = {
     'CartPole-v0': 1. / 2,
     'LunarLander-v2': 1. / 400,
     'MountainCar-v0': 1. / 2,
-    'Acrobot-v1': 1. / 2
+    'Acrobot-v1': 1. / 2,
+    'BipedalWalker-v2': 1. / 200.,
 }  # to scale the rewards in [-1./2, 1./2]
 
 for d in [labeling_functions, reward_scaling]:
@@ -110,3 +112,4 @@ for d in [labeling_functions, reward_scaling]:
     d['AcrobotRandomInit-v1'] = d['Acrobot-v1']
     d['Pendulum-v1'] = d['Pendulum-v0']
     d['PendulumRandomInit-v1'] = d['Pendulum-v1']
+    d['BipedalWalker-v3'] = d['BipedalWalker-v2']

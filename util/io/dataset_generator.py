@@ -77,21 +77,26 @@ def map_rl_trajectory_to_vae_input(
         include_latent_states: bool = False,
         num_discrete_actions: Optional[int] = 0,
         sample_info: Optional = None,
+        dtype: tf.dtypes = tf.float32,
 ):
     """
     Maps a tf-agent trajectory of 2 time steps to a transition tuple of the form
     <state, state label, action, reward, next state, next state label>
     """
-    observation = trajectory.observation['state'] if include_latent_states else trajectory.observation
+    observation = tf.cast(
+        trajectory.observation['state'] if include_latent_states else trajectory.observation,
+        dtype)
     state = observation[0, ...]
-    labels = tf.cast(labeling_function(observation), tf.float32)
+    labels = tf.cast(labeling_function(observation), dtype)
     if tf.rank(labels) == 1:
         labels = tf.expand_dims(labels, axis=-1)
     label = labels[0, ...]
     action = trajectory.action[0, ...]
     if discrete_action:
-        action = tf.one_hot(indices=action, depth=tf.cast(num_discrete_actions, dtype=tf.int32), dtype=tf.float32)
-    reward = trajectory.reward[0, ...]
+        action = tf.one_hot(indices=action, depth=tf.cast(num_discrete_actions, dtype=tf.int32), dtype=dtype)
+    else:
+        action = tf.cast(action, dtype)
+    reward = tf.cast(trajectory.reward[0, ...], dtype)
     if tf.rank(reward) == 0:
         reward = tf.expand_dims(reward, axis=-1)
     next_state = observation[1, ...]
@@ -100,15 +105,15 @@ def map_rl_trajectory_to_vae_input(
     if include_latent_states:
         return (state,
                 label,
-                tf.cast(trajectory.observation['latent_state'][0, ...], tf.float32),
+                tf.cast(trajectory.observation['latent_state'][0, ...], dtype),
                 action,
                 reward,
                 next_state,
                 next_label,
-                tf.cast(trajectory.observation['latent_state'][1, ...], tf.float32))
+                tf.cast(trajectory.observation['latent_state'][1, ...], dtype))
     elif sample_info is not None:
         key = sample_info.key[0]
-        sample_probability = tf.cast(sample_info.probability[0], tf.float32)
+        sample_probability = tf.cast(sample_info.probability[0], dtype)
         return state, label, action, reward, next_state, next_label, key, sample_probability
     else:
         return state, label, action, reward, next_state, next_label

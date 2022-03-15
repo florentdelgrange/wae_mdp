@@ -200,7 +200,7 @@ def search(
             else:
                 action_encoder_temperature = fixed_parameters['action_encoder_temperature']
             if fixed_parameters['latent_policy_temperature'] < 0:
-                latent_policy_temperature = trial.suggest_float(1e-5, 1. / (number_of_discrete_actions - 1))
+                latent_policy_temperature = trial.suggest_float("latent_policy_temperature", 1e-5, 1. / (number_of_discrete_actions - 1))
             else:
                 latent_policy_temperature = fixed_parameters['latent_policy_temperature']
 
@@ -209,7 +209,7 @@ def search(
             one_output_per_action = False  # trial.suggest_categorical('one_output_per_action', [True, False])
             action_encoder_temperature = -1.
             if fixed_parameters['latent_policy_temperature'] < 0:
-                latent_policy_temperature = trial.suggest_float(1e-5, 1. / (specs.action_shape[0] - 1))
+                latent_policy_temperature = trial.suggest_float("latent_policy_temperature", 1e-5, 1. / (specs.action_shape[0] - 1))
             else:
                 latent_policy_temperature = fixed_parameters['latent_policy_temperature']
 
