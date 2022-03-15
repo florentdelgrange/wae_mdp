@@ -1,3 +1,6 @@
+from typing import Optional
+
+from tf_agents.typing.types import Sequence, PyEnvWrapper
 from gym.envs.registration import register
 from tf_agents.environments.wrappers import HistoryWrapper
 
@@ -87,16 +90,22 @@ register(
 
 
 class EnvironmentLoader:
-    def __init__(self, environment_suite, seed=None, time_stacked_states=1):
+    def __init__(
+            self,
+            environment_suite,
+            seed=None,
+            time_stacked_states=1,
+    ):
         self.n = 0
         self.environment_suite = environment_suite
         self.seed = seed
         self.time_stacked_states = time_stacked_states
 
-    def load(self, env_name: str):
-        environment = self.environment_suite.load(env_name)
-        if self.time_stacked_states > 1:
-            environment = HistoryWrapper(env=environment, history_length=self.time_stacked_states)
+    def load(self, env_name: str, env_wrappers: Optional[Sequence[PyEnvWrapper]] = ()):
+        if self.time_stacked_states:
+            env_wrappers = list(env_wrappers) + \
+                           [lambda env: HistoryWrapper(env=environment, history_length=self.time_stacked_states)]
+        environment = self.environment_suite.load(env_name, env_wrappers)
         if self.seed is not None:
             try:
                 environment.seed(self.seed + self.n)

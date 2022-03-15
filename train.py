@@ -30,6 +30,7 @@ import variational_action_discretizer
 import wasserstein_mdp
 import reinforcement_learning.environments
 from layers.encoders import EncodingType
+from reinforcement_learning.environments.perturbed_env import PerturbedEnvironment
 
 FLAGS = flags.FLAGS
 default_flags = FLAGS.flag_values_dict()
@@ -596,7 +597,7 @@ def main(argv):
                     print(exc)
         else:
             train_summary_writer = None
-
+        
         vae_mdp_model.train_from_policy(
             policy=policy,
             environment_suite=environment_suite,
@@ -650,7 +651,8 @@ def main(argv):
             local_losses_reward_scaling=reinforcement_learning.reward_scaling.get(environment_name, 1.),
             embed_video_evaluation=params['generate_videos'],
             environment_perturbation=params['environment_perturbation'],
-            recursive_environment_perturbation=params['recursive_environment_perturbation'])
+            recursive_environment_perturbation=params['recursive_environment_perturbation'],
+            enforce_no_reward_shaping=params['no_reward_shaping'])
 
     return 0
 
@@ -1189,6 +1191,11 @@ if __name__ == '__main__':
         'recursive_environment_perturbation',
         help='Whether to apply recursive perturbations to the environment to enforce an ergodic episodic RL process.',
         default=True
+    )
+    flags.DEFINE_bool(
+        'no_reward_shaping',
+        help='Whether to remove reward shaping from the input environment or not.',
+        default=False
     )
 
     FLAGS = flags.FLAGS

@@ -9,6 +9,7 @@ from absl import logging
 import threading
 
 from reinforcement_learning.environments.latent_environment import LatentEmbeddingTFEnvironmentWrapper
+from reinforcement_learning.environments.no_reward_shaping import NoRewardShapingWrapper
 from reinforcement_learning.environments.perturbed_env import PerturbedEnvironment
 from util.io.video import VideoEmbeddingObserver
 
@@ -1277,6 +1278,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             video_path: str = 'video',
             environment_perturbation: float = 3. / 4.,
             recursive_environment_perturbation: bool = True,
+            enforce_no_reward_shaping: bool = False,
     ):
         # reverb replay buffers are not compatible with batched environments
         parallel_environments = parallel_environments and not use_prioritized_replay_buffer
@@ -1292,21 +1294,23 @@ class VariationalMarkovDecisionProcess(tf.Module):
             seed=environment_seed,
             time_stacked_states=self.state_shape[0] if self.time_stacked_states else 1)
 
+        env_wrappers = []
+        if environment_perturbation > 0.:
+            env_wrappers.append(
+                lambda env: PerturbedEnvironment(
+                    env,
+                    perturbation=environment_perturbation,
+                    recursive_perturbation=recursive_environment_perturbation))
+        if enforce_no_reward_shaping:
+            env_wrappers.append(NoRewardShapingWrapper)
+
         if parallel_environments:
             py_env = parallel_py_environment.ParallelPyEnvironment(
-                [lambda: PerturbedEnvironment(
-                    env=env_loader.load(env_name),
-                    perturbation=environment_perturbation,
-                    recursive_perturbation=recursive_environment_perturbation)
-                 ] * num_parallel_environments)
+                [lambda: env_loader.load(env_name, env_wrappers=env_wrappers)] * num_parallel_environments)
             env = tf_py_environment.TFPyEnvironment(py_env)
             env.reset()
         else:
-            py_env = env_loader.load(env_name)
-            py_env = PerturbedEnvironment(
-                py_env,
-                perturbation=environment_perturbation,
-                recursive_perturbation=recursive_environment_perturbation)
+            py_env = env_loader.load(env_name, env_wrappers=env_wrappers)
             py_env.reset()
             env = tf_py_environment.TFPyEnvironment(py_env) if not use_prioritized_replay_buffer else py_env
 
@@ -1605,6 +1609,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             embed_video_evaluation: bool = False,
             environment_perturbation: float = 3. / 4.,
             recursive_environment_perturbation: bool = True,
+            enforce_no_reward_shaping: bool = False,
     ):
         if wall_time is not None:
             if start_time is None:
@@ -1680,7 +1685,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 embed_video_policy_evaluation=embed_video_evaluation,
                 video_path=os.path.join(save_directory, 'videos') if save_directory is not None else None,
                 environment_perturbation=environment_perturbation,
-                recursive_environment_perturbation=recursive_environment_perturbation,)
+                recursive_environment_perturbation=recursive_environment_perturbation,
+                enforce_no_reward_shaping=enforce_no_reward_shaping)
 
             env = environment if environment is not None else environments.training
             policy_evaluation_driver = policy_evaluation_driver if policy_evaluation_driver is not None \
