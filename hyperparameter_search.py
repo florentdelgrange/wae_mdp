@@ -413,8 +413,8 @@ def search(
             replay_buffer_capacity=int(1e6),
             epsilon_greedy=epsilon_greedy)
 
-        initial_training_steps = evaluation_window_size * num_steps // 100
         training_steps_per_iteration = num_steps // 100
+        initial_training_steps = training_steps_per_iteration
 
         def train_model(training_steps):
             return vae_mdp.train_from_policy(

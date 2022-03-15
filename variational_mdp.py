@@ -1865,7 +1865,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
         if close_at_the_end:
             close()
 
-        return {'score': tf.reduce_mean(self.evaluation_window),
+        return {'score': tf.reduce_mean(tf.where(self.evaluation_window > - np.inf)),
                 'continue': not (wall_time_exceeded or close_at_the_end or memory_limit_exceeded)}
 
     def training_step(
