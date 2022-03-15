@@ -15,7 +15,7 @@ from layers.encoders import EncodingType
 from policies.saved_policy import SavedTFPolicy
 import reinforcement_learning
 import reinforcement_learning.environments
-from train import get_environment_specs, generate_network_components
+from train import get_environment_specs, generate_network_components, generate_wae_name
 import variational_action_discretizer
 import variational_mdp
 
@@ -63,15 +63,20 @@ def search(
     def suggest_hyperparameters(trial):
 
         defaults = {}
-        optimizer = trial.suggest_categorical('optimizer', ['Adam', 'RMSprop'])
+        optimizer = trial.suggest_categorical('optimizer', ['Adam', 'RMSprop', 'SGD'])
         learning_rate = trial.suggest_float('learning_rate', 1e-4, 1e-3, log=True)
         batch_size = trial.suggest_categorical('batch_size', [64, 128, 256, 512])
         neurons = trial.suggest_categorical('neurons', [64, 128, 256, 512])
         hidden = trial.suggest_int('hidden', 1, 3)
         activation = trial.suggest_categorical('activation', ['relu', 'leaky_relu', 'softplus', 'gelu', 'smooth_elu'])
-        entropy_regularizer_scale_factor = trial.suggest_float('entropy_regularizer_scale_factor', 1e-2, 10., log=True)
-        action_entropy_regularizer_scaling = trial.suggest_float(
-            'action_entropy_regularizer_scaling', 1e-1, 1., log=True)
+        entropy_regularizer_scale_factor = trial.suggest_float(
+            'entropy_regularizer_scale_factor', 0., fixed_parameters['entropy_regularizer_scale_factor'], log=True)
+        if entropy_regularizer_scale_factor > 0.:
+            action_entropy_regularizer_scaling = trial.suggest_float(
+                'action_entropy_regularizer_scaling',
+                0., fixed_parameters['action_entropy_regularizer_scaling'], log=True)
+        else:
+            action_entropy_regularizer_scaling = 0.
         deterministic_state_embedding = trial.suggest_categorical('deterministic_state_embedding', [True, False])
 
         # temperatures
@@ -200,7 +205,8 @@ def search(
             else:
                 action_encoder_temperature = fixed_parameters['action_encoder_temperature']
             if fixed_parameters['latent_policy_temperature'] < 0:
-                latent_policy_temperature = trial.suggest_float("latent_policy_temperature", 1e-5, 1. / (number_of_discrete_actions - 1))
+                latent_policy_temperature = trial.suggest_float(
+                    "latent_policy_temperature", 1e-5, 1. / (number_of_discrete_actions - 1))
             else:
                 latent_policy_temperature = fixed_parameters['latent_policy_temperature']
 
@@ -209,7 +215,8 @@ def search(
             one_output_per_action = False  # trial.suggest_categorical('one_output_per_action', [True, False])
             action_encoder_temperature = -1.
             if fixed_parameters['latent_policy_temperature'] < 0:
-                latent_policy_temperature = trial.suggest_float("latent_policy_temperature", 1e-5, 1. / (specs.action_shape[0] - 1))
+                latent_policy_temperature = trial.suggest_float(
+                    "latent_policy_temperature", 1e-5, 1. / (specs.action_shape[0] - 1))
             else:
                 latent_policy_temperature = fixed_parameters['latent_policy_temperature']
 
@@ -265,12 +272,17 @@ def search(
         evaluation_window_size = fixed_parameters['evaluation_window_size']
         specs = hyperparameters['specs']
         global_step = tf.Variable(0, trainable=False, dtype=tf.int64)
+        _params = {key: value for key, value in fixed_parameters.items()}
+        for key, value in hyperparameters.items():
+            _params[key] = value
 
         if fixed_parameters['wae']:
             wasserstein_regularizer_scale_factor = wasserstein_mdp.WassersteinRegularizerScaleFactor(
                 global_scaling=hyperparameters['global_wasserstein_regularizer_scale_factor'],
-                global_gradient_penalty_multiplier=hyperparameters["global_gradient_penalty_scale_factor"],
-            )
+                global_gradient_penalty_multiplier=hyperparameters["global_gradient_penalty_scale_factor"],)
+
+            print(generate_wae_name(params=_params, wasserstein_regularizer=wasserstein_regularizer_scale_factor))
+
             autoencoder_optimizer = getattr(tf.optimizers, hyperparameters['optimizer'])(
                 learning_rate=hyperparameters['learning_rate'])
             wasserstein_optimizer = getattr(tf.optimizers, hyperparameters['wasserstein_optimizer'])(
@@ -391,7 +403,10 @@ def search(
             environment_seed=fixed_parameters['seed'],
             use_prioritized_replay_buffer=hyperparameters['prioritized_experience_replay'],
             labeling_function=reinforcement_learning.labeling_functions[environment_name],
-            policy_evaluation_num_episodes=fixed_parameters['num_eval_episodes'])
+            policy_evaluation_num_episodes=fixed_parameters['num_eval_episodes'],
+            environment_perturbation=fixed_parameters['environment_perturbation'],
+            recursive_environment_perturbation=fixed_parameters['recursive_environment_perturbation'],
+            enforce_no_reward_shaping=fixed_parameters['no_reward_shaping'])
 
         environment = environments.training
         policy_evaluation_driver = environments.policy_evaluation_driver
