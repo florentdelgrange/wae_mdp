@@ -315,7 +315,7 @@ def get_environment_specs(
         state_shape, action_shape, reward_shape, label_shape, time_step_spec, action_spec)
 
 
-def initialize_summary_writer(params, environment_name, vae_name, dump_params_into_json=True, step=0):
+def initialize_summary_writer(params, environment_name, vae_name, dump_params_into_json=True, step=0, vae_mdp_model=None):
 
     train_log_dir = os.path.join(params['logdir'], environment_name, vae_name)
     print('log path:', train_log_dir)
@@ -609,7 +609,7 @@ def main(argv):
 
         if params['log']:
             # initialize logs
-            train_summary_writer = initialize_summary_writer(params, environment_name, vae_name, step=step, vae_mdp_model=vae_mdp_model)
+            train_summary_writer = initialize_summary_writer(params, environment_name, vae_name, step=step)
         else:
             train_summary_writer = None
         
