@@ -454,7 +454,7 @@ def search(
                 log_name=log_name,
                 log_interval=fixed_parameters['log_interval'],
                 use_prioritized_replay_buffer=hyperparameters['prioritized_experience_replay'],
-                buckets_based_priorities=hyperparameters['buckets_based_priorities'],
+                bucket_based_priorities=hyperparameters['bucket_based_priorities'],
                 global_step=global_step,
                 optimizer=optimizer,
                 eval_steps=1000,
