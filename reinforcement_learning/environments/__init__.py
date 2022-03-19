@@ -102,10 +102,10 @@ class EnvironmentLoader:
         self.time_stacked_states = time_stacked_states
 
     def load(self, env_name: str, env_wrappers: Optional[Sequence[PyEnvWrapper]] = ()):
-        if self.time_stacked_states:
+        if self.time_stacked_states > 1:
             env_wrappers = list(env_wrappers) + \
-                           [lambda env: HistoryWrapper(env=environment, history_length=self.time_stacked_states)]
-        environment = self.environment_suite.load(env_name, env_wrappers)
+                           [lambda env: HistoryWrapper(env=env, history_length=self.time_stacked_states)]
+        environment = self.environment_suite.load(env_name, env_wrappers=env_wrappers)
         if self.seed is not None:
             try:
                 environment.seed(self.seed + self.n)
