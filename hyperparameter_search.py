@@ -165,7 +165,7 @@ def search(
                     batch_size // 8)
             else:
                 collect_steps_per_iteration = batch_size // 8
-            buckets_based_priorities = trial.suggest_categorical('buckets_based_priorities', [True, False])
+            bucket_based_priorities = trial.suggest_categorical('buckets_based_priorities', [True, False])
             priority_exponent = trial.suggest_float(
                 'priority_exponent', fixed_parameters['priority_exponent'], 1.)
             importance_sampling_exponent = trial.suggest_float(
@@ -180,7 +180,7 @@ def search(
             collect_steps_per_iteration = trial.suggest_int(
                 'uniform_replay_buffer_collect_steps_per_iteration', 1, batch_size)
             # default values
-            buckets_based_priorities = False
+            bucket_based_priorities = False
             priority_exponent = 0.
             importance_sampling_exponent = 1.
             importance_sampling_exponent_growth_rate = 1.
@@ -229,7 +229,7 @@ def search(
                          'action_entropy_regularizer_scaling', 'prioritized_experience_replay',
                          'n_critic', 'neurons', 'hidden', 'activation', 'priority_exponent',
                          'importance_sampling_exponent', 'importance_sampling_exponent_growth_rate', 'specs',
-                         'buckets_based_priorities', 'epsilon_greedy', 'epsilon_greedy_decay_rate',
+                         'bucket_based_priorities', 'epsilon_greedy', 'epsilon_greedy_decay_rate',
                          'time_stacked_states',
                          'state_encoder_pre_processing_network', 'state_decoder_pre_processing_network',
                          'optimizer', 'state_encoder_temperature', 'state_prior_temperature',
@@ -245,7 +245,7 @@ def search(
                          'kl_annealing_growth_rate', 'entropy_regularizer_decay_rate', 'prioritized_experience_replay',
                          'neurons', 'hidden', 'activation', 'priority_exponent', 'importance_sampling_exponent',
                          'importance_sampling_exponent_growth_rate', 'specs',
-                         'buckets_based_priorities', 'epsilon_greedy', 'epsilon_greedy_decay_rate',
+                         'bucket_based_priorities', 'epsilon_greedy', 'epsilon_greedy_decay_rate',
                          'time_stacked_states',
                          'state_encoder_pre_processing_network', 'state_decoder_pre_processing_network',
                          'optimizer', 'label_transition_function', 'deterministic_state_embedding',
@@ -259,6 +259,7 @@ def search(
 
     def optimize_trial(trial: optuna.Trial):
         hyperparameters = suggest_hyperparameters(trial)
+        hyperparameters['latent_size'] = hyperparameters['latent_state_size']
 
         print("Suggested hyperparameters")
         for key in hyperparameters.keys():
@@ -425,7 +426,7 @@ def search(
             manager=None,
             use_prioritized_replay_buffer=hyperparameters['prioritized_experience_replay'],
             priority_exponent=hyperparameters['priority_exponent'],
-            buckets_based_priorities=hyperparameters['buckets_based_priorities'],
+            bucket_based_priorities=hyperparameters['bucket_based_priorities'],
             discrete_action_space=not fixed_parameters['action_discretizer'],
             collect_steps_per_iteration=hyperparameters['collect_steps_per_iteration'],
             initial_collect_steps=int(1e4),

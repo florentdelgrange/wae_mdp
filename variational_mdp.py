@@ -1374,7 +1374,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             use_prioritized_replay_buffer: bool = False,
             replay_buffer_capacity: int = int(1e6),
             priority_exponent: float = 0.6,
-            buckets_based_priorities: bool = True,
+            bucket_based_priorities: bool = True,
             discrete_action_space: bool = False,
             collect_steps_per_iteration: int = 8,
             initial_collect_steps: int = int(1e4),
@@ -1431,7 +1431,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 table_name=table_name,
                 local_server=reverb_server)
 
-            if buckets_based_priorities:
+            if bucket_based_priorities:
                 self.priority_handler = PriorityBuckets(
                     replay_buffer=replay_buffer,
                     latent_state_size=self.latent_state_size)
@@ -1563,7 +1563,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             collect_steps_per_iteration: Optional[int] = None,
             replay_buffer_capacity: int = int(1e6),
             use_prioritized_replay_buffer: bool = True,
-            buckets_based_priorities: bool = True,
+            bucket_based_priorities: bool = True,
             priority_exponent: int = 0.6,
             parallel_environments: bool = True,
             num_parallel_environments: int = 4,
@@ -1709,7 +1709,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 env=env, policy=policy, labeling_function=labeling_function, batch_size=batch_size, manager=manager,
                 use_prioritized_replay_buffer=use_prioritized_replay_buffer,
                 replay_buffer_capacity=replay_buffer_capacity, priority_exponent=priority_exponent,
-                buckets_based_priorities=buckets_based_priorities, discrete_action_space=discrete_action_space,
+                bucket_based_priorities=bucket_based_priorities, discrete_action_space=discrete_action_space,
                 collect_steps_per_iteration=collect_steps_per_iteration, initial_collect_steps=initial_collect_steps,
                 epsilon_greedy=epsilon_greedy)
         else:
@@ -1797,7 +1797,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             }
             if epsilon_greedy > 0.:
                 additional_training_metrics['epsilon_greedy'] = epsilon_greedy
-            if use_prioritized_replay_buffer and not buckets_based_priorities:
+            if use_prioritized_replay_buffer and not bucket_based_priorities:
                 diff = (self.priority_handler.max_loss.result() - self.priority_handler.min_loss.result())
                 if diff != 0:
                     additional_training_metrics[

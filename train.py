@@ -132,7 +132,7 @@ def generate_vae_name(params):
             params['priority_exponent'],
             params['importance_sampling_exponent'],
             params['importance_sampling_exponent_growth_rate'])
-        if params['buckets_based_priority']:
+        if params['bucket_based_priorities']:
             vae_name += '_buckets_based'
         else:
             vae_name += '_loss_based'
@@ -227,7 +227,7 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
             params['priority_exponent'],
             params['importance_sampling_exponent'],
             params['importance_sampling_exponent_growth_rate'])
-        if params['buckets_based_priority']:
+        if params['bucket_based_priorities']:
             wae_name += '_buckets_based'
         else:
             wae_name += '_loss_based'
@@ -651,7 +651,7 @@ def main(argv):
                     not params['action_discretizer'] and params['latent_policy']),
             use_prioritized_replay_buffer=params['prioritized_experience_replay'],
             priority_exponent=params['priority_exponent'],
-            buckets_based_priorities=params['buckets_based_priority'],
+            bucket_based_priorities=params['buckets_based_priority'],
             collect_steps_per_iteration=params['collect_steps_per_iteration'],
             wall_time=params['wall_time'] if params['wall_time'] != '.' else None,
             memory_limit=params['memory'] if params['memory'] > 0. else None,
@@ -973,7 +973,7 @@ if __name__ == '__main__':
              'experience replay buffer.'
     )
     flags.DEFINE_bool(
-        'buckets_based_priority',
+        'bucket_based_priorities',
         default=True,
         help='If set, prioritized replay buffers use a bucket-based priority scheme (where each bucket '
              'corresponds '
