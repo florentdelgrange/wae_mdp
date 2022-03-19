@@ -435,7 +435,7 @@ def search(
         training_steps_per_iteration = num_steps // 100
         initial_training_steps = training_steps_per_iteration
 
-        log_name='trial_number={:d}-id={:d}'.format(trial.number, trial._trial_id)
+        log_name='trial_number={:d}'.format(trial.number)
         train_summary_writer = initialize_summary_writer(
             _params,
             environment_name,
@@ -453,6 +453,7 @@ def search(
                 log_name=log_name,
                 log_interval=fixed_parameters['log_interval'],
                 use_prioritized_replay_buffer=hyperparameters['prioritized_experience_replay'],
+                buckets_based_priorities=hyperparameters['buckets_based_priorities'],
                 global_step=global_step,
                 optimizer=optimizer,
                 eval_steps=1000,
