@@ -339,7 +339,14 @@ def initialize_summary_writer(params, environment_name, vae_name, dump_params_in
         tf.summary.text('tf_agent version', tf_agents.__version__, step=step)
         tf.summary.text('tf probability version', tfp.__version__, step=step)
         tf.summary.text('python version', sys.version, step=step)
-
+        if vae_mdp_model is not None:
+            tf.summary.text('model attributes', tf.stack([
+                tf.convert_to_tensor([
+                    (attr, str(getattr(vae_mdp_model, attr)))
+                    for attr in filter(lambda _attr: len(_attr) < 2 or _attr[:2] != '__', dir(vae_mdp_model))
+                ])
+            ]),
+            step=step)
         try:
             import git
 
@@ -584,7 +591,6 @@ def main(argv):
         )
         models = [wae_mdp]
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
-    print(params)
 
     for phase, vae_mdp_model in enumerate(models):
         checkpoint_directory = os.path.join(
@@ -603,7 +609,7 @@ def main(argv):
 
         if params['log']:
             # initialize logs
-            train_summary_writer = initialize_summary_writer(params, environment_name, vae_name, step=step)
+            train_summary_writer = initialize_summary_writer(params, environment_name, vae_name, step=step, vae_mdp_model=vae_mdp_model)
         else:
             train_summary_writer = None
         
@@ -651,7 +657,7 @@ def main(argv):
                     not params['action_discretizer'] and params['latent_policy']),
             use_prioritized_replay_buffer=params['prioritized_experience_replay'],
             priority_exponent=params['priority_exponent'],
-            bucket_based_priorities=params['buckets_based_priority'],
+            bucket_based_priorities=params['bucket_based_priorities'],
             collect_steps_per_iteration=params['collect_steps_per_iteration'],
             wall_time=params['wall_time'] if params['wall_time'] != '.' else None,
             memory_limit=params['memory'] if params['memory'] > 0. else None,
