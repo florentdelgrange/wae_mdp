@@ -8,6 +8,7 @@ from tf_agents.drivers.dynamic_step_driver import DynamicStepDriver
 from tf_agents.policies import tf_policy
 from tf_agents.replay_buffers.tf_uniform_replay_buffer import TFUniformReplayBuffer
 from tf_agents.trajectories import trajectory
+from tf_agents.trajectories import time_step as ts
 from tf_agents.typing.types import Float
 from tf_agents.utils import common
 import tensorflow_probability.python.distributions as tfd
@@ -469,7 +470,7 @@ def compute_values(
         transition_fn=latent_transition_fn,
         reward_fn=latent_reward_function,
         gamma=gamma,
-        policy=latent_policy,
+        policy=PolicyDecorator(latent_policy),
         epsilon=epsilon,
         is_reset_state_test_fn=lambda latent_state: is_reset_state(latent_state, atomic_prop_dims),
         episodic_return=True)
@@ -502,3 +503,16 @@ class TransitionFnDecorator:
             latent_state[..., :self.atomic_prop_dims],
             latent_state[..., self.atomic_prop_dims:],
             *args, **kwargs)
+
+
+class PolicyDecorator:
+    """
+    Decorates a TFPolicy π to retrieve a mapping from states to the space of distributions over actions.
+    """
+    def __init__(self, policy: tf_policy.TFPolicy):
+        self._policy = policy
+
+    def __call__(self, state, *args, **kwargs):
+        return self._policy.distribution(
+            ts.transition(observation=state, reward=tf.zeros_like(state)), *args, **kwargs
+        ).action
