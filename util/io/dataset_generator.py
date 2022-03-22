@@ -1,4 +1,4 @@
-from typing import Callable, Any
+from typing import Callable, Any, Union
 
 import h5py
 import os
@@ -15,7 +15,7 @@ from tf_agents.trajectories.trajectory import Trajectory
 import tf_agents.trajectories.time_step as ts
 import time
 
-from tf_agents.typing.types import Float
+from tf_agents.typing.types import Float, Bool, Int
 
 
 def gather_rl_observations(
@@ -127,14 +127,32 @@ def reset_state(state_shape):
     return tf.zeros(shape=state_shape, dtype=tf.float32)
 
 
+def is_reset_state(latent_state: Union[Int, Float], atomic_prop_dims: int) -> Bool:
+    """
+    Detects whether the input latent state represents a reset state or not.
+    Note that the rightmost bit of each state label is considered as indicating whether the state
+    is a reset state or not.
+
+    Args:
+        latent_state: a binary latent state given as Tensor
+        atomic_prop_dims: number of atomic propositions
+
+    Returns: a boolean Tensor indicating whether the input latent state is a reset state or not.
+    """
+    return latent_state[..., atomic_prop_dims - 1] == 1
+
+
 def ergodic_batched_labeling_function(
         labeling_function: Callable[[tf.Tensor], tf.Tensor],
-        reset_state: Optional[tf.Tensor] = None
+        reset_state: Optional[tf.Tensor] = None,
+        dtype: tf.dtypes = tf.float32,
 ) -> Callable[[tf.Tensor], Float]:
     """
-    Wrap the given labeling function to the same (batched) labeling function taking into account reset states.
-    Input states are assumed to be batched and to be produced from the original environment.
-    The resulting labeling function has tf.float32 as returning type.
+    Wraps the given labeling function to the same (batched) labeling function taking into account reset states
+    (e.g., as those produced when executing a PerturbedEnvironment).
+    Input states are assumed to be batched.
+    Note: the reset atomic proposition is added as a bit set to 1 at the end of the label sequence returned by the
+          labeling function.
     """
 
     def _labeling_function(state: tf.Tensor):
@@ -143,7 +161,7 @@ def ergodic_batched_labeling_function(
         else:
             _reset_state = reset_state
 
-        label = tf.cast(labeling_function(state), dtype=tf.float32)
+        label = tf.cast(labeling_function(state), dtype=dtype)
         label = tf.cond(
             tf.rank(label) == 1,
             lambda: tf.expand_dims(label, axis=-1),
@@ -151,7 +169,7 @@ def ergodic_batched_labeling_function(
         reset_atomic_prop = tf.expand_dims(
             tf.cast(
                 tf.reduce_all(state == _reset_state, axis=-1),
-                dtype=tf.float32),
+                dtype=dtype),
             axis=-1)
         return tf.concat([label, reset_atomic_prop], axis=-1)
 

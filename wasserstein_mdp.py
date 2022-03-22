@@ -218,7 +218,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     latent_state=latent_state,
                     action=action,
                     number_of_discrete_actions=self.number_of_discrete_actions,
-                    action_encoder_network=action_encoder_network,)
+                    action_encoder_network=action_encoder_network, )
             else:
                 self.action_encoder_network = None
             # transition network
@@ -245,7 +245,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.latent_policy_network = LatentPolicyNetwork(
                 latent_state=latent_state,
                 latent_policy_network=latent_policy_network,
-                number_of_discrete_actions=self.number_of_discrete_actions,)
+                number_of_discrete_actions=self.number_of_discrete_actions, )
             # reward function
             self.reward_network = RewardNetwork(
                 latent_state=latent_state,
@@ -336,6 +336,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.loss_metrics.update({
                 'marginal_action_encoder_entropy': Mean('marginal_action_encoder_entropy'),
                 'action_encoder_entropy': Mean('action_encoder_entropy'),
+            })
+            self.temperature_metrics.update({
+                't_1_action': self.action_encoder_temperature,
+                't_2_action': self.latent_policy_temperature,
             })
 
     def anneal(self):
@@ -547,7 +551,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     tf.one_hot(
                         latent_action,
                         depth=self.number_of_discrete_actions),
-                    dtype=tf.float32),)
+                    dtype=tf.float32), )
             if self.deterministic_state_embedding:
                 return decoder.mode()
             else:
@@ -827,14 +831,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         return -1. * tf.reduce_mean(
             tf.reduce_sum(
                 tf.nn.softmax(logits) * (
-                    tf.reduce_logsumexp(
-                        logits - tf.expand_dims(
-                            tf.reduce_logsumexp(logits, axis=-1),
-                            axis=-1),
-                        axis=0) - tf.math.log(batch_size)),
+                        tf.reduce_logsumexp(
+                            logits - tf.expand_dims(
+                                tf.reduce_logsumexp(logits, axis=-1),
+                                axis=-1),
+                            axis=0) - tf.math.log(batch_size)),
                 axis=-1),
             axis=0)
-
 
     @tf.function
     def entropy_regularizer(
@@ -877,8 +880,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             else:
                 logits = self.discrete_action_encoding(latent_state, action).logits_parameter()
                 regularizer += self.action_entropy_regularizer_scaling * (
-                               self.marginal_action_encoder_entropy(logits=logits) -
-                               tf.reduce_mean(tfd.Categorical(logits=logits).entropy(), axis=0))
+                        self.marginal_action_encoder_entropy(logits=logits) -
+                        tf.reduce_mean(tfd.Categorical(logits=logits).entropy(), axis=0))
         return regularizer
 
     @tf.function
@@ -1289,7 +1292,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             estimate_transition_function_from_samples=estimate_transition_function_from_samples,
             replay_buffer_max_frames=replay_buffer_max_frames,
             reward_scaling=reward_scaling,
-            atomic_prop_dims=self.atomic_props_dims,)
+            atomic_prop_dims=self.atomic_props_dims, )
 
     def eval_and_save(
             self,
@@ -1360,7 +1363,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                         metrics['eval_' + value](tf.reduce_mean(is_weights * evaluation[value]))
                 eval_progressbar.add(batch_size, values=[('eval_loss', metrics['eval_loss'].result())])
             tf.print('\n')
-        
+
         if eval_policy_driver is not None:
             avg_rewards = self.eval_policy(
                 eval_policy_driver=eval_policy_driver,
@@ -1385,17 +1388,21 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 if local_losses_metrics is not None:
                     tf.summary.scalar('local_reward_loss', local_losses_metrics.local_reward_loss, step=global_step)
                     tf.summary.scalar('local_transition_loss',
-                            local_losses_metrics.local_transition_loss, step=global_step)
+                                      local_losses_metrics.local_transition_loss, step=global_step)
                     if local_losses_metrics.local_transition_loss_transition_function_estimation is not None:
                         tf.summary.scalar('local_transition_loss_empirical_transition_function',
-                                local_losses_metrics.local_transition_loss_transition_function_estimation,
-                                step=global_step)
+                                          local_losses_metrics.local_transition_loss_transition_function_estimation,
+                                          step=global_step)
+                    for key, value in local_losses_metrics.value_difference.items():
+                        tf.summary.scalar(key, value, step=global_step)
 
         if local_losses_metrics is not None:
             tf.print('Local reward loss: {:.2f}'.format(local_losses_metrics.local_reward_loss))
             tf.print('Local transition loss: {:.2f}'.format(local_losses_metrics.local_transition_loss))
             tf.print('Local transition loss (empirical transition function): {:.2f}'
-                        ''.format(local_losses_metrics.local_transition_loss_transition_function_estimation))
+                     ''.format(local_losses_metrics.local_transition_loss_transition_function_estimation))
+            for key, value in local_losses_metrics.value_difference.items():
+                tf.print(key, value)
             local_losses_metrics.print_time_metrics()
 
         if eval_steps > 0:
