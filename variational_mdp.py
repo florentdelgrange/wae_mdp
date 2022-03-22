@@ -504,6 +504,9 @@ class VariationalMarkovDecisionProcess(tf.Module):
             'transition_log_probs': tf.keras.metrics.Mean(name='transition_log_probs'),
             #  'decoder_variance': tf.keras.metrics.Mean(name='decoder_variance')
         }
+        self.temperature_metrics = {
+            't_1': self.encoder_temperature,
+            't_2': self.prior_temperature}
 
     def reset_metrics(self):
         for value in self.loss_metrics.values():
@@ -1652,7 +1655,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
         progressbar = Progbar(
             target=None,
             stateful_metrics=list(self.loss_metrics.keys()) + [
-                'loss', 't_1', 't_2', 'entropy_regularizer_scale_factor', 'step', "num_episodes", "env_steps",
+                'loss', 't_1', 't_2', 't_1_action', 't_2_action',
+                'entropy_regularizer_scale_factor', 'step', "num_episodes", "env_steps",
                 "replay_buffer_frames", 'kl_annealing_scale_factor', 'state_rate',
                 "state_distortion", 'action_rate', 'action_distortion', 'mean_state_bits_used', 'wis_exponent',
                 'priority_logistic_smoothness', 'priority_logistic_mean',
@@ -1902,11 +1906,10 @@ class VariationalMarkovDecisionProcess(tf.Module):
         metrics_key_values = [('step', global_step.numpy())] + \
                              [(key, value) for key, value in loss.items()] + \
                              [(key, value.result()) for key, value in self.loss_metrics.items()] + \
-                             [(key, value) for key, value in additional_metrics.items()]
+                             [(key, value) for key, value in additional_metrics.items()] + \
+                             [(key, value) for key, value in self.temperature_metrics.items()]
         # [(key, value) for key, value in self.mean_latent_bits_used(dataset_batch).items()]
         if annealing_period != 0:
-            metrics_key_values.append(('t_1', self.encoder_temperature))
-            metrics_key_values.append(('t_2', self.prior_temperature))
             metrics_key_values.append(('entropy_regularizer_scale_factor', self.entropy_regularizer_scale_factor))
             if self.kl_scale_factor != 1.:
                 metrics_key_values.append(('kl_annealing_scale_factor', self.kl_scale_factor))
