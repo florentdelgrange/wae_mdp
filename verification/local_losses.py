@@ -242,6 +242,9 @@ def estimate_local_losses_from_samples(
                             _state, ergodic_batched_labeling_function(labeling_function)(_state))))))
             time_metrics['value_diff_' + name] = time.time() - time_metrics['value_diff_' + name]
 
+            tf.print("avg. discounted return", observers[-1].result())
+            tf.print("value_diff", value_diff["value_diff_" + name])
+
     def print_time_metrics():
         print("Time metrics:")
 
@@ -461,7 +464,7 @@ def compute_values(
     ).prob(latent_state_space)
 
     values = value_iteration(
-        num_states=latent_state_size,
+        latent_state_size=latent_state_size,
         num_actions=number_of_discrete_actions,
         transition_fn=latent_transition_fn,
         reward_fn=latent_reward_function,
@@ -470,6 +473,8 @@ def compute_values(
         epsilon=epsilon,
         is_reset_state_test_fn=lambda latent_state: is_reset_state(latent_state, atomic_prop_dims),
         episodic_return=True)
+    tf.print("p_init", p_init)
+    tf.print("values", values)
 
     return tf.reduce_sum(p_init * values, axis=0)
 
@@ -493,7 +498,7 @@ class TransitionFnDecorator:
         self.atomic_prop_dims = atomic_prop_dims
 
     def prob(self, latent_state, *args, **kwargs):
-        return self.next_state_distribution(
+        return self.next_state_distribution.prob(
             latent_state[..., :self.atomic_prop_dims],
             latent_state[..., self.atomic_prop_dims:],
             *args, **kwargs)
