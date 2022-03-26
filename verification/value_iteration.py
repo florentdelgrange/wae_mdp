@@ -1,7 +1,9 @@
 import enum
+import time
 from typing import Callable, Optional, Dict, Union
 
 import tensorflow as tf
+from tensorflow.debugging import Assert
 import tensorflow_probability.python.distributions as tfd
 from tf_agents.typing.types import Float, Int, Bool
 
@@ -10,8 +12,8 @@ from verification import binary_latent_space
 
 
 class Error(enum.Enum):
-    ABSOLUTE: enum.auto()
-    RELATIVE: enum.auto()
+    ABSOLUTE = enum.auto()
+    RELATIVE = enum.auto()
 
 
 error = {
@@ -22,23 +24,24 @@ error = {
 
 @tf.function
 def value_iteration(
-        num_states: Int,
+        latent_state_size: Int,
         num_actions: Int,
-        transition_fn: Callable[[Int, Int], tfd.Distribution],
-        reward_fn: Callable[[Int, Int, Int], tf.Tensor],
+        transition_fn: Callable[[tf.Tensor, tf.Tensor], tfd.Distribution],
+        reward_fn: Callable[[tf.Tensor,tf.Tensor, tf.Tensor], tf.Tensor],
         gamma: Float,
-        policy: Optional[Callable[[Int], tfd.OneHotCategorical]] = None,
+        policy: Optional[Callable[[tf.Tensor], tfd.OneHotCategorical]] = None,
         error_type: Union[str, Error] = Error.RELATIVE,
         epsilon: Float = 1e-6,
-        is_reset_state_test_fn: Optional[Callable[[tf.Tensor], tf.bool]] = None,
+        is_reset_state_test_fn: Optional[Callable[[tf.Tensor], Bool]] = None,
         episodic_return: bool = True,
+        debug: bool = False,
 ) -> Dict[str, Float]:
     """
-    Iteratively compute the value of (i.e., expected return obtained from running an input policy from) each state up
+    Iteratively compute the value of (i.e., the expected return obtained from running an input policy from) each state up
     to a certain precision, depending on the error between two consecutive iterations.
 
     Args:
-        num_states: size of the state space
+        latent_state_size: size of the state space in binary, i.e., number of bits used to represent the state space
         num_actions: size of the action space
         transition_fn: function mapping each state-action pair to a distribution over (binary encoded) states
         reward_fn: function mapping each transition to a tensor containing the reward
@@ -55,32 +58,38 @@ def value_iteration(
         episodic_return: Whether to estimate the finite-horizon episodic return or infinite horizon return.
                          If True, is_reset_state_fn has to be provided. In that case, values obtained by transitioning
                          to a reset state will be ignored.
+        debug: whether to display iteration error and time metrics 
     """
     if error_type not in [Error.RELATIVE, Error.ABSOLUTE]:
         error_type = error[error_type]
-    values = tf.zeros(num_states)
-    delta = float('inf')
-    state_space = binary_latent_space(num_states, dtype=tf.int32)
-    action_space = tf.one_hot(indices=tf.range(num_actions), dept=num_actions, dtype=tf.int32)
+    num_states = 2 ** latent_state_size
+    values = tf.zeros(num_states, dtype=tf.float32)
+    delta = tf.constant(float('inf'))
+    state_space = binary_latent_space(latent_state_size, dtype=tf.float32)
+    action_space = tf.one_hot(indices=tf.range(num_actions), depth=tf.cast(num_actions, tf.int32), dtype=tf.float32)
 
-    def q_s(state: Int):
-        return tf.map_fn(
-            fn=lambda action: compute_next_q_value(
-                state=state,
-                action=action,
-                values=values,
-                transition_fn=transition_fn,
-                reward_fn=reward_fn,
-                gamma=gamma,
-                state_space=state_space,
-                is_reset_state_test_fn=is_reset_state_test_fn,
-                episodic_return=episodic_return),
-            elems=action_space,
-            fn_output_signature=tf.float32)
+    def q_s(state: Float, values: tf.Tensor):
+        return tf.transpose(
+            tf.map_fn(
+                fn=lambda action: compute_next_q_value(
+                    state=state,
+                    action=action,
+                    values=values,
+                    transition_fn=transition_fn,
+                    reward_fn=reward_fn,
+                    gamma=gamma,
+                    state_space=state_space,
+                    is_reset_state_test_fn=is_reset_state_test_fn,
+                    episodic_return=episodic_return),
+                elems=action_space,
+                fn_output_signature=tf.float32))
 
+    log_error = tf.math.log(epsilon) / tf.math.log(10.)
+    
+    @tf.function
     def update_values(values: tf.Tensor, _):
         q_values = tf.map_fn(
-            fn=q_s,
+            fn=lambda state: q_s(state, values),
             elems=state_space,
             fn_output_signature=tf.float32)
         next_values = tf.map_fn(
@@ -92,22 +101,36 @@ def value_iteration(
             elems=state_space)
 
         if error_type is Error.ABSOLUTE:
-            delta = tf.abs(next_values - values)
+            delta = tf.reduce_max(tf.abs(next_values - values))
         else:
-            delta = tf.abs(1. - values / next_values)
-
-        return next_values, tf.maximum(delta)
-
+            delta = tf.reduce_max(
+                tf.abs(1. - 
+                    tf.where(
+                        condition=values == next_values,
+                        x=tf.ones_like(values),
+                        y=values / next_values)))
+        
+        if debug:
+            tf.print("current error:", delta)
+            progress = tf.math.log(delta) * 100. / (tf.math.log(10.) * log_error)
+            tf.print("progress (%):", progress)
+        
+        return next_values, delta
+    
+    start_time = time.time() if debug else 0
     values, _ = tf.while_loop(
         cond=lambda _, _delta: tf.greater_equal(_delta, epsilon),
         body=update_values,
-        loop_vars=[values, delta])
+        loop_vars=[values, delta],)
+
+    if debug:
+        print("time to perform value iteration:", time.time() - start_time)
 
     return values
 
 
 def compute_next_value(
-        state: Int,
+        state: tf.Tensor,
         q_values: tf.Tensor,
         num_actions: int,
         policy: Optional[Callable[[Int], tfd.OneHotCategorical]] = None,
@@ -115,7 +138,7 @@ def compute_next_value(
     """
 
     Args:
-        state: unbatched binary state; expected shape: [S]
+        state: unbatched (single) binary state; expected shape: [S]
                where S is the number of bits used to represent each individual state
         q_values: tensor containing the Q-values of the current step; expected shape: [2**S, A]
                where 2**S is the size of the state space, and A is the size of the action space
@@ -124,12 +147,12 @@ def compute_next_value(
                 If not provided, then the values of the best action is chosen.
     Returns: the next value of the input state (shape=()).
     """
-    v = q_values[tf.reduce_sum(state * 2 ** tf.range(tf.shape(state)[0], axis=-1)), ...]
+    v = q_values[tf.reduce_sum(tf.cast(state, dtype=tf.int32) * 2 ** tf.range(tf.shape(state)[0]), axis=-1), ...]
+
     if policy is not None:
         return tf.reduce_sum(
-            policy(
-                tf.tile(tf.expand_dims(state, 0), [num_actions, 1])
-            ).probs_parameter() * v,
+            # the latent policy is assumed batched
+            policy(tf.expand_dims(state, 0)).probs_parameter()[0, ...] * v,
             axis=0)
     else:
         return tf.math.maximum(v, axis=0)
@@ -175,12 +198,12 @@ def compute_next_q_value(
         tf.expand_dims(t, 0),
         [num_states, 1])
     if state_space is None:
-        next_states = binary_latent_space(num_states)
+        next_states = binary_latent_space(num_states, dtype=tf.float32)
     else:
         next_states = state_space
     tiled_state = tile(state)
     tiled_action = tile(action)
-    reward = reward_fn(tiled_state, tiled_action, next_states)
+    reward = reward_fn(tiled_state, tiled_action, next_states)[..., 0]  # unidimensional reward
 
     if is_reset_state_test_fn is not None:
         # next values issued from a reset state are undiscounted
@@ -198,10 +221,9 @@ def compute_next_q_value(
                     is_reset_state_test_fn(next_states)),
                 x=tf.zeros_like(values),
                 y=values)
-
+    
     return tf.reduce_sum(
         transition_fn(
             tiled_state, tiled_action
         ).prob(next_states, full_latent_state_space=True) *
-        (reward + gamma * values),
-        axis=0)
+        (reward + gamma * values),)
