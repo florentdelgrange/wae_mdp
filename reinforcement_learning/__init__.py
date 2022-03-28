@@ -61,7 +61,7 @@ labeling_functions = {
             observation[..., 2] >= 0,
             # cos(θ) >= 0, i.e., the pendulum is at the top of the screen
             observation[..., 0] >= 0.,
-            # sin(θ) >= 0, i.e., the pendulum is at the left side of the screen
+            # sin(θ) >= 0, i.e., the pendulum is on the left side of the screen
             observation[..., 1] >= 0.,
         ], axis=-1),
     'CartPole-v0':  # safe labels
@@ -84,7 +84,42 @@ labeling_functions = {
         observation[..., 3] >= 0.,  # cos of the first pendulum angle
         observation[..., 4] >= 0.,  # angular velocity of the first pendulum
         observation[..., 5] >= 0.  # angular velocity of the second pendulum
-    ], axis=-1)
+    ], axis=-1),
+    'Hopper-v3': lambda observation: tf.stack([
+        # An element of `observation[1:] is contained in the closed interval specified by the environment
+        # argument `healthy_state_range`
+        tf.reduce_all(tf.logical_and(-100. < observation[..., 1:], observation[..., 1] < 100.), axis=-1),
+        # The height of the hopper is contained in the closed interval specified by the argument
+        # `healthy_z_range` (usually meaning that it has fallen)
+        observation[..., 0] > 0.7,
+        # The angle is contained in the closed interval specified by the argument `healthy_angle_range`
+        tf.logical_and(-0.2 < observation[..., 1], observation[..., 1] < 0.2)
+    ], axis=-1),
+    'Walker2d-v3': lambda observation: tf.stack([
+        # The height of the walker is in the closed interval specified by `healthy_z_range`
+        tf.logical_and(0.8 < observation[..., 0], observation[..., 0] < 2.),
+        # The absolute value of the angle is in the closed interval specified by `healthy_angle_range`
+        tf.abs(observation[..., 1]) < 1.,
+    ], axis=-1),
+    'HalfCheetah-v3': lambda observation: tf.stack([
+        # angles
+        observation[..., 1] < 0.,
+        observation[..., 2] < 0.,
+        observation[..., 3] < 0.,
+    ], axis=-1),
+    'Ant-v3': lambda observation: tf.stack([
+        # Any of the state space values is no longer finite
+        tf.reduce_all(tf.math.is_finite(observation), axis=-1),
+        # The z-coordinate of the torso is in the closed interval given by `healthy_z_range`
+        # (defaults to [0.2, 1.0])
+        tf.logical_and(0.2 < observation[..., 0], observation[..., 0] < 1.)
+    ], axis=-1),
+    "Swimmer-v3": lambda observation: tf.stack([
+        # angles
+        observation[..., 0] < 0.,
+        observation[..., 1] < 0.,
+        observation[..., 2] < 0.
+    ], axis=-1),
 }
 
 reward_scaling = {
