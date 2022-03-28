@@ -154,6 +154,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.squared_wasserstein = squared_wasserstein
         self.n_critic = n_critic
         self.trainable_prior = trainable_prior
+        self.include_state_encoder_entropy = entropy_regularizer_scale_factor < epsilon \
+                                             and entropy_regularizer_decay_rate < epsilon
 
         if self.action_discretizer:
             self.number_of_discrete_actions = number_of_discrete_actions
@@ -726,6 +728,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             latent_state=latent_state,
             logits=logits,
             action=action if not self.policy_based_decoding else None,
+            include_state_entropy=self.include_state_encoder_entropy,
             sample_probability=sample_probability, )
 
         # priority support
@@ -793,7 +796,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             'steady_state_gradient_penalty': steady_state_gradient_penalty,
             'transition_loss_regularizer': transition_loss_regularizer,
             'transition_loss_gradient_penalty': transition_loss_gradient_penalty,
-            'entropy_regularizer': entropy_regularizer if self.entropy_regularizer_scale_factor > epsilon else 0.,
+            'entropy_regularizer': entropy_regularizer,
         }
 
     def marginal_state_encoder_entropy(
@@ -1057,7 +1060,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 self.wasserstein_regularizer_scale_factor.local_transition_loss.gradient_penalty_multiplier *
                 output['transition_loss_gradient_penalty']
         )
-        entropy_regularizer = self.entropy_regularizer_scale_factor * output['entropy_regularizer']
+
+        if self.include_state_encoder_entropy:
+            entropy_regularizer = self.entropy_regularizer_scale_factor * output['entropy_regularizer']
+        else:
+            entropy_regularizer = output['entropy_regularizer']
 
         loss = lambda minimize: tf.reduce_mean(
             (-1.) ** (1. - minimize) * is_weights * (
