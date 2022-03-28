@@ -586,7 +586,9 @@ def main(argv):
             state_encoder_type={
                 'autoregressive': EncodingType.AUTOREGRESSIVE,
                 'lstm': EncodingType.LSTM,
-                'independent': EncodingType.INDEPENDENT}[params['state_encoder_type']],
+                'independent': EncodingType.INDEPENDENT,
+                'deterministic': EncodingType.DETERMINISTIC
+            }[params['state_encoder_type']],
             deterministic_state_embedding=params['deterministic_state_embedding'],
         )
         models = [wae_mdp]
@@ -1192,7 +1194,7 @@ if __name__ == '__main__':
     flags.DEFINE_enum(
         'state_encoder_type',
         'autoregressive',
-        ['autoregressive', 'lstm', 'independent'],
+        ['autoregressive', 'lstm', 'independent', 'deterministic'],
         'State encoder type, defining which technique to use to encode states.'
     )
     flags.DEFINE_bool(

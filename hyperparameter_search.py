@@ -64,7 +64,7 @@ def search(
     def suggest_hyperparameters(trial):
 
         defaults = {}
-        optimizer = trial.suggest_categorical('optimizer', ['Adam', 'RMSprop', 'SGD'])
+        optimizer = trial.suggest_categorical('optimizer', ['Adam', 'RMSprop'])
         learning_rate = trial.suggest_float('learning_rate', 1e-4, 1e-3, log=True)
         batch_size = trial.suggest_categorical('batch_size', [64, 128, 256, 512])
         neurons = trial.suggest_categorical('neurons', [64, 128, 256, 512])
@@ -131,7 +131,7 @@ def search(
                 trainable_prior = False
 
             state_encoder_type = trial.suggest_categorical(
-                'state_encoder_type', ['autoregressive', 'lstm', 'independent'])
+                'state_encoder_type', ['autoregressive', 'lstm', 'independent', 'deterministic'])
             entropy_regularizer_decay_rate = 0.
 
         else:
@@ -338,7 +338,8 @@ def search(
                 state_encoder_type={
                     'autoregressive': EncodingType.AUTOREGRESSIVE,
                     'lstm': EncodingType.LSTM,
-                    'independent': EncodingType.INDEPENDENT
+                    'independent': EncodingType.INDEPENDENT,
+                    'deterministic': EncodingType.DETERMINISTIC,
                 }[hyperparameters['state_encoder_type']],
                 policy_based_decoding=hyperparameters['policy_based_decoding'],
                 deterministic_state_embedding=hyperparameters['deterministic_state_embedding'])
@@ -454,7 +455,7 @@ def search(
                 log_name=log_name,
                 log_interval=fixed_parameters['log_interval'],
                 use_prioritized_replay_buffer=hyperparameters['prioritized_experience_replay'],
-                buckets_based_priorities=hyperparameters['buckets_based_priorities'],
+                bucket_based_priorities=hyperparameters['buckets_based_priorities'],
                 global_step=global_step,
                 optimizer=optimizer,
                 eval_steps=1000,
@@ -516,7 +517,7 @@ def search(
         dataset_components.close_fn()
 
         if not sanity_check(score):
-            raise ValueError("Study stopped due to Inf values.")
+            raise ValueError("Study stopped due to Inf or NaN values.")
 
         return score
 
