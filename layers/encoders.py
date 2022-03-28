@@ -214,7 +214,7 @@ class DeterministicStateEncoderNetwork(StateEncoderNetwork):
             label=label)
 
     def get_logits(self, state: Float, *args, **kwargs):
-        return (self.relaxed_distribution(state, temperature=1e-1).sample() - .5) * 10.
+        return (self.relaxed_distribution(state, temperature=1e-1).sample() - .5) * 20.
 
 
 class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):

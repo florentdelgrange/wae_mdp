@@ -18,7 +18,8 @@ import variational_action_discretizer
 from layers.autoregressive_bernoulli import AutoRegressiveBernoulliNetwork
 from layers.latent_policy import LatentPolicyNetwork
 from layers.decoders import RewardNetwork, ActionReconstructionNetwork, StateReconstructionNetwork
-from layers.encoders import StateEncoderNetwork, ActionEncoderNetwork, AutoRegressiveStateEncoderNetwork, EncodingType
+from layers.encoders import StateEncoderNetwork, ActionEncoderNetwork, AutoRegressiveStateEncoderNetwork, EncodingType, \
+    DeterministicStateEncoderNetwork
 from layers.lipschitz_functions import SteadyStateLipschitzFunction, TransitionLossLipschitzFunction
 from layers.steady_state_network import SteadyStateNetwork
 from util.io import dataset_generator, scan_model
@@ -201,6 +202,15 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     time_stacked_lstm_units=self.time_stacked_lstm_units,
                     state_encoder_pre_processing_network=state_encoder_pre_processing_network,
                     output_softclip=self.softclip)
+            elif state_encoder_type is EncodingType.DETERMINISTIC:
+                self.state_encoder_network = DeterministicStateEncoderNetwork(
+                    state=state,
+                    state_encoder_network=state_encoder_network,
+                    latent_state_size=latent_state_size,
+                    atomic_props_dims=self.atomic_props_dims,
+                    time_stacked_states=time_stacked_states,
+                    output_softclip=self.softclip,
+                    state_encoder_pre_processing_network=state_encoder_pre_processing_network)
             else:
                 self.state_encoder_network = StateEncoderNetwork(
                     state=state,
