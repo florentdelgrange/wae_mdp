@@ -17,6 +17,7 @@ class EncodingType(enum.Enum):
     INDEPENDENT = enum.auto()
     AUTOREGRESSIVE = enum.auto()
     LSTM = enum.auto()
+    DETERMINISTIC = enum.auto()
 
 
 class StateEncoderNetwork(DiscreteDistributionModel):
@@ -32,10 +33,12 @@ class StateEncoderNetwork(DiscreteDistributionModel):
             output_softclip: Callable[[Float], Float] = tfb.Identity(),
             state_encoder_pre_processing_network: Optional[tfk.Model] = None,
             lstm_output: bool = False,
+            deterministic_reset: bool = True,
     ):
         hidden_units, activation = scan_model(state_encoder_network)
         n_logits = (latent_state_size - atomic_props_dims)
         state_encoder_network = tfk.Sequential(name="state_encoder_body")
+        self.deterministic_reset = deterministic_reset
 
         for i, units in enumerate(hidden_units):
             if i == len(hidden_units) - 1:
@@ -79,8 +82,10 @@ class StateEncoderNetwork(DiscreteDistributionModel):
             label: Optional[Float] = None,
             logistic: bool = True,
     ) -> tfd.Distribution:
-
         logits = self(state)
+        if label is not None and self.deterministic_reset:
+            # if the "reset state" flag is set, then enforce mapping the reset state to a single latent state
+            logits = tf.pow(logits, 1. - label[..., -1:]) * tf.pow(-10., label[..., -1:])
         if logistic:
             distribution = tfd.TransformedDistribution(
                 distribution=tfd.Independent(
@@ -108,8 +113,12 @@ class StateEncoderNetwork(DiscreteDistributionModel):
             self,
             state: Float,
             label: Optional[Float] = None,
+            deterministic_reset: bool = True
     ) -> tfd.Distribution:
         logits = self(state)
+        if label is not None and deterministic_reset:
+            # if the "reset state" flag is set, then enforce mapping the reset state to a single latent state
+            logits = tf.pow(logits, 1. - label[..., -1:]) * tf.pow(-10., label[..., -1:])
         d2 = tfd.Independent(
             tfd.Bernoulli(
                 logits=logits,
@@ -144,6 +153,70 @@ class StateEncoderNetwork(DiscreteDistributionModel):
         return config
 
 
+class DeterministicStateEncoderNetwork(StateEncoderNetwork):
+
+    def __init__(
+            self,
+            state: tfkl.Input,
+            state_encoder_network: tfk.Model,
+            latent_state_size: int,
+            atomic_props_dims: int,
+            time_stacked_states: bool = False,
+            output_softclip: Callable[[Float], Float] = tfb.Identity(),
+            state_encoder_pre_processing_network: Optional[tfk.Model] = None,
+    ):
+        super().__init__(
+            state=state,
+            state_encoder_network=state_encoder_network,
+            latent_state_size=latent_state_size,
+            atomic_props_dims=atomic_props_dims,
+            time_stacked_states=time_stacked_states,
+            lstm_output=False,
+            output_softclip=output_softclip,
+            state_encoder_pre_processing_network=state_encoder_pre_processing_network)
+
+    def _deterministic_distribution(
+        self,
+        state: Float,
+        step_fn: Callable[[Float], Float],
+        label: Optional[Float] = None
+    ):
+        loc = step_fn(self(state))
+        if label is not None:
+            loc = tf.concat([label, loc], axis=-1)
+        return tfd.Independent(
+            tfd.Deterministic(loc=loc),
+            reinterpreted_batch_ndims=1)
+
+    def relaxed_distribution(
+            self,
+            state: Float,
+            temperature: Float,
+            label: Optional[Float] = None,
+            *args, **kwargs
+    ) -> tfd.Distribution:
+        return self._deterministic_distribution(
+            state=state,
+            # smooth heaviside
+            step_fn=lambda x: tf.sigmoid(2. * x / temperature),
+            label=label)
+
+    def discrete_distribution(
+            self,
+            state: Float,
+            label: Optional[Float] = None,
+            deterministic_reset: bool = True,
+            dtype=tf.float32
+    ) -> tfd.Distribution:
+        return self._deterministic_distribution(
+            state=state,
+            step_fn=lambda x: tf.cast(x > 0., dtype=self.dtype),
+            label=label)
+
+    def get_logits(self, state: Float, *args, **kwargs):
+        return (self.relaxed_distribution(state, temperature=1e-1).sample() - .5) * 20.
+
+
 class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):
     def __init__(
             self,
@@ -157,6 +230,7 @@ class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):
             time_stacked_lstm_units: int = 128,
             output_softclip: Callable[[Float], Float] = tfb.Identity(),
             state_encoder_pre_processing_network: Optional[tfk.Model] = None,
+            deterministic_reset: bool = True,
     ):
         super(AutoRegressiveStateEncoderNetwork, self).__init__(
             event_shape=(latent_state_size - atomic_props_dims,),
@@ -170,6 +244,7 @@ class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):
             pre_processing_network=state_encoder_pre_processing_network,
             name='autoregressive_state_encoder')
         self._atomic_props_dims = atomic_props_dims
+        self.deterministic_reset = deterministic_reset
 
     def relaxed_distribution(
             self,

@@ -64,7 +64,7 @@ def search(
     def suggest_hyperparameters(trial):
 
         defaults = {}
-        optimizer = trial.suggest_categorical('optimizer', ['Adam', 'RMSprop', 'SGD'])
+        optimizer = trial.suggest_categorical('optimizer', ['Adam', 'RMSprop'])
         lr_upper_bound = {'Adam': 1e-2, 'RMSprop': 1e-3, 'SGD': 1e-1}
         lr_lower_bound = {'Adam': 1e-4, 'RMSprop': 1e-5, 'SGD': 1e-4}
         learning_rate = trial.suggest_float('learning_rate', lr_lower_bound[optimizer], lr_upper_bound[optimizer], log=True)
@@ -133,7 +133,7 @@ def search(
                 trainable_prior = False
 
             state_encoder_type = trial.suggest_categorical(
-                'state_encoder_type', ['autoregressive', 'lstm', 'independent'])
+                'state_encoder_type', ['autoregressive', 'lstm', 'independent', 'deterministic'])
             entropy_regularizer_decay_rate = 0.
 
         else:
@@ -340,7 +340,8 @@ def search(
                 state_encoder_type={
                     'autoregressive': EncodingType.AUTOREGRESSIVE,
                     'lstm': EncodingType.LSTM,
-                    'independent': EncodingType.INDEPENDENT
+                    'independent': EncodingType.INDEPENDENT,
+                    'deterministic': EncodingType.DETERMINISTIC,
                 }[hyperparameters['state_encoder_type']],
                 policy_based_decoding=hyperparameters['policy_based_decoding'],
                 deterministic_state_embedding=hyperparameters['deterministic_state_embedding'])
@@ -518,7 +519,7 @@ def search(
         dataset_components.close_fn()
 
         if not sanity_check(score):
-            raise ValueError("Study stopped due to Inf values.")
+            raise ValueError("Study stopped due to Inf or NaN values.")
 
         return score
 

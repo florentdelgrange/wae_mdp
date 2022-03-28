@@ -426,6 +426,12 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
                 't_1_state': tf.keras.metrics.Mean(name='state_encoder_temperature'),
                 't_2_state': tf.keras.metrics.Mean(name='state_prior_temperature'),
             })
+        self.temperature_metrics = {
+            't_1': self.state_encoder_temperature,
+            't_2': self.state_prior_temperature,
+            't_1_action': self.encoder_temperature,
+            't_2_action': self.prior_temperature
+        }
 
     def anneal(self):
         super().anneal()

@@ -74,18 +74,21 @@ class LatentEmbeddingTFEnvironmentWrapper(TFEnvironment):
                 maximum=number_of_discrete_actions - 1,
                 name='latent_action'),
             batch_size=tf_env.batch_size)
-        self.wrapped_env: TFEnvironment = tf_env
+        self._wrapped_env: TFEnvironment = tf_env
         self.state_embedding_fn = state_embedding_fn
         self.action_embedding_fn = action_embedding_fn
         self.reward_scaling = reward_scaling
         self.labeling_fn = dataset_generator.ergodic_batched_labeling_function(labeling_fn)
         self._current_latent_state = None
 
+    def __getattr__(self, name):
+        return getattr(self._wrapped_env, name)
+
     def _current_time_step(self):
         if self._current_latent_state is None:
             return self.reset()
 
-        time_step = self.wrapped_env.current_time_step()
+        time_step = self._wrapped_env.current_time_step()
         return time_step._replace(
             observation={
                 'state': time_step.observation,
@@ -93,14 +96,14 @@ class LatentEmbeddingTFEnvironmentWrapper(TFEnvironment):
             reward=self.reward_scaling * time_step.reward)
 
     def _reset(self):
-        time_step = self.wrapped_env.reset()
+        time_step = self._wrapped_env.reset()
         label = self.labeling_fn(time_step.observation)
         self._current_latent_state = self.state_embedding_fn(tf.cast(time_step.observation, tf.float32), label)
         return self._current_time_step()
 
     def _step(self, latent_action):
         latent_action = self.action_embedding_fn(self._current_latent_state, latent_action)
-        next_time_step = self.wrapped_env.step(latent_action)
+        next_time_step = self._wrapped_env.step(latent_action)
         next_state_label = self.labeling_fn(next_time_step.observation)
         next_latent_state = self.state_embedding_fn(next_time_step.observation, next_state_label)
         self._current_latent_state = next_latent_state
@@ -111,7 +114,7 @@ class LatentEmbeddingTFEnvironmentWrapper(TFEnvironment):
             reward=self.reward_scaling * next_time_step.reward)
 
     def render(self):
-        return self.wrapped_env.render()
+        return self._wrapped_env.render()
 
     def wrap_latent_policy(self, latent_policy: TFPolicy):
 
