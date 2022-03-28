@@ -1292,7 +1292,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             estimate_transition_function_from_samples=estimate_transition_function_from_samples,
             replay_buffer_max_frames=replay_buffer_max_frames,
             reward_scaling=reward_scaling,
-            atomic_prop_dims=self.atomic_props_dims, )
+            atomic_prop_dims=self.atomic_props_dims,
+            estimate_value_difference=True)
 
     def eval_and_save(
             self,

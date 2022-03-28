@@ -113,7 +113,9 @@ def estimate_local_losses_from_samples(
     # initialize driver
     observers = [replay_buffer.add_batch]
     if estimate_value_difference:
-        observers.append(metrics.AverageDiscountedReturnMetric(gamma=gamma))
+        observers.append(metrics.AverageDiscountedReturnMetric(
+            gamma=gamma,
+            batch_size=latent_environment.batch_size))
     driver = DynamicStepDriver(
         env=latent_environment,
         policy=policy,
@@ -183,7 +185,7 @@ def estimate_local_losses_from_samples(
 
         time_metrics['transition_function_estimation'] = time.time()
         _samples = sample_from_replay_buffer(single_deterministic_pass=True)
-        _transition_function_estimation_num_frames = _samples.batch_size
+        _transition_function_estimation_num_frames = _samples.batch_size.numpy()
         empirical_latent_transition_function = TransitionFrequencyEstimator(
             _samples.latent_state, _samples.latent_action, _samples.next_latent_state,
             backup_transition_function=latent_transition_function,
@@ -223,24 +225,26 @@ def estimate_local_losses_from_samples(
             transition_functions["empirical_latent_transition_function"] = empirical_latent_transition_function
         for name, transition_fn in transition_functions.items():
             time_metrics['value_diff_' + name] = time.time()
+            values = compute_values(
+                latent_state_size=latent_state_size,
+                atomic_prop_dims=atomic_prop_dims,
+                state=state,
+                number_of_discrete_actions=number_of_discrete_actions,
+                latent_policy=latent_policy,
+                latent_transition_function=transition_fn,
+                latent_reward_function=latent_reward_function,
+                epsilon=epsilon,
+                gamma=gamma,
+                stochastic_state_embedding=(
+                    lambda _state: probabilistic_state_embedding(
+                        _state, ergodic_batched_labeling_function(labeling_function)(_state))
+                ) if probabilistic_state_embedding else (
+                    lambda _state: tfd.Independent(
+                            tfd.Deterministic(loc=state_embedding_function(
+                            _state, ergodic_batched_labeling_function(labeling_function)(_state))),
+                        reinterpreted_batch_ndims=1)))
             value_diff["value_diff_" + name] = tf.abs(
-                observers[-1].result() -
-                compute_values(
-                    latent_state_size=latent_state_size,
-                    atomic_prop_dims=atomic_prop_dims,
-                    state=state,
-                    number_of_discrete_actions=number_of_discrete_actions,
-                    latent_policy=latent_policy,
-                    latent_transition_function=transition_fn,
-                    latent_reward_function=latent_reward_function,
-                    epsilon=epsilon,
-                    gamma=gamma,
-                    stochastic_state_embedding=(
-                        lambda _state: probabilistic_state_embedding(
-                            _state, ergodic_batched_labeling_function(labeling_function)(_state))
-                    ) if probabilistic_state_embedding else (
-                        lambda _state: tfd.Deterministic(loc=state_embedding_function(
-                            _state, ergodic_batched_labeling_function(labeling_function)(_state))))))
+                observers[-1].result() - values)
             time_metrics['value_diff_' + name] = time.time() - time_metrics['value_diff_' + name]
 
     def print_time_metrics():
@@ -260,7 +264,7 @@ def estimate_local_losses_from_samples(
                 time_metrics,
                 {
                     'collect':
-                        "Fill in the Replay Buffer ({:d frames})".format(replay_buffer_max_frames),
+                        "Fill in the Replay Buffer ({:d} frames)".format(replay_buffer_max_frames),
                     'local_reward_loss':
                         "Estimate the local reward loss function (from {:d} transitions)".format(steps),
                     'local_transition_loss':
@@ -275,8 +279,9 @@ def estimate_local_losses_from_samples(
                     "value_diff_empirical_latent_transition_function":
                         "Value difference (empirical latent transition function)"
                 }
-        ):
-            print("{}: {:.3f}".format(_name, _time))
+        ).items():
+            if _name != 'start':
+                print("{}: {:.3f}".format(_name, _time))
 
     replay_buffer.clear()
 
@@ -429,40 +434,16 @@ def compute_values(
         stochastic_state_embedding: Callable[[tf.Tensor], tfd.Distribution],
 ):
     latent_state_space = binary_latent_space(latent_state_size)
-    # latent_reset_states = latent_state_space[is_reset_state(latent_state_space, atomic_prop_dims)]
     latent_transition_fn = lambda state, action: TransitionFnDecorator(
         next_state_distribution=latent_transition_function(state, action),
         atomic_prop_dims=atomic_prop_dims)
-
-    #  initial_transition_probs = lambda next_latent_states: \
-    #      reset_transition_probs(
-    #          original_reset_state=tf.zeros_like(state, dtype=tf.float32, name='original_reset_state'),
-    #          latent_reset_state=latent_reset_states,
-    #          next_latent_states=next_latent_states,
-    #          latent_action_space=tf.one_hot(
-    #              indices=tf.range(number_of_discrete_actions),
-    #              depth=number_of_discrete_actions),
-    #          latent_transition_fn=latent_transition_fn,
-    #          stochastic_state_embedding=stochastic_state_embedding,
-    #          latent_policy=latent_policy)
-
-    #  p_reset = tf.reduce_sum(
-    #      initial_transition_probs(
-    #          next_latent_states=latent_reset_states),
-    #      axis=0)
-    #  p_init = tf.where(
-    #      condition=tf.math.logical_not(is_reset_state(latent_state_space, atomic_prop_dims)),
-    #      x=initial_transition_probs(
-    #          next_latent_states=latent_state_space,
-    #      ) / (1 - p_reset),
-    #      y=tf.zeros(shape=(latent_state_size,)))
 
     p_init = stochastic_state_embedding(
         tf.tile(tf.zeros_like(state[:1, ...]), [tf.shape(latent_state_space)[0], 1])
     ).prob(latent_state_space)
 
     values = value_iteration(
-        num_states=latent_state_size,
+        latent_state_size=latent_state_size,
         num_actions=number_of_discrete_actions,
         transition_fn=latent_transition_fn,
         reward_fn=latent_reward_function,
@@ -470,7 +451,8 @@ def compute_values(
         policy=PolicyDecorator(latent_policy),
         epsilon=epsilon,
         is_reset_state_test_fn=lambda latent_state: is_reset_state(latent_state, atomic_prop_dims),
-        episodic_return=True)
+        episodic_return=True,
+        debug=False)
 
     return tf.reduce_sum(p_init * values, axis=0)
 
@@ -494,7 +476,7 @@ class TransitionFnDecorator:
         self.atomic_prop_dims = atomic_prop_dims
 
     def prob(self, latent_state, *args, **kwargs):
-        return self.next_state_distribution(
+        return self.next_state_distribution.prob(
             latent_state[..., :self.atomic_prop_dims],
             latent_state[..., self.atomic_prop_dims:],
             *args, **kwargs)
