@@ -65,7 +65,9 @@ def search(
 
         defaults = {}
         optimizer = trial.suggest_categorical('optimizer', ['Adam', 'RMSprop', 'SGD'])
-        learning_rate = trial.suggest_float('learning_rate', 1e-4, 1e-3, log=True)
+        lr_upper_bound = {'Adam': 1e-2, 'RMSprop': 1e-3, 'SGD': 1e-1}
+        lr_lower_bound = {'Adam': 1e-4, 'RMSprop': 1e-5, 'SGD': 1e-4}
+        learning_rate = trial.suggest_float('learning_rate', lr_lower_bound[optimizer], lr_upper_bound[optimizer], log=True)
         batch_size = trial.suggest_categorical('batch_size', [64, 128, 256, 512])
         neurons = trial.suggest_categorical('neurons', [64, 128, 256, 512])
         hidden = trial.suggest_int('hidden', 1, 3)
@@ -106,7 +108,7 @@ def search(
 
         if fixed_parameters['wae']:
             wasserstein_optimizer = trial.suggest_categorical('wasserstein_optimizer', ['Adam', 'RMSprop'])
-            wasserstein_learning_rate = trial.suggest_float('wasserstein_learning_rate', 1e-4, 1e-3, log=True)
+            wasserstein_learning_rate = trial.suggest_float('wasserstein_learning_rate', lr_lower_bound[optimizer], lr_upper_bound[optimizer], log=True)
 
             if fixed_parameters['policy_based_decoding']:
                 policy_based_decoding = trial.suggest_categorical('policy_based_decoding', [True, False])
