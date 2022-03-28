@@ -5,9 +5,9 @@ import tensorflow as tf
 import tensorflow_probability.python.distributions as tfd
 from tf_agents.typing.types import Float, Int, Bool
 
-from util.io.dataset_generator import is_reset_state
 from verification import binary_latent_space
 
+prob_error = 1e-10
 
 class Error(enum.Enum):
     ABSOLUTE: enum.auto()
@@ -62,19 +62,24 @@ def value_iteration(
     delta = float('inf')
     state_space = binary_latent_space(num_states, dtype=tf.int32)
     action_space = tf.one_hot(indices=tf.range(num_actions), dept=num_actions, dtype=tf.int32)
+    policy_probs = policy(state_space).probs_parameter()
 
     def q_s(state: Int):
+
         return tf.map_fn(
-            fn=lambda action: compute_next_q_value(
-                state=state,
-                action=action,
-                values=values,
-                transition_fn=transition_fn,
-                reward_fn=reward_fn,
-                gamma=gamma,
-                state_space=state_space,
-                is_reset_state_test_fn=is_reset_state_test_fn,
-                episodic_return=episodic_return),
+            fn=lambda action: tf.where(
+                condition=policy_probs[tf.reduce_sum(state * 2 ** tf.range(tf.shape(state)[0], axis=-1))] > prob_error,
+                x=compute_next_q_value(
+                    state=state,
+                    action=action,
+                    values=values,
+                    transition_fn=transition_fn,
+                    reward_fn=reward_fn,
+                    gamma=gamma,
+                    state_space=state_space,
+                    is_reset_state_test_fn=is_reset_state_test_fn,
+                    episodic_return=episodic_return),
+                y=tf.zeros_like(state_space)),
             elems=action_space,
             fn_output_signature=tf.float32)
 
@@ -88,7 +93,7 @@ def value_iteration(
                 state=state,
                 q_values=q_values,
                 num_actions=num_actions,
-                policy=policy,),
+                policy_probs=policy_probs,),
             elems=state_space)
 
         if error_type is Error.ABSOLUTE:
@@ -110,6 +115,7 @@ def compute_next_value(
         state: Int,
         q_values: tf.Tensor,
         num_actions: int,
+        policy_probs: Optional[tf.Tensor] = None,
         policy: Optional[Callable[[Int], tfd.OneHotCategorical]] = None,
 ) -> Float:
     """
@@ -120,12 +126,18 @@ def compute_next_value(
         q_values: tensor containing the Q-values of the current step; expected shape: [2**S, A]
                where 2**S is the size of the state space, and A is the size of the action space
         num_actions: number of actions, i.e., A.
+        policy_probs: tensor containing the probability of each individual action returned by the policy;
+                      expected shape: [2**S, A].
+                      If not provided, then the policy function is used directly to compute those probabilities.
         policy: function mapping each (binary encoded) state to a distribution over (one-hot) actions.
                 If not provided, then the values of the best action is chosen.
     Returns: the next value of the input state (shape=()).
     """
-    v = q_values[tf.reduce_sum(state * 2 ** tf.range(tf.shape(state)[0], axis=-1)), ...]
-    if policy is not None:
+    _state = tf.reduce_sum(state * 2 ** tf.range(tf.shape(state)[0], axis=-1))
+    v = q_values[_state, ...]
+    if policy_probs is not None:
+        return tf.reduce_sum(policy_probs[_state, ...] * v, axis=0)
+    elif policy is not None:
         return tf.reduce_sum(
             policy(
                 tf.tile(tf.expand_dims(state, 0), [num_actions, 1])
