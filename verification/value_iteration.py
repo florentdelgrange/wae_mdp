@@ -3,13 +3,13 @@ import time
 from typing import Callable, Optional, Dict, Union
 
 import tensorflow as tf
-from tensorflow.debugging import Assert
 import tensorflow_probability.python.distributions as tfd
 from tf_agents.typing.types import Float, Int, Bool
 
 from verification import binary_latent_space
 
 prob_error = 1e-10
+
 
 class Error(enum.Enum):
     ABSOLUTE = enum.auto()
@@ -27,7 +27,7 @@ def value_iteration(
         latent_state_size: Int,
         num_actions: Int,
         transition_fn: Callable[[tf.Tensor, tf.Tensor], tfd.Distribution],
-        reward_fn: Callable[[tf.Tensor,tf.Tensor, tf.Tensor], tf.Tensor],
+        reward_fn: Callable[[tf.Tensor, tf.Tensor, tf.Tensor], tf.Tensor],
         gamma: Float,
         policy: Optional[Callable[[tf.Tensor], tfd.OneHotCategorical]] = None,
         error_type: Union[str, Error] = Error.RELATIVE,
@@ -102,31 +102,31 @@ def value_iteration(
                 state=state,
                 q_values=q_values,
                 num_actions=num_actions,
-                policy_probs=policy_probs,),
+                policy_probs=policy_probs, ),
             elems=state_space)
 
         if error_type is Error.ABSOLUTE:
             delta = tf.reduce_max(tf.abs(next_values - values))
         else:
             delta = tf.reduce_max(
-                tf.abs(1. - 
-                    tf.where(
-                        condition=values == next_values,
-                        x=tf.ones_like(values),
-                        y=values / next_values)))
-        
+                tf.abs(1. -
+                       tf.where(
+                           condition=values == next_values,
+                           x=tf.ones_like(values),
+                           y=values / next_values)))
+
         if debug:
             tf.print("current error:", delta)
             progress = tf.math.log(delta) * 100. / (tf.math.log(10.) * log_error)
             tf.print("progress (%):", progress)
-        
+
         return next_values, delta
-    
+
     start_time = time.time() if debug else 0
     values, _ = tf.while_loop(
         cond=lambda _, _delta: tf.greater_equal(_delta, epsilon),
         body=update_values,
-        loop_vars=[values, delta],)
+        loop_vars=[values, delta], )
 
     if debug:
         print("time to perform value iteration:", time.time() - start_time)
@@ -232,9 +232,9 @@ def compute_next_q_value(
                     is_reset_state_test_fn(next_states)),
                 x=tf.zeros_like(values),
                 y=values)
-    
+
     return tf.reduce_sum(
         transition_fn(
             tiled_state, tiled_action
         ).prob(next_states, full_latent_state_space=True) *
-        (reward + gamma * values),)
+        (reward + gamma * values), )
