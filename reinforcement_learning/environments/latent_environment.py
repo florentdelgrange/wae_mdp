@@ -98,7 +98,7 @@ class LatentEmbeddingTFEnvironmentWrapper(TFEnvironment):
     def _reset(self):
         time_step = self._wrapped_env.reset()
         label = self.labeling_fn(time_step.observation)
-        self._current_latent_state = self.state_embedding_fn(time_step.observation, label)
+        self._current_latent_state = self.state_embedding_fn(tf.cast(time_step.observation, tf.float32), label)
         return self._current_time_step()
 
     def _step(self, latent_action):
