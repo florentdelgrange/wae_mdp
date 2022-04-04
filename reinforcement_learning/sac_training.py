@@ -14,7 +14,12 @@ import datetime
 import numpy as np
 import random
 
-import reverb
+try:
+    import reverb
+except ImportError as ie:
+    print(ie, "Reverb is not installed on your system, "
+              "meaning prioritized experience replay cannot be used.")
+    
 import tf_agents
 from absl import app
 from absl import flags
@@ -71,7 +76,7 @@ flags.DEFINE_string(
     'save_dir', help='Save directory location', default='.'
 )
 flags.DEFINE_integer(
-    'seed', help='set seed', default=None
+    'seed', help='set seed', default=42
 )
 flags.DEFINE_integer(
     'collect_steps_per_iteration',
