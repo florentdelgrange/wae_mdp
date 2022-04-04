@@ -10,7 +10,12 @@ import functools
 import threading
 import datetime
 
-import reverb
+try:
+    import reverb
+except ImportError as ie:
+    print(ie, "Reverb is not installed on your system, "
+              "meaning prioritized experience replay cannot be used.")
+
 from absl import app
 from absl import flags
 
@@ -50,7 +55,7 @@ flags.DEFINE_integer(
     'num_parallel_env', help='Number of parallel environments', default=1
 )
 flags.DEFINE_integer(
-    'seed', help='set seed', default=None
+    'seed', help='set seed', default=42
 )
 flags.DEFINE_string(
     'save_dir', help='Save directory location', default='.'
@@ -105,6 +110,11 @@ flags.DEFINE_float(
     help='priority exponent for computing the probabilities of the samples from the prioritized replay buffer',
     default=0.6
 )
+flags.DEFINE_multi_string(
+    'import',
+    help='list of modules to additionally import',
+    default=[]
+)
 FLAGS = flags.FLAGS
 
 
@@ -132,7 +142,7 @@ class DQNLearner:
             permissive_policy_temperatures: Optional[List[float]] = None,
             prioritized_experience_replay: bool = False,
             priority_exponent: float = 0.6,
-            seed: int = Optional[None]
+            seed: Optional[int] = 42
     ):
         self.parallelization = parallelization and not prioritized_experience_replay
 
@@ -399,7 +409,7 @@ class DQNLearner:
                 if tf.reduce_max(priorities) > self.max_priority:
                     self.max_priority.assign(tf.reduce_max(priorities))
             else:
-                loss_info = self.tf_agent.train(experience).loss
+                loss_info = self.tf_agent.train(experience)
                 train_loss = loss_info.loss
 
             step = self.tf_agent.train_step_counter.numpy()
@@ -457,9 +467,11 @@ def main(argv):
     try:
         import importlib
         env_suite = importlib.import_module('tf_agents.environments.' + params['env_suite'])
+        for module in params['import']:
+            importlib.import_module(module)
     except BaseException as err:
         serr = str(err)
-        print("Error to load module '" + params['env_suite'] + "': " + serr)
+        print("Error to load module: " + serr)
         return -1
     learner = DQNLearner(
         env_name=params['env_name'],
