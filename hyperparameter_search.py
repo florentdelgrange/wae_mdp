@@ -16,7 +16,7 @@ from policies.saved_policy import SavedTFPolicy
 import reinforcement_learning
 import reinforcement_learning.environments
 from train import get_environment_specs, generate_network_components, generate_wae_name, initialize_summary_writer, \
-    generate_vae_name
+    generate_vae_name, get_architecture, update_layer_params
 import variational_action_discretizer
 import variational_mdp
 
@@ -67,7 +67,8 @@ def search(
         optimizer = trial.suggest_categorical('optimizer', ['Adam', 'RMSprop'])
         lr_upper_bound = {'Adam': 1e-2, 'RMSprop': 1e-3, 'SGD': 1e-1}
         lr_lower_bound = {'Adam': 1e-4, 'RMSprop': 1e-5, 'SGD': 1e-4}
-        learning_rate = trial.suggest_float('learning_rate', lr_lower_bound[optimizer], lr_upper_bound[optimizer], log=True)
+        learning_rate = trial.suggest_float('learning_rate', lr_lower_bound[optimizer], lr_upper_bound[optimizer],
+                                            log=True)
         batch_size = trial.suggest_categorical('batch_size', [64, 128, 256, 512])
         neurons = trial.suggest_categorical('neurons', [64, 128, 256, 512])
         hidden = trial.suggest_int('hidden', 1, 3)
@@ -108,7 +109,8 @@ def search(
 
         if fixed_parameters['wae']:
             wasserstein_optimizer = trial.suggest_categorical('wasserstein_optimizer', ['Adam', 'RMSprop'])
-            wasserstein_learning_rate = trial.suggest_float('wasserstein_learning_rate', lr_lower_bound[optimizer], lr_upper_bound[optimizer], log=True)
+            wasserstein_learning_rate = trial.suggest_float('wasserstein_learning_rate', lr_lower_bound[optimizer],
+                                                            lr_upper_bound[optimizer], log=True)
 
             if fixed_parameters['policy_based_decoding']:
                 policy_based_decoding = trial.suggest_categorical('policy_based_decoding', [True, False])
@@ -269,11 +271,7 @@ def search(
                 print("{}={}".format(key, hyperparameters[key]))
 
         hyperparameters['global_network_layers'] = hyperparameters['hidden'] * [hyperparameters['neurons']]
-        network = generate_network_components(
-            hyperparameters,
-            name='{}_mdp'.format(
-                'wasserstein' if fixed_parameters['wae'] else 'variational'),
-            wasserstein_networks=fixed_parameters['wae'], )
+        update_layer_params(hyperparameters)
 
         evaluation_window_size = fixed_parameters['evaluation_window_size']
         specs = hyperparameters['specs']
@@ -294,30 +292,31 @@ def search(
             wasserstein_optimizer = getattr(tf.optimizers, hyperparameters['wasserstein_optimizer'])(
                 learning_rate=hyperparameters['wasserstein_learning_rate'])
             optimizer = [autoencoder_optimizer, wasserstein_optimizer]
-            action_network = generate_network_components(hyperparameters, name='action')
             vae_mdp = wasserstein_mdp.WassersteinMarkovDecisionProcess(
                 state_shape=specs.state_shape,
                 action_shape=specs.action_shape,
                 reward_shape=specs.reward_shape,
                 label_shape=specs.label_shape,
                 discretize_action_space=fixed_parameters['action_discretizer'],
-                state_encoder_network=network.encoder,
-                action_encoder_network=action_network.encoder if not hyperparameters['policy_based_decoding'] else None,
-                action_decoder_network=action_network.decoder,
-                transition_network=network.transition,
-                reward_network=network.reward,
-                decoder_network=network.decoder,
-                latent_policy_network=network.discrete_policy,
-                steady_state_lipschitz_network=network.steady_state,
-                transition_loss_lipschitz_network=network.local_transition_loss,
-                latent_state_size=hyperparameters['latent_state_size'],
-                number_of_discrete_actions=hyperparameters['number_of_discrete_actions'],
+                state_encoder_network=get_architecture(hyperparameters, 'encoder', 'state_encoder'),
+                action_encoder_network=get_architecture(hyperparameters, 'encoder', 'action_encoder') \
+                    if not hyperparameters['policy_based_decoding'] else None,
+                action_decoder_network=get_architecture(hyperparameters, 'decoder', 'action_decoder'),
+                transition_network=get_architecture(hyperparameters, 'transition'),
+                reward_network=get_architecture(hyperparameters, 'reward'),
+                decoder_network=get_architecture(hyperparameters, 'decoder', 'state_decoder'),
+                latent_policy_network=get_architecture(hyperparameters, 'discrete_policy'),
+                steady_state_lipschitz_network=get_architecture(hyperparameters, 'steady_state'),
+                transition_loss_lipschitz_network=get_architecture(
+                    hyperparameters, 'local_transition_loss', 'transition_loss'),
                 state_encoder_pre_processing_network=(
-                    network.state_encoder_pre_processing
+                    get_architecture(hyperparameters, 'state_encoder_pre_processing')
                     if hyperparameters['state_encoder_pre_processing_network'] else None),
                 state_decoder_pre_processing_network=(
-                    network.state_decoder_pre_processing
+                    get_architecture(hyperparameters, 'state_decoder_pre_processing')
                     if hyperparameters['state_decoder_pre_processing_network'] else None),
+                latent_state_size=hyperparameters['latent_state_size'],
+                number_of_discrete_actions=hyperparameters['number_of_discrete_actions'],
                 time_stacked_states=hyperparameters['time_stacked_states'] > 1,
                 state_encoder_temperature=hyperparameters['state_encoder_temperature'],
                 state_prior_temperature=hyperparameters['state_prior_temperature'],
@@ -439,7 +438,7 @@ def search(
         training_steps_per_iteration = num_steps // 100
         initial_training_steps = training_steps_per_iteration
 
-        log_name='trial_number={:d}'.format(trial.number)
+        log_name = 'trial_number={:d}'.format(trial.number)
         train_summary_writer = initialize_summary_writer(
             _params,
             environment_name,

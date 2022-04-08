@@ -1,8 +1,11 @@
 import gc
+import json
+import os.path
 from collections import namedtuple
 
+import numpy as np
 import tensorflow as tf
-from typing import Tuple, Optional, Callable, NamedTuple, List, Union
+from typing import Tuple, Optional, Callable, NamedTuple, List, Union, Dict
 import tensorflow.keras as tfk
 import tensorflow.keras.layers as tfkl
 from tensorflow.keras.utils import Progbar
@@ -22,7 +25,8 @@ from layers.encoders import StateEncoderNetwork, ActionEncoderNetwork, AutoRegre
     DeterministicStateEncoderNetwork
 from layers.lipschitz_functions import SteadyStateLipschitzFunction, TransitionLossLipschitzFunction
 from layers.steady_state_network import SteadyStateNetwork
-from util.io import dataset_generator, scan_model
+from util.io import dataset_generator
+from util.nn import get_activation_fn, scan_model, ModelArchitecture, generate_sequential_model
 from variational_mdp import VariationalMarkovDecisionProcess, EvaluationCriterion, debug_gradients, debug, epsilon
 from verification.local_losses import estimate_local_losses_from_samples
 
@@ -70,6 +74,13 @@ class WassersteinRegularizerScaleFactor(NamedTuple):
                                          self.global_gradient_penalty_multiplier))
 
 
+class BaseModelArchitecture(tf.Module):
+    def __init__(self, **kwargs):
+        super().__init__(name="base_model")
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
 class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     def __init__(
             self,
@@ -78,19 +89,19 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             reward_shape: Tuple[int, ...],
             label_shape: Tuple[int, ...],
             discretize_action_space: bool,
-            state_encoder_network: tfk.Model,
-            action_decoder_network: tfk.Model,
-            transition_network: tfk.Model,
-            reward_network: tfk.Model,
-            decoder_network: tfk.Model,
-            latent_policy_network: tfk.Model,
-            steady_state_lipschitz_network: tfk.Model,
-            transition_loss_lipschitz_network: tfk.Model,
+            state_encoder_network: ModelArchitecture,
+            action_decoder_network: ModelArchitecture,
+            transition_network: ModelArchitecture,
+            reward_network: ModelArchitecture,
+            decoder_network: ModelArchitecture,
+            latent_policy_network: ModelArchitecture,
+            steady_state_lipschitz_network: ModelArchitecture,
+            transition_loss_lipschitz_network: ModelArchitecture,
             latent_state_size: int,
             number_of_discrete_actions: Optional[int] = None,
-            action_encoder_network: Optional[tfk.Model] = None,
-            state_encoder_pre_processing_network: Optional[tfk.Model] = None,
-            state_decoder_pre_processing_network: Optional[tfk.Model] = None,
+            action_encoder_network: Optional[ModelArchitecture] = None,
+            state_encoder_pre_processing_network: Optional[ModelArchitecture] = None,
+            state_decoder_pre_processing_network: Optional[ModelArchitecture] = None,
             time_stacked_states: bool = False,
             state_encoder_temperature: float = 2. / 3,
             state_prior_temperature: float = 1. / 2,
@@ -100,7 +111,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 global_scaling=1., global_gradient_penalty_multiplier=1.),
             encoder_temperature_decay_rate: float = 0.,
             prior_temperature_decay_rate: float = 0.,
-            pre_loaded_model: bool = False,
             reset_state_label: bool = True,
             autoencoder_optimizer: Optional = None,
             wasserstein_regularizer_optimizer: Optional = None,
@@ -122,6 +132,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             state_encoder_type: EncodingType = EncodingType.AUTOREGRESSIVE,
             policy_based_decoding: bool = False,
             deterministic_state_embedding: bool = True,
+            *args, **kwargs
     ):
         super(WassersteinMarkovDecisionProcess, self).__init__(
             state_shape=state_shape, action_shape=action_shape, reward_shape=reward_shape, label_shape=label_shape,
@@ -143,6 +154,15 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             entropy_regularizer_decay_rate=entropy_regularizer_decay_rate,
             deterministic_state_embedding=deterministic_state_embedding)
 
+        # for saving the model
+        _params = list(locals().items())
+        self._params = {key: str(value) for key, value in _params}
+
+        base_models = dict()
+        for _model, _model_architecture in filter(lambda key_value: '_network' in key_value[0], _params):
+            if _model_architecture is not None:
+                base_models[_model] = generate_sequential_model(_model_architecture)
+
         self.wasserstein_regularizer_scale_factor = wasserstein_regularizer_scale_factor
         self.mixture_components = None
         self._autoencoder_optimizer = autoencoder_optimizer
@@ -154,8 +174,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.squared_wasserstein = squared_wasserstein
         self.n_critic = n_critic
         self.trainable_prior = trainable_prior
-        self.include_state_encoder_entropy = entropy_regularizer_scale_factor < epsilon \
-                                             and entropy_regularizer_decay_rate < epsilon
+        self.include_state_encoder_entropy = not (
+                entropy_regularizer_scale_factor < epsilon
+                and state_encoder_type is EncodingType.DETERMINISTIC)
+        self.include_action_encoder_entropy = action_entropy_regularizer_scaling < epsilon
 
         if self.action_discretizer:
             self.number_of_discrete_actions = number_of_discrete_actions
@@ -182,150 +204,150 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         # self.softclip = tfb.SoftClip(low=-scale, high=scale)
         self.softclip = tfb.Identity()
 
-        if not pre_loaded_model:
+        state = tfkl.Input(shape=state_shape, name="state")
+        action = tfkl.Input(shape=action_shape, name="action")
+        latent_state = tfkl.Input(shape=(self.latent_state_size,), name="latent_state")
+        latent_action = tfkl.Input(shape=(self.number_of_discrete_actions,), name="latent_action")
+        next_latent_state = tfkl.Input(shape=(self.latent_state_size,), name='next_latent_state')
 
-            state = tfkl.Input(shape=state_shape, name="state")
-            action = tfkl.Input(shape=action_shape, name="action")
-            latent_state = tfkl.Input(shape=(self.latent_state_size,), name="latent_state")
-            latent_action = tfkl.Input(shape=(self.number_of_discrete_actions,), name="latent_action")
-            next_latent_state = tfkl.Input(shape=(self.latent_state_size,), name='next_latent_state')
-
-            # state encoder network
-            if state_encoder_type is EncodingType.AUTOREGRESSIVE:
-                hidden_units, activation = scan_model(state_encoder_network)
-                self.state_encoder_network = AutoRegressiveStateEncoderNetwork(
-                    state_shape=state_shape,
-                    activation=activation,
-                    hidden_units=hidden_units,
-                    latent_state_size=self.latent_state_size,
-                    atomic_props_dims=self.atomic_props_dims,
-                    time_stacked_states=self.time_stacked_states,
-                    temperature=self.state_encoder_temperature,
-                    time_stacked_lstm_units=self.time_stacked_lstm_units,
-                    state_encoder_pre_processing_network=state_encoder_pre_processing_network,
-                    output_softclip=self.softclip)
-            elif state_encoder_type is EncodingType.DETERMINISTIC:
-                self.state_encoder_network = DeterministicStateEncoderNetwork(
-                    state=state,
-                    state_encoder_network=state_encoder_network,
-                    latent_state_size=latent_state_size,
-                    atomic_props_dims=self.atomic_props_dims,
-                    time_stacked_states=time_stacked_states,
-                    output_softclip=self.softclip,
-                    state_encoder_pre_processing_network=state_encoder_pre_processing_network)
-            else:
-                self.state_encoder_network = StateEncoderNetwork(
-                    state=state,
-                    state_encoder_network=state_encoder_network,
-                    latent_state_size=self.latent_state_size,
-                    atomic_props_dims=self.atomic_props_dims,
-                    time_stacked_states=self.time_stacked_states,
-                    time_stacked_lstm_units=self.time_stacked_lstm_units,
-                    state_encoder_pre_processing_network=state_encoder_pre_processing_network,
-                    output_softclip=self.softclip,
-                    lstm_output=state_encoder_type is EncodingType.LSTM)
-            # action encoder network
-            if self.action_discretizer and not self.policy_based_decoding:
-                self.action_encoder_network = ActionEncoderNetwork(
-                    latent_state=latent_state,
-                    action=action,
-                    number_of_discrete_actions=self.number_of_discrete_actions,
-                    action_encoder_network=action_encoder_network, )
-            else:
-                self.action_encoder_network = None
-            # transition network
-            hidden_units, activation = scan_model(transition_network)
-            self.transition_network = AutoRegressiveBernoulliNetwork(
-                event_shape=(self.latent_state_size,),
+        # state encoder network
+        if state_encoder_type is EncodingType.AUTOREGRESSIVE:
+            hidden_units, activation = (state_encoder_network.hidden_units,
+                                        get_activation_fn(state_encoder_network.activation))
+            self.state_encoder_network = AutoRegressiveStateEncoderNetwork(
+                state_shape=state_shape,
                 activation=activation,
                 hidden_units=hidden_units,
-                conditional_event_shape=(self.latent_state_size + self.number_of_discrete_actions,),
-                temperature=self.state_prior_temperature,
-                output_softclip=self.softclip,
-                name='autoregressive_transition_network')
-            # stationary distribution over latent states
-            self.latent_stationary_network: AutoRegressiveBernoulliNetwork = SteadyStateNetwork(
+                latent_state_size=self.latent_state_size,
                 atomic_props_dims=self.atomic_props_dims,
+                time_stacked_states=self.time_stacked_states,
+                temperature=self.state_encoder_temperature,
+                time_stacked_lstm_units=self.time_stacked_lstm_units,
+                state_encoder_pre_processing_network=base_models.get('state_encoder_pre_processing_network', None),
+                output_softclip=self.softclip)
+        elif state_encoder_type is EncodingType.DETERMINISTIC:
+            self.state_encoder_network = DeterministicStateEncoderNetwork(
+                state=state,
+                activation=get_activation_fn(state_encoder_network.activation),
+                hidden_units=state_encoder_network.hidden_units,
                 latent_state_size=latent_state_size,
-                activation=activation,
-                hidden_units=hidden_units,
-                trainable_prior=trainable_prior,
-                temperature=self.state_prior_temperature,
+                atomic_props_dims=self.atomic_props_dims,
+                time_stacked_states=time_stacked_states,
                 output_softclip=self.softclip,
-                name='latent_stationary_network')
-            # latent policy
-            self.latent_policy_network = LatentPolicyNetwork(
+                state_encoder_pre_processing_network=base_models.get('state_encoder_pre_processing_network', None))
+        else:
+            self.state_encoder_network = StateEncoderNetwork(
+                state=state,
+                activation=get_activation_fn(state_encoder_network.activation),
+                hidden_units=state_encoder_network.hidden_units,
+                latent_state_size=self.latent_state_size,
+                atomic_props_dims=self.atomic_props_dims,
+                time_stacked_states=self.time_stacked_states,
+                time_stacked_lstm_units=self.time_stacked_lstm_units,
+                state_encoder_pre_processing_network=base_models.get('state_encoder_pre_processing_network', None),
+                output_softclip=self.softclip,
+                lstm_output=state_encoder_type is EncodingType.LSTM)
+        # action encoder network
+        if self.action_discretizer and not self.policy_based_decoding:
+            self.action_encoder_network = ActionEncoderNetwork(
                 latent_state=latent_state,
-                latent_policy_network=latent_policy_network,
-                number_of_discrete_actions=self.number_of_discrete_actions, )
-            # reward function
-            self.reward_network = RewardNetwork(
+                action=action,
+                number_of_discrete_actions=self.number_of_discrete_actions,
+                action_encoder_network=base_models['action_encoder_network'], )
+        else:
+            self.action_encoder_network = None
+        # transition network
+        self.transition_network = AutoRegressiveBernoulliNetwork(
+            event_shape=(self.latent_state_size,),
+            activation=get_activation_fn(transition_network.activation),
+            hidden_units=transition_network.hidden_units,
+            conditional_event_shape=(self.latent_state_size + self.number_of_discrete_actions,),
+            temperature=self.state_prior_temperature,
+            output_softclip=self.softclip,
+            name='autoregressive_transition_network')
+        # stationary distribution over latent states
+        self.latent_stationary_network: AutoRegressiveBernoulliNetwork = SteadyStateNetwork(
+            atomic_props_dims=self.atomic_props_dims,
+            latent_state_size=latent_state_size,
+            activation=get_activation_fn(transition_network.activation),
+            hidden_units=transition_network.hidden_units,
+            trainable_prior=trainable_prior,
+            temperature=self.state_prior_temperature,
+            output_softclip=self.softclip,
+            name='latent_stationary_network')
+        # latent policy
+        self.latent_policy_network = LatentPolicyNetwork(
+            latent_state=latent_state,
+            latent_policy_network=base_models['latent_policy_network'],
+            number_of_discrete_actions=self.number_of_discrete_actions, )
+        # reward function
+        self.reward_network = RewardNetwork(
+            latent_state=latent_state,
+            latent_action=latent_action,
+            next_latent_state=next_latent_state,
+            reward_network=base_models['reward_network'],
+            reward_shape=self.reward_shape)
+        # state reconstruction function
+        self.reconstruction_network = StateReconstructionNetwork(
+            next_latent_state=next_latent_state,
+            decoder_network=base_models['decoder_network'],
+            state_shape=self.state_shape,
+            time_stacked_states=self.time_stacked_states,
+            state_decoder_pre_processing_network=base_models.get('state_decoder_pre_processing_network', None),
+            time_stacked_lstm_units=self.time_stacked_lstm_units)
+        # action reconstruction function
+        if self.action_discretizer and not self.policy_based_decoding:
+            self.action_reconstruction_network = ActionReconstructionNetwork(
                 latent_state=latent_state,
                 latent_action=latent_action,
-                next_latent_state=next_latent_state,
-                reward_network=reward_network,
-                reward_shape=self.reward_shape)
-            # state reconstruction function
-            self.reconstruction_network = StateReconstructionNetwork(
-                next_latent_state=next_latent_state,
-                decoder_network=decoder_network,
-                state_shape=self.state_shape,
-                time_stacked_states=self.time_stacked_states,
-                state_decoder_pre_processing_network=state_decoder_pre_processing_network,
-                time_stacked_lstm_units=self.time_stacked_lstm_units)
-            # action reconstruction function
-            if self.action_discretizer and not self.policy_based_decoding:
-                self.action_reconstruction_network = ActionReconstructionNetwork(
-                    latent_state=latent_state,
-                    latent_action=latent_action,
-                    action_decoder_network=action_decoder_network,
-                    action_shape=self.action_shape)
-            else:
-                self.action_reconstruction_network = None
-            # steady state Lipschitz function
-            self.steady_state_lipschitz_network = SteadyStateLipschitzFunction(
-                latent_state=latent_state,
-                latent_action=latent_action if not self.policy_based_decoding else None,
-                next_latent_state=next_latent_state,
-                steady_state_lipschitz_network=steady_state_lipschitz_network, )
-            # transition loss Lipschitz function
-            self.transition_loss_lipschitz_network = TransitionLossLipschitzFunction(
-                state=state,
-                action=action,
-                latent_state=latent_state,
-                latent_action=latent_action if self.action_discretizer else None,
-                next_latent_state=next_latent_state,
-                transition_loss_lipschitz_network=transition_loss_lipschitz_network)
-
-            if debug or True:
-                self.state_encoder_network.summary()
-                if self.action_discretizer and not self.policy_based_decoding:
-                    self.action_encoder_network.summary()
-                else:
-                    print("No action encoder")
-                self.transition_network.summary()
-                self.latent_stationary_network.summary()
-                self.latent_policy_network.summary()
-                self.reward_network.summary()
-                self.reconstruction_network.summary()
-                if self.action_discretizer:
-                    self.action_reconstruction_network.summary()
-                self.steady_state_lipschitz_network.summary()
-                self.transition_loss_lipschitz_network.summary()
-
+                action_decoder_network=base_models['action_decoder_network'],
+                action_shape=self.action_shape)
         else:
-            self.state_encoder_network = state_encoder_network
-            self.action_encoder_network = action_encoder_network
-            self.transition_network = transition_network
-            self.latent_stationary_network = latent_stationary_network
-            self.latent_policy_network = latent_policy_network
-            self.reward_network = reward_network
-            self.reconstruction_network = decoder_network
-            self.action_reconstruction_network = action_decoder_network
-            self.steady_state_lipschitz_network = steady_state_lipschitz_network
-            self.transition_loss_lipschitz_network = transition_loss_lipschitz_network
+            self.action_reconstruction_network = None
+        # steady state Lipschitz function
+        self.steady_state_lipschitz_network = SteadyStateLipschitzFunction(
+            latent_state=latent_state,
+            latent_action=latent_action if not self.policy_based_decoding else None,
+            next_latent_state=next_latent_state,
+            steady_state_lipschitz_network=base_models['steady_state_lipschitz_network'], )
+        # transition loss Lipschitz function
+        self.transition_loss_lipschitz_network = TransitionLossLipschitzFunction(
+            state=state,
+            action=action,
+            latent_state=latent_state,
+            latent_action=latent_action if self.action_discretizer else None,
+            next_latent_state=next_latent_state,
+            transition_loss_lipschitz_network=base_models['transition_loss_lipschitz_network'])
+
+        if debug or True:
+            self.state_encoder_network.summary()
+            if self.action_discretizer and not self.policy_based_decoding:
+                self.action_encoder_network.summary()
+            else:
+                print("No action encoder")
+            self.transition_network.summary()
+            self.latent_stationary_network.summary()
+            self.latent_policy_network.summary()
+            self.reward_network.summary()
+            self.reconstruction_network.summary()
+            if self.action_discretizer:
+                self.action_reconstruction_network.summary()
+            self.steady_state_lipschitz_network.summary()
+            self.transition_loss_lipschitz_network.summary()
 
         self.encoder_network = self.state_encoder_network
+
+        self._base_architecture = BaseModelArchitecture(
+            state_encoder_network=state_encoder_network,
+            action_decoder_network=action_decoder_network,
+            reward_network=reward_network,
+            decoder_network=decoder_network,
+            latent_policy_network=latent_policy_network,
+            steady_state_lipschitz_network=steady_state_lipschitz_network,
+            transition_loss_lipschitz_network=transition_loss_lipschitz_network,
+            action_encoder_network=action_encoder_network,
+            state_encoder_pre_processing_network=state_encoder_pre_processing_network,
+            state_decoder_pre_processing_network=state_decoder_pre_processing_network)
 
         self.loss_metrics = {
             'reconstruction_loss': Mean(name='reconstruction_loss'),
@@ -393,11 +415,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             state: Float,
             temperature: Float,
             label: Optional[Float] = None,
-            logistic: bool = False,
             *args, **kwargs
     ) -> tfd.Distribution:
         return self.state_encoder_network.relaxed_distribution(
-            state=state, temperature=temperature, label=label, logistic=logistic)
+            state=state, temperature=temperature, label=label)
 
     def discrete_action_encoding(
             self,
@@ -729,6 +750,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             logits=logits,
             action=action if not self.policy_based_decoding else None,
             include_state_entropy=self.include_state_encoder_entropy,
+            include_action_entropy=self.include_action_encoder_entropy,
             sample_probability=sample_probability, )
 
         # priority support
@@ -1173,7 +1195,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 }[optimization_direction]
 
                 if not numerical_error(gradients, list_of_tensors=True):
-                    optimizer.apply_gradients(zip(gradients, variables))
+                    if optimizer is not None:
+                        optimizer.apply_gradients(zip(gradients, variables))
 
                 if debug_gradients:
                     for gradient, variable in zip(gradients, variables):
@@ -1344,7 +1367,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         }
 
         data = {'states': None, 'actions': None}
-        avg_rewards = None
+        score = dict()
         local_losses_metrics = None
 
         if eval_steps > 0:
@@ -1383,7 +1406,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             tf.print('\n')
 
         if eval_policy_driver is not None:
-            avg_rewards = self.eval_policy(
+            score['eval_policy'] = self.eval_policy(
                 eval_policy_driver=eval_policy_driver,
                 train_summary_writer=train_summary_writer,
                 global_step=global_step)
@@ -1419,6 +1442,14 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             tf.print('Local transition loss: {:.2f}'.format(local_losses_metrics.local_transition_loss))
             tf.print('Local transition loss (empirical transition function): {:.2f}'
                      ''.format(local_losses_metrics.local_transition_loss_transition_function_estimation))
+            score['local_reward_loss'] = local_losses_metrics.local_reward_loss
+            score['local_transition_loss'] = local_losses_metrics.local_transition_loss
+            if local_losses_metrics.local_transition_loss_transition_function_estimation is not None and \
+                    local_losses_metrics.local_transition_loss_transition_function_estimation \
+                    < local_losses_metrics.local_transition_loss:
+                score['local_transition_loss'] = \
+                    local_losses_metrics.local_transition_loss_transition_function_estimation
+
             for key, value in local_losses_metrics.value_difference.items():
                 tf.print(key, value)
             local_losses_metrics.print_time_metrics()
@@ -1428,7 +1459,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         if eval_policy_driver is not None or eval_steps > 0:
             self.assign_score(
-                score=avg_rewards if avg_rewards is not None else metrics['eval_loss'].result(),
+                score=score,
                 checkpoint_model=save_directory is not None and log_name is not None,
                 save_directory=save_directory,
                 model_name=log_name,
@@ -1437,3 +1468,99 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         gc.collect()
 
         return metrics['eval_loss'].result()
+
+    def save(self, save_directory, model_name: str, infos: Optional[Dict] = None):
+        import os
+        import json
+
+        if infos is None:
+            infos = dict()
+
+        save_path = os.path.join(save_directory, model_name)
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+
+        # save base model architecture
+        tf.saved_model.save(self._base_architecture, save_path)
+
+        # save model variables through checkpointing
+        optimizer = self.detach_optimizer()
+        priority_handler = self.priority_handler
+        self.priority_handler = None
+        checkpoint = tf.train.Checkpoint(model=self)
+        checkpoint.save(os.path.join(os.path.join('ckpt')))
+        self.attach_optimizer(optimizer)
+        self.priority_handler = priority_handler
+
+        # dump model infos
+        with open(os.path.join(save_path, 'model_infos.json'), 'w') as file:
+            json.dump(self._params | infos, file)
+            print('parameters written to:', save_path)
+
+    def assign_score(
+            self,
+            score: Dict[str, float],
+            checkpoint_model: bool,
+            save_directory: str,
+            model_name: str,
+            training_step: int,
+            save_best_only: bool = True,
+    ):
+        """
+        Stores the input score into the model evaluation window according to its evaluation criterion.
+        If the evaluation window is modified this way and the checkpoint_model flag is set, then a model checkpoint is
+        stored into the specified save directory.
+        """
+        if (self.evaluation_criterion is EvaluationCriterion.MEAN) \
+                or tf.reduce_any(self.evaluation_window == -1. * np.inf):
+            _score = score['eval_policy']
+            for i in tf.range(tf.shape(self.evaluation_window)[0]):
+                _score_tmp = self.evaluation_window[i]
+                self.evaluation_window[i].assign(_score)
+                _score = _score_tmp
+        elif self.evaluation_criterion is EvaluationCriterion.MAX:
+            for i in tf.range(tf.shape(self.evaluation_window)[0]):
+                if self.evaluation_window[i] <= score['eval_policy']:
+                    self.evaluation_window[i].assign(score['eval_policy'])
+                    break
+
+        if checkpoint_model:
+            import os
+            if save_best_only and os.path.exists(os.path.join(save_directory, model_name)):
+                with open(os.path.join(save_directory, model_name, 'model_infos.json')) as f:
+                    infos = json.load(f)
+                eval_policy = float(infos.get('eval_policy', None))
+                local_transition_loss = float(infos.get('local_transition_loss', None))
+                local_reward_loss = float(infos.get('local_reward_loss', None))
+                if eval_policy is not None and score['eval_policy'] > eval_policy:
+                    self.save(save_directory, model_name, score)
+                elif np.abs(eval_policy - score['eval_policy']) < epsilon and (
+                        local_transition_loss is not None and local_reward_loss is not None and
+                        'local_transition_loss' in score.keys() and 'local_reward_loss' in score.keys()):
+                    if score['local_transition_loss'] < local_transition_loss:
+                        self.save(save_directory, model_name, score)
+                    elif np.abs(score['local_transition_loss'] - local_transition_loss) < epsilon and (
+                            score['local_reward_loss'] < local_reward_loss):
+                        self.save(save_directory, model_name, score)
+            else:
+                self.save(save_directory, model_name, score)
+
+
+def load(model_path: str):
+    with open(os.path.join(model_path, 'model_infos.json'), 'r') as f:
+        infos = json.load(f)
+
+    params = dict()
+    for key, value in infos.items():
+        try:
+            params[key] = eval(value)
+        except NameError:
+            params[key] = value
+        except SyntaxError:
+            pass
+
+    model = WassersteinMarkovDecisionProcess(**params)
+    checkpoint = tf.train.Checkpoint(model=model)
+    checkpoint.restore(model_path)
+
+    return model
