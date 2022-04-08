@@ -68,7 +68,8 @@ def search(
         lr_upper_bound = {'Adam': 1e-2, 'RMSprop': 1e-3, 'SGD': 1e-1}
         lr_lower_bound = {'Adam': 1e-4, 'RMSprop': 1e-5, 'SGD': 1e-4}
         learning_rate = trial.suggest_float('learning_rate', lr_lower_bound[optimizer], lr_upper_bound[optimizer], log=True)
-        batch_size = trial.suggest_categorical('batch_size', [64, 128, 256, 512])
+        # batch_size = trial.suggest_categorical('batch_size', [64, 128, 256, 512])
+        batch_size = 128
         neurons = trial.suggest_categorical('neurons', [64, 128, 256, 512])
         hidden = trial.suggest_int('hidden', 1, 3)
         activation = trial.suggest_categorical('activation', ['relu', 'leaky_relu', 'softplus', 'gelu', 'smooth_elu'])
@@ -76,13 +77,11 @@ def search(
             entropy_regularizer_scale_factor = trial.suggest_float(
                 'entropy_regularizer_scale_factor', 1e-5,
                 fixed_parameters['entropy_regularizer_scale_factor'], log=True)
-            action_entropy_regularizer_scaling = trial.suggest_float(
-                'action_entropy_regularizer_scaling',
-                1e-5, fixed_parameters['action_entropy_regularizer_scaling'], log=True)
         else:
             entropy_regularizer_scale_factor = 0.
-            action_entropy_regularizer_scaling = 0.
-        deterministic_state_embedding = trial.suggest_categorical('deterministic_state_embedding', [True, False])
+        action_entropy_regularizer_scaling = trial.suggest_float(
+            'action_entropy_regularizer_scaling',
+            1e-5, fixed_parameters['action_entropy_regularizer_scaling'], log=True)
 
         # temperatures
         if fixed_parameters['state_encoder_temperature'] < 0:
@@ -131,11 +130,19 @@ def search(
                 trainable_prior = trial.suggest_categorical('trainable_prior', [True, False])
             else:
                 trainable_prior = False
+            
+            if fixed_parameters['freeze_state_encoder_type']:
+                state_encoder_type = fixed_parameters['state_encoder_type']
+            else:
+                state_encoder_type = trial.suggest_categorical(
+                    'state_encoder_type', ['autoregressive', 'lstm', 'independent', 'deterministic'])
 
-            state_encoder_type = trial.suggest_categorical(
-                'state_encoder_type', ['autoregressive', 'lstm', 'independent', 'deterministic'])
+            if state_encoder_type != 'deterministic':
+                deterministic_state_embedding = trial.suggest_categorical('deterministic_state_embedding', [True, False])
+            else:
+                deterministic_state_embedding = True
+
             entropy_regularizer_decay_rate = 0.
-
         else:
             entropy_regularizer_decay_rate = trial.suggest_float('entropy_regularizer_decay_rate', 1e-6, 1e-4, log=True)
             label_transition_function = trial.suggest_categorical('label_transition_function', [True, False])
@@ -152,7 +159,7 @@ def search(
             discrete_action_space=not fixed_parameters['action_discretizer'],
             time_stacked_states=time_stacked_states)
         latent_state_size = trial.suggest_int(
-            'latent_state_size', specs.label_shape[0] + 2, max(20, specs.label_shape[0] + 8))
+            'latent_state_size', specs.label_shape[0] + 3, max(15, specs.label_shape[0] + 8))
 
         if fixed_parameters['prioritized_experience_replay']:
             prioritized_experience_replay = trial.suggest_categorical('prioritized_experience_replay', [True, False])
@@ -179,8 +186,11 @@ def search(
                 prioritized_experience_replay = False
 
         else:
-            collect_steps_per_iteration = trial.suggest_int(
-                'uniform_replay_buffer_collect_steps_per_iteration', 1, batch_size)
+            if fixed_parameters['collect_steps_per_iteration'] <= 0:
+                collect_steps_per_iteration = batch_size // 8
+            else:
+                collect_steps_per_iteration = trial.suggest_int(
+                    'uniform_replay_buffer_collect_steps_per_iteration', 1, fixed_parameters['collect_steps_per_iteration'])
             # default values
             bucket_based_priorities = False
             priority_exponent = 0.
@@ -412,6 +422,7 @@ def search(
             use_prioritized_replay_buffer=hyperparameters['prioritized_experience_replay'],
             labeling_function=reinforcement_learning.labeling_functions[environment_name],
             policy_evaluation_num_episodes=fixed_parameters['num_eval_episodes'],
+            policy_evaluation_env_name=fixed_parameters['policy_environment'],
             environment_perturbation=fixed_parameters['environment_perturbation'],
             recursive_environment_perturbation=fixed_parameters['recursive_environment_perturbation'],
             enforce_no_reward_shaping=fixed_parameters['no_reward_shaping'])
