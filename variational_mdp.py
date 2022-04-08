@@ -8,6 +8,8 @@ import psutil
 from absl import logging
 import threading
 
+from keras.saving.saved_model import utils
+
 from reinforcement_learning.environments.latent_environment import LatentEmbeddingTFEnvironmentWrapper
 from reinforcement_learning.environments.no_reward_shaping import NoRewardShapingWrapper
 from reinforcement_learning.environments.perturbed_env import PerturbedEnvironment
@@ -24,13 +26,13 @@ import gc
 
 import tensorflow as tf
 import tensorflow_probability as tfp
-from tensorflow.keras import Model
-from tensorflow.keras.layers import Input, Concatenate, Reshape, Dense, Lambda
+from tensorflow.python.keras import Model
+from tensorflow.python.keras.layers import Input, Concatenate, Reshape, Dense, Lambda
 from tensorflow.keras.utils import Progbar
 
 import tf_agents.policies.tf_policy
 import tf_agents.agents.tf_agent
-from tensorflow.python.keras.layers import TimeDistributed, Flatten, LSTM
+from tensorflow.keras.layers import TimeDistributed, Flatten, LSTM
 from tensorflow.python.keras.models import Sequential
 from tf_agents import specs, trajectories
 from tf_agents.policies import tf_policy, py_tf_eager_policy, policy_saver
@@ -83,49 +85,51 @@ class EvaluationCriterion(Enum):
 
 
 class VariationalMarkovDecisionProcess(tf.Module):
-    def __init__(self,
-                 state_shape: Tuple[int, ...],
-                 action_shape: Tuple[int, ...],
-                 reward_shape: Tuple[int, ...],
-                 label_shape: Tuple[int, ...],
-                 encoder_network: Model,
-                 transition_network: Model,
-                 reward_network: Model,
-                 decoder_network: Model,
-                 label_transition_network: Optional[Model] = None,
-                 latent_policy_network: Optional[Model] = None,
-                 state_encoder_pre_processing_network: Optional[Model] = None,
-                 state_decoder_pre_processing_network: Optional[Model] = None,
-                 time_stacked_states: bool = False,
-                 latent_state_size: int = 12,
-                 encoder_temperature: float = 2. / 3,
-                 prior_temperature: float = 1. / 2,
-                 encoder_temperature_decay_rate: float = 0.,
-                 prior_temperature_decay_rate: float = 0.,
-                 entropy_regularizer_scale_factor: float = 0.,
-                 entropy_regularizer_decay_rate: float = 0.,
-                 entropy_regularizer_scale_factor_min_value: float = 0.,
-                 marginal_entropy_regularizer_ratio: float = 0.,
-                 kl_scale_factor: float = 1.,
-                 kl_annealing_growth_rate: float = 0.,
-                 mixture_components: int = 3,
-                 max_decoder_variance: Optional[float] = None,
-                 multivariate_normal_raw_scale_diag_activation: Callable[[tf.Tensor], tf.Tensor] = tf.nn.softplus,
-                 multivariate_normal_full_covariance: bool = False,
-                 pre_loaded_model: bool = False,
-                 reset_state_label: bool = True,
-                 latent_policy_training_phase: bool = False,
-                 full_optimization: bool = True,
-                 optimizer: Optional = None,
-                 evaluation_window_size: int = 5,
-                 evaluation_criterion: EvaluationCriterion = EvaluationCriterion.MAX,
-                 action_label_transition_network: Optional[Model] = None,
-                 action_transition_network: Optional[Model] = None,
-                 importance_sampling_exponent: Optional[float] = 1.,
-                 importance_sampling_exponent_growth_rate: Optional[float] = 0.,
-                 time_stacked_lstm_units: int = 128,
-                 reward_bounds: Optional[Tuple[float, float]] = None,
-                 deterministic_state_embedding: bool = True,
+
+    def __init__(
+            self,
+            state_shape: Tuple[int, ...],
+            action_shape: Tuple[int, ...],
+            reward_shape: Tuple[int, ...],
+            label_shape: Tuple[int, ...],
+            encoder_network: Model,
+            transition_network: Model,
+            reward_network: Model,
+            decoder_network: Model,
+            label_transition_network: Optional[Model] = None,
+            latent_policy_network: Optional[Model] = None,
+            state_encoder_pre_processing_network: Optional[Model] = None,
+            state_decoder_pre_processing_network: Optional[Model] = None,
+            time_stacked_states: bool = False,
+            latent_state_size: int = 12,
+            encoder_temperature: float = 2. / 3,
+            prior_temperature: float = 1. / 2,
+            encoder_temperature_decay_rate: float = 0.,
+            prior_temperature_decay_rate: float = 0.,
+            entropy_regularizer_scale_factor: float = 0.,
+            entropy_regularizer_decay_rate: float = 0.,
+            entropy_regularizer_scale_factor_min_value: float = 0.,
+            marginal_entropy_regularizer_ratio: float = 0.,
+            kl_scale_factor: float = 1.,
+            kl_annealing_growth_rate: float = 0.,
+            mixture_components: int = 3,
+            max_decoder_variance: Optional[float] = None,
+            multivariate_normal_raw_scale_diag_activation: Callable[[tf.Tensor], tf.Tensor] = tf.nn.softplus,
+            multivariate_normal_full_covariance: bool = False,
+            pre_loaded_model: bool = False,
+            reset_state_label: bool = True,
+            latent_policy_training_phase: bool = False,
+            full_optimization: bool = True,
+            optimizer: Optional = None,
+            evaluation_window_size: int = 5,
+            evaluation_criterion: EvaluationCriterion = EvaluationCriterion.MAX,
+            action_label_transition_network: Optional[Model] = None,
+            action_transition_network: Optional[Model] = None,
+            importance_sampling_exponent: Optional[float] = 1.,
+            importance_sampling_exponent_growth_rate: Optional[float] = 0.,
+            time_stacked_lstm_units: int = 128,
+            reward_bounds: Optional[Tuple[float, float]] = None,
+            deterministic_state_embedding: bool = True,
     ):
 
         super(VariationalMarkovDecisionProcess, self).__init__()
@@ -786,6 +790,12 @@ class VariationalMarkovDecisionProcess(tf.Module):
         ]:
             if var_growth_rate > 0:
                 var.assign(initial_var_value + (1. - initial_var_value) * (1. - decay))
+
+    def call(self, inputs, training=None, mask=None, **kwargs):
+        return self.__call__(*inputs, **kwargs)
+
+    def get_config(self):
+        pass
 
     @tf.function
     def __call__(
@@ -1528,13 +1538,13 @@ class VariationalMarkovDecisionProcess(tf.Module):
             )
 
         dataset = dataset_generator(
-                lambda trajectory, buffer_info:
-                map_rl_trajectory_to_vae_input(
-                    trajectory=trajectory,
-                    labeling_function=ergodic_batched_labeling_function(labeling_function),
-                    discrete_action=discrete_action_space,
-                    num_discrete_actions=self.action_shape[0],
-                    sample_info=buffer_info if use_prioritized_replay_buffer else None))
+            lambda trajectory, buffer_info:
+            map_rl_trajectory_to_vae_input(
+                trajectory=trajectory,
+                labeling_function=ergodic_batched_labeling_function(labeling_function),
+                discrete_action=discrete_action_space,
+                num_discrete_actions=self.action_shape[0],
+                sample_info=buffer_info if use_prioritized_replay_buffer else None))
         dataset_iterator = iter(
             dataset.batch(
                 batch_size=batch_size,
@@ -1551,6 +1561,37 @@ class VariationalMarkovDecisionProcess(tf.Module):
             dataset=dataset,
             dataset_iterator=dataset_iterator,
             epsilon_greedy=epsilon_greedy)
+
+    def save(self, save_directory, model_name: str, signatures: Optional[Dict]):
+        if check_numerics:
+            tf.debugging.disable_check_numerics()
+
+        _priority_handler = self.priority_handler
+        _optimizer = self.detach_optimizer()
+        self.priority_handler = None
+
+        (state_shape, label_shape, action_shape, reward_shape) = (
+            tuple(shape) for shape in
+            [self.state_shape, (self.atomic_props_dims, ), self.action_shape, self.reward_shape])
+
+        if signatures is None:
+            signatures = dict()
+        else:
+            signatures['serving_default'] = self.__call__.get_concrete_function(
+                tf.TensorSpec(shape=(None,) + state_shape, dtype=tf.float32, name='state'),
+                tf.TensorSpec(shape=(None,) + label_shape, dtype=tf.float32, name='label'),
+                tf.TensorSpec(shape=(None,) + action_shape, dtype=tf.float32, name='action'),
+                tf.TensorSpec(shape=(None,) + reward_shape, dtype=tf.float32, name='reward'),
+                tf.TensorSpec(shape=(None,) + state_shape, dtype=tf.float32, name='next_state'),
+                tf.TensorSpec(shape=(None,) + label_shape, dtype=tf.float32, name='next_label'), )
+
+        with utils.keras_option_scope(save_traces=False):
+            tf.saved_model.save(self, os.path.join(save_directory, 'models', model_name), signatures=signatures, )
+
+        self.priority_handler = _priority_handler
+        self.attach_optimizer(_optimizer)
+        if check_numerics:
+            tf.debugging.enable_check_numerics()
 
     def train_from_policy(
             self,
@@ -1746,33 +1787,6 @@ class VariationalMarkovDecisionProcess(tf.Module):
         max_inference_update_steps = int(1e2)
         inference_update_steps = 0
 
-        # save model procedure
-        def save(model_name: str):
-            if check_numerics:
-                tf.debugging.disable_check_numerics()
-
-            _priority_handler = self.priority_handler
-            _optimizer = self.detach_optimizer()
-            self.priority_handler = None
-
-            state, label, action, reward, next_state, next_label = next(dataset_iterator)[:6]
-            call = self.__call__.get_concrete_function(
-                tf.TensorSpec(shape=(None,) + tuple(tf.shape(state)[1:]), dtype=tf.float32, name='state'),
-                tf.TensorSpec(shape=(None,) + tuple(tf.shape(label)[1:]), dtype=tf.float32, name='label'),
-                tf.TensorSpec(shape=(None,) + tuple(tf.shape(action)[1:]), dtype=tf.float32, name='action'),
-                tf.TensorSpec(shape=(None,) + tuple(tf.shape(reward)[1:]), dtype=tf.float32, name='reward'),
-                tf.TensorSpec(shape=(None,) + tuple(tf.shape(next_state)[1:]), dtype=tf.float32, name='next_state'),
-                tf.TensorSpec(shape=(None,) + tuple(tf.shape(next_label)[1:]), dtype=tf.float32, name='next_label'), )
-            try:
-                tf.saved_model.save(self, os.path.join(save_directory, 'models', model_name), signatures=call, )
-            except Exception as e:
-                print("The following exception occured while attempting to save the model:", e)
-
-            self.priority_handler = _priority_handler
-            self.attach_optimizer(_optimizer)
-            if check_numerics:
-                tf.debugging.enable_check_numerics()
-
         # wall_time and memory utils
         save_time = 0.
         training_loop_time = 0.
@@ -1790,8 +1804,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             if tf.logical_and(tf.equal(global_step, 100), save_directory is not None):
                 _time = time.time()
                 print("Saving base model")
-                # save(os.path.join(log_name, 'base'))
-                # tf.saved_model.save(self, os.path.join(save_directory, 'models', log_name, 'base'))
+                self.save(save_directory, os.path.join(log_name, 'base'))
                 save_time = time.time() - _time
                 save_time += 10.  # epsilon
 
@@ -1861,10 +1874,10 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
         # save the final model
         if save_directory is not None:
-            save(os.path.join(log_name, 'step{:d}'.format(global_step.numpy())))
+            self.save(save_directory, os.path.join(log_name, 'step{:d}'.format(global_step.numpy())))
         if close_at_the_end:
             close()
-        
+
         return {'score': tf.reduce_mean(self.evaluation_window[self.evaluation_window > - np.inf]),
                 'continue': not (wall_time_exceeded or close_at_the_end or memory_limit_exceeded)}
 
@@ -1945,7 +1958,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             checkpoint_model: bool,
             save_directory: str,
             model_name: str,
-            training_step: int
+            training_step: int,
     ):
         """
         Stores the input score into the model evaluation window according to its evaluation criterion.
@@ -2148,7 +2161,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             action_embedding_fn=self.action_embedding_function,
             labeling_fn=labeling_function,
             latent_state_size=self.latent_state_size,
-            number_of_discrete_actions=self.number_of_discrete_actions,)
+            number_of_discrete_actions=self.number_of_discrete_actions, )
 
     def get_latent_policy(
             self,

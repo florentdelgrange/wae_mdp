@@ -15,6 +15,7 @@ from tensorflow.keras.layers import Dense
 from tensorflow.keras import Sequential
 import tensorflow_probability as tfp
 import tensorflow_probability.python.bijectors as tfb
+from tensorflow.python.util.deprecation import deprecated
 from tf_agents import specs
 from tf_agents.environments import tf_py_environment
 from tf_agents.environments.wrappers import HistoryWrapper
@@ -31,24 +32,17 @@ import wasserstein_mdp
 import reinforcement_learning.environments
 from layers.encoders import EncodingType
 from reinforcement_learning.environments.perturbed_env import PerturbedEnvironment
+from util.nn import get_activation_fn, ModelArchitecture
 
 FLAGS = flags.FLAGS
 default_flags = FLAGS.flag_values_dict()
 
 
+@deprecated(
+    date='2022-04-08',
+    instructions="better use util.nn.generate_sequential_model with util.nn.ModelArchitecture")
 def generate_network_components(params, name='', wasserstein_networks=False):
-    if hasattr(tf.nn, params["activation"]):
-        activation = getattr(tf.nn, params["activation"])
-    elif hasattr(tfb, params["activation"]):
-        activation = getattr(tfb, params["activation"])()
-    else:
-        other_activations = {
-            'smooth_elu': lambda x: tf.nn.softplus(2. * x + 2.) / 2. - 1.,
-            'SmoothELU': tfb.Chain([tfb.Shift(-1.), tfb.Scale(.5), tfb.Softplus(), tfb.Shift(2.), tfb.Scale(2.)])
-        }
-        activation = other_activations.get(
-            params["activation"],
-            ValueError("activation {} unknown".format(params["activation"])))
+    activation = get_activation_fn(params['activation'])
 
     component_names = ['encoder', 'transition', 'label_transition', 'reward', 'decoder', 'discrete_policy',
                        'state_encoder_pre_processing', 'state_decoder_pre_processing']
@@ -76,6 +70,26 @@ def generate_network_components(params, name='', wasserstein_networks=False):
 
     return namedtuple("{}AEArchitecture".format('V' if not wasserstein_networks else 'W'),
                       component_names)(*network_components)
+
+
+def get_architecture(params, param_name, network_name=None):
+    if network_name is None:
+        network_name = param_name
+    return ModelArchitecture(
+        hidden_units=params[param_name + '_layers'],
+        activation=params['activation'],
+        name=network_name + '_network_base')
+
+
+def update_layer_params(params):
+    component_names = ['encoder', 'transition', 'label_transition', 'reward', 'decoder', 'discrete_policy',
+                       'state_encoder_pre_processing', 'state_decoder_pre_processing']
+    wasserstein_component_names = ['steady_state', 'local_transition_loss']
+    if params['wae']:
+        component_names += wasserstein_component_names
+    for component_name in component_names:
+        if params["global_network_layers"] is not None:
+            params[component_name + "_layers"] = params["global_network_layers"]
 
 
 def generate_vae_name(params):
@@ -235,7 +249,7 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
         wae_name += '_max_state_decoder_variance={:g}'.format(params['max_state_decoder_variance'])
     if params['epsilon_greedy'] > 0:
         wae_name += '_epsilon_greedy={:.2g}-decay={:.2g}'.format(params['epsilon_greedy'],
-                                                             params['epsilon_greedy_decay_rate'])
+                                                                 params['epsilon_greedy_decay_rate'])
     if params['marginal_entropy_regularizer_ratio'] > 0:
         wae_name += '_marginal_state_entropy_ratio={:.2g}'.format(params['marginal_entropy_regularizer_ratio'])
     if params['time_stacked_states'] > 1:
@@ -315,8 +329,8 @@ def get_environment_specs(
         state_shape, action_shape, reward_shape, label_shape, time_step_spec, action_spec)
 
 
-def initialize_summary_writer(params, environment_name, vae_name, dump_params_into_json=True, step=0, vae_mdp_model=None):
-
+def initialize_summary_writer(params, environment_name, vae_name, dump_params_into_json=True, step=0,
+                              vae_mdp_model=None):
     train_log_dir = os.path.join(params['logdir'], environment_name, vae_name)
     print('log path:', train_log_dir)
     if not os.path.exists(train_log_dir):
@@ -346,7 +360,7 @@ def initialize_summary_writer(params, environment_name, vae_name, dump_params_in
                     for attr in filter(lambda _attr: len(_attr) < 2 or _attr[:2] != '__', dir(vae_mdp_model))
                 ])
             ]),
-            step=step)
+                            step=step)
         try:
             import git
 
@@ -356,6 +370,7 @@ def initialize_summary_writer(params, environment_name, vae_name, dump_params_in
             print(exc)
 
     return train_summary_writer
+
 
 def main(argv):
     del argv
@@ -370,9 +385,9 @@ def main(argv):
 
     if params['hyperparameter_search']:
         hyperparameter_search.search(
-                fixed_parameters=params,
-                num_steps=params['max_steps'],
-                study_name='study_seed={}'.format(params['seed']),
+            fixed_parameters=params,
+            num_steps=params['max_steps'],
+            study_name='study_seed={}'.format(params['seed']),
             n_trials=params['hyperparameter_search_trials'],
             wall_time=None if params['wall_time'] == '.' else params['wall_time'])
         return 0
@@ -426,6 +441,7 @@ def main(argv):
     latent_state_size = params['latent_size']  # depends on the number of bits reserved for labels
 
     vae_name = generate_vae_name(params)
+    update_layer_params(params)
 
     if params['reward_lower_bound'] is None or params['reward_upper_bound'] is None:
         reward_bounds = None
@@ -539,29 +555,29 @@ def main(argv):
             wasserstein_optimizer = getattr(tf.optimizers, params['wasserstein_optimizer'])(
                 learning_rate=params['wasserstein_learning_rate'])
         optimizer = [autoencoder_optimizer, wasserstein_optimizer]
-        network = generate_network_components(params, wasserstein_networks=True)
-        action_network = generate_network_components(params, name='action')
+
         wae_mdp = wasserstein_mdp.WassersteinMarkovDecisionProcess(
             state_shape=state_shape,
             action_shape=action_shape,
             reward_shape=reward_shape,
             label_shape=label_shape,
             discretize_action_space=params['action_discretizer'],
-            state_encoder_network=network.encoder,
-            action_encoder_network=action_network.encoder if not params['policy_based_decoding'] else None,
+            state_encoder_network=get_architecture(params, 'encoder', 'state_encoder'),
+            action_encoder_network=get_architecture(params, 'encoder', 'action_encoder') \
+                if not params['policy_based_decoding'] else None,
             policy_based_decoding=params['policy_based_decoding'],
-            action_decoder_network=action_network.decoder,
-            transition_network=network.transition,
-            reward_network=network.reward,
-            decoder_network=network.decoder,
-            latent_policy_network=network.discrete_policy,
-            steady_state_lipschitz_network=network.steady_state,
-            transition_loss_lipschitz_network=network.local_transition_loss,
+            action_decoder_network=get_architecture(params, 'decoder', 'action_decoder'),
+            transition_network=get_architecture(params, 'transition'),
+            reward_network=get_architecture(params, 'reward'),
+            decoder_network=get_architecture(params, 'decoder', 'state_decoder'),
+            latent_policy_network=get_architecture(params, 'discrete_policy'),
+            steady_state_lipschitz_network=get_architecture(params, 'steady_state'),
+            transition_loss_lipschitz_network=get_architecture(params, 'local_transition_loss', 'transition_loss'),
             latent_state_size=latent_state_size,
             number_of_discrete_actions=params['number_of_discrete_actions'],
-            state_encoder_pre_processing_network=(network.state_encoder_pre_processing
+            state_encoder_pre_processing_network=(get_architecture(params, 'state_encoder_pre_processing')
                                                   if params['state_encoder_pre_processing_network'] else None),
-            state_decoder_pre_processing_network=(network.state_decoder_pre_processing
+            state_decoder_pre_processing_network=(get_architecture(params, 'state_decoder_pre_processing')
                                                   if params['state_decoder_pre_processing_network'] else None),
             time_stacked_states=params['time_stacked_states'] > 1,
             state_encoder_temperature=state_encoder_temperature,
@@ -614,7 +630,7 @@ def main(argv):
             train_summary_writer = initialize_summary_writer(params, environment_name, vae_name, step=step)
         else:
             train_summary_writer = None
-        
+
         vae_mdp_model.train_from_policy(
             policy=policy,
             environment_suite=environment_suite,
@@ -622,6 +638,7 @@ def main(argv):
             env_name=environment_name,
             labeling_function=reinforcement_learning.labeling_functions[environment_name],
             log_interval=params['log_interval'],
+            log_name=os.path.join(params['logdir'], environment_name, vae_name),
             epsilon_greedy=params['epsilon_greedy'] if phase == 0 else 0.,
             epsilon_greedy_decay_rate=params['epsilon_greedy_decay_rate'],
             batch_size=batch_size, optimizer=optimizer, checkpoint=checkpoint,

@@ -10,7 +10,6 @@ from tf_agents.typing.types import Float
 
 from layers.autoregressive_bernoulli import AutoRegressiveBernoulliNetwork
 from layers.base_models import DiscreteDistributionModel
-from util.io import scan_model
 
 
 class EncodingType(enum.Enum):
@@ -25,7 +24,8 @@ class StateEncoderNetwork(DiscreteDistributionModel):
     def __init__(
             self,
             state: tfkl.Input,
-            state_encoder_network: tfk.Model,
+            hidden_units: Tuple[int, ...],
+            activation: Callable[[tf.Tensor], tf.Tensor],
             latent_state_size: int,
             atomic_props_dims: int,
             time_stacked_states: bool = False,
@@ -35,7 +35,6 @@ class StateEncoderNetwork(DiscreteDistributionModel):
             lstm_output: bool = False,
             deterministic_reset: bool = True,
     ):
-        hidden_units, activation = scan_model(state_encoder_network)
         n_logits = (latent_state_size - atomic_props_dims)
         state_encoder_network = tfk.Sequential(name="state_encoder_body")
         self.deterministic_reset = deterministic_reset
@@ -158,7 +157,8 @@ class DeterministicStateEncoderNetwork(StateEncoderNetwork):
     def __init__(
             self,
             state: tfkl.Input,
-            state_encoder_network: tfk.Model,
+            hidden_units: Tuple[int, ...],
+            activation: Callable[[tf.Tensor], tf.Tensor],
             latent_state_size: int,
             atomic_props_dims: int,
             time_stacked_states: bool = False,
@@ -167,7 +167,8 @@ class DeterministicStateEncoderNetwork(StateEncoderNetwork):
     ):
         super().__init__(
             state=state,
-            state_encoder_network=state_encoder_network,
+            activation=activation,
+            hidden_units=hidden_units,
             latent_state_size=latent_state_size,
             atomic_props_dims=atomic_props_dims,
             time_stacked_states=time_stacked_states,
