@@ -1198,6 +1198,11 @@ if __name__ == '__main__':
         'State encoder type, defining which technique to use to encode states.'
     )
     flags.DEFINE_bool(
+        'freeze_state_encoder_type',
+        default=False,
+        help="Whether to perform a hyperparameter search on the state encoder type or not (if the hyperparameter search flag is set)."
+    )
+    flags.DEFINE_bool(
         'deterministic_state_embedding',
         default=True,
         help='Whether to use the mode of the probabilistic encoder to deploy the policy in the original environment or'
