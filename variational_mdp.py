@@ -193,7 +193,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
         # the evaluation window contains eiter the N max evaluation scores encountered during training if the evaluation
         # criterion is MAX, or the N last evaluation scores encountered if the evaluation criterion is MEAN.
         self.evaluation_criterion = evaluation_criterion
-        self.evaluation_window = tf.Variable(
+        self._evaluation_window = tf.Variable(
             initial_value=-1. * np.inf * tf.ones(shape=(evaluation_window_size,)),
             trainable=False,
             name='evaluation_window')
@@ -1037,6 +1037,10 @@ class VariationalMarkovDecisionProcess(tf.Module):
         return {'mean_state_bits_used': mean_bits_used}
 
     @property
+    def evaluation_window(self):
+        return self._evaluation_window
+
+    @property
     def _has_dedicated_label_transition_network(self):
         return len(self.transition_network.outputs) == 1
 
@@ -1572,7 +1576,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
         (state_shape, label_shape, action_shape, reward_shape) = (
             tuple(shape) for shape in
-            [self.state_shape, (self.atomic_props_dims, ), self.action_shape, self.reward_shape])
+            [self.state_shape, (self.atomic_props_dims,), self.action_shape, self.reward_shape])
 
         if signatures is None:
             signatures = dict()
@@ -1804,7 +1808,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             if tf.logical_and(tf.equal(global_step, 100), save_directory is not None):
                 _time = time.time()
                 print("Saving base model")
-                self.save(save_directory, os.path.join(log_name, 'base'))
+                self.save(save_directory, log_name)
                 save_time = time.time() - _time
                 save_time += 10.  # epsilon
 

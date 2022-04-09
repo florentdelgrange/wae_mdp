@@ -612,7 +612,7 @@ def main(argv):
 
     for phase, vae_mdp_model in enumerate(models):
         checkpoint_directory = os.path.join(
-            params['save_dir'], 'saves', environment_name, 'training_checkpoints', vae_name)
+            params['save_dir'], 'saves', environment_name, vae_name, 'training_checkpoints')
         if params['checkpoint']:
             print("checkpoint path:", checkpoint_directory)
             checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=vae_mdp_model, step=step)
@@ -638,7 +638,7 @@ def main(argv):
             env_name=environment_name,
             labeling_function=reinforcement_learning.labeling_functions[environment_name],
             log_interval=params['log_interval'],
-            log_name=os.path.join(params['logdir'], environment_name, vae_name),
+            log_name=vae_name,
             epsilon_greedy=params['epsilon_greedy'] if phase == 0 else 0.,
             epsilon_greedy_decay_rate=params['epsilon_greedy_decay_rate'],
             batch_size=batch_size, optimizer=optimizer, checkpoint=checkpoint,

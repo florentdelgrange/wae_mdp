@@ -117,8 +117,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             entropy_regularizer_scale_factor: float = 0.,
             entropy_regularizer_decay_rate: float = 0.,
             entropy_regularizer_scale_factor_min_value: float = 0.,
-            evaluation_window_size: int = 1,
-            evaluation_criterion: EvaluationCriterion = EvaluationCriterion.MAX,
             importance_sampling_exponent: Optional[Float] = 1.,
             importance_sampling_exponent_growth_rate: Optional[Float] = 0.,
             time_stacked_lstm_units: int = 128,
@@ -143,8 +141,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             prior_temperature_decay_rate=prior_temperature_decay_rate,
             pre_loaded_model=True, optimizer=None,
             reset_state_label=reset_state_label,
-            evaluation_window_size=evaluation_window_size,
-            evaluation_criterion=evaluation_criterion,
+            evaluation_window_size=0,
+            evaluation_criterion=EvaluationCriterion.MEAN,
             importance_sampling_exponent=importance_sampling_exponent,
             importance_sampling_exponent_growth_rate=importance_sampling_exponent_growth_rate,
             time_stacked_lstm_units=time_stacked_lstm_units,
@@ -375,6 +373,12 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 't_1_action': self.action_encoder_temperature,
                 't_2_action': self.latent_policy_temperature,
             })
+
+        self._score = Mean("wae_score")
+
+    @property
+    def evaluation_window(self):
+        return tf.expand_dims(self._score.result(), 0)
 
     def anneal(self):
         super().anneal()
@@ -1457,7 +1461,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         if eval_steps > 0:
             print('eval loss: ', metrics['eval_loss'].result().numpy())
 
-        if eval_policy_driver is not None or eval_steps > 0:
+        if eval_policy_driver is not None:
             self.assign_score(
                 score=score,
                 checkpoint_model=save_directory is not None and log_name is not None,
@@ -1480,22 +1484,20 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         if not os.path.exists(save_path):
             os.makedirs(save_path)
 
-        # save base model architecture
-        tf.saved_model.save(self._base_architecture, save_path)
-
         # save model variables through checkpointing
         optimizer = self.detach_optimizer()
         priority_handler = self.priority_handler
         self.priority_handler = None
         checkpoint = tf.train.Checkpoint(model=self)
-        checkpoint.save(os.path.join(os.path.join('ckpt')))
+        checkpoint.save(os.path.join(save_path, 'ckpt'))
         self.attach_optimizer(optimizer)
         self.priority_handler = priority_handler
 
         # dump model infos
         with open(os.path.join(save_path, 'model_infos.json'), 'w') as file:
             json.dump(self._params | infos, file)
-            print('parameters written to:', save_path)
+
+        print('Model saved to:', save_path)
 
     def assign_score(
             self,
@@ -1506,23 +1508,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             training_step: int,
             save_best_only: bool = True,
     ):
-        """
-        Stores the input score into the model evaluation window according to its evaluation criterion.
-        If the evaluation window is modified this way and the checkpoint_model flag is set, then a model checkpoint is
-        stored into the specified save directory.
-        """
-        if (self.evaluation_criterion is EvaluationCriterion.MEAN) \
-                or tf.reduce_any(self.evaluation_window == -1. * np.inf):
-            _score = score['eval_policy']
-            for i in tf.range(tf.shape(self.evaluation_window)[0]):
-                _score_tmp = self.evaluation_window[i]
-                self.evaluation_window[i].assign(_score)
-                _score = _score_tmp
-        elif self.evaluation_criterion is EvaluationCriterion.MAX:
-            for i in tf.range(tf.shape(self.evaluation_window)[0]):
-                if self.evaluation_window[i] <= score['eval_policy']:
-                    self.evaluation_window[i].assign(score['eval_policy'])
-                    break
+        self._score(score['eval_policy'])
 
         if checkpoint_model:
             import os
@@ -1561,6 +1547,6 @@ def load(model_path: str):
 
     model = WassersteinMarkovDecisionProcess(**params)
     checkpoint = tf.train.Checkpoint(model=model)
-    checkpoint.restore(model_path)
+    checkpoint.restore(os.path.join(model_path, 'ckpt-1'))
 
     return model

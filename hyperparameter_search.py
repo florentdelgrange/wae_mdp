@@ -327,7 +327,6 @@ def search(
                 prior_temperature_decay_rate=0.,
                 importance_sampling_exponent=hyperparameters['importance_sampling_exponent'],
                 importance_sampling_exponent_growth_rate=hyperparameters['importance_sampling_exponent_growth_rate'],
-                evaluation_window_size=evaluation_window_size,
                 entropy_regularizer_scale_factor=hyperparameters['entropy_regularizer_scale_factor'],
                 entropy_regularizer_decay_rate=hyperparameters['entropy_regularizer_decay_rate'],
                 entropy_regularizer_scale_factor_min_value=0.,
@@ -346,6 +345,7 @@ def search(
                 deterministic_state_embedding=hyperparameters['deterministic_state_embedding'])
         else:
             vae_name = generate_vae_name(_params)
+            network = generate_network_components(hyperparameters, 'state')
             vae_mdp = variational_mdp.VariationalMarkovDecisionProcess(
                 state_shape=specs.state_shape, action_shape=specs.action_shape,
                 reward_shape=specs.reward_shape, label_shape=specs.label_shape,
