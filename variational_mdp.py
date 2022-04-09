@@ -1566,7 +1566,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             dataset_iterator=dataset_iterator,
             epsilon_greedy=epsilon_greedy)
 
-    def save(self, save_directory, model_name: str, signatures: Optional[Dict]):
+    def save(self, save_directory, model_name: str, signatures: Optional[Dict] = None, *args, **kwargs):
         if check_numerics:
             tf.debugging.disable_check_numerics()
 
@@ -1876,13 +1876,18 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 if tf.reduce_any(tf.logical_or(tf.math.is_nan(value), tf.math.is_inf(value))):
                     logging.warning("{} is NaN or Inf: {}".format(key, value))
 
+        score = tf.reduce_mean(self.evaluation_window[self.evaluation_window > - np.inf])
+
         # save the final model
         if save_directory is not None:
-            self.save(save_directory, os.path.join(log_name, 'step{:d}'.format(global_step.numpy())))
+            self.save(
+                save_directory,
+                os.path.join(log_name, 'step{:d}'.format(global_step.numpy())),
+                infos={'step': global_step.numpy(), 'score': score})
         if close_at_the_end:
             close()
 
-        return {'score': tf.reduce_mean(self.evaluation_window[self.evaluation_window > - np.inf]),
+        return {'score': score,
                 'continue': not (wall_time_exceeded or close_at_the_end or memory_limit_exceeded)}
 
     def training_step(

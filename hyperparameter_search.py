@@ -516,7 +516,10 @@ def search(
                 result['continue'] = result['continue'] and sanity_check(score)
 
                 # Report intermediate objective value.
-                trial.report(score, step=step + training_steps_per_iteration)
+                if hasattr(vae_mdp, '_last_score') and vae_mdp._last_score is not None:
+                    trial.report(vae_mdp._last_score, step=step + training_steps_per_iteration)
+                else:
+                    trial.report(score, step=step + training_steps_per_iteration)
 
                 # Handle pruning based on the intermediate value.
                 if fixed_parameters['prune_trials'] and trial.should_prune():

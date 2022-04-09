@@ -375,6 +375,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             })
 
         self._score = Mean("wae_score")
+        self._last_score = None
 
     @property
     def evaluation_window(self):
@@ -1474,7 +1475,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         return metrics['eval_loss'].result()
 
-    def save(self, save_directory, model_name: str, infos: Optional[Dict] = None):
+    def save(self, save_directory, model_name: str, infos: Optional[Dict] = None, *args, **kwargs):
         import os
         import json
 
@@ -1514,6 +1515,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     ):
         self._score(score['eval_policy'])
         score['training_step'] = training_step
+        self._last_score = score['eval_policy']
 
         if checkpoint_model:
             import os
