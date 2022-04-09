@@ -1337,7 +1337,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             replay_buffer_max_frames=replay_buffer_max_frames,
             reward_scaling=reward_scaling,
             atomic_prop_dims=self.atomic_props_dims,
-            estimate_value_difference=True)
+            estimate_value_difference=False)
 
     def eval_and_save(
             self,
@@ -1413,7 +1413,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             score['eval_policy'] = self.eval_policy(
                 eval_policy_driver=eval_policy_driver,
                 train_summary_writer=train_summary_writer,
-                global_step=global_step)
+                global_step=global_step
+            ).numpy()
 
         if local_losses_estimator is not None:
             local_losses_metrics = local_losses_estimator()
@@ -1446,13 +1447,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             tf.print('Local transition loss: {:.2f}'.format(local_losses_metrics.local_transition_loss))
             tf.print('Local transition loss (empirical transition function): {:.2f}'
                      ''.format(local_losses_metrics.local_transition_loss_transition_function_estimation))
-            score['local_reward_loss'] = local_losses_metrics.local_reward_loss
-            score['local_transition_loss'] = local_losses_metrics.local_transition_loss
+            score['local_reward_loss'] = local_losses_metrics.local_reward_loss.numpy()
+            score['local_transition_loss'] = local_losses_metrics.local_transition_loss.numpy()
             if local_losses_metrics.local_transition_loss_transition_function_estimation is not None and \
                     local_losses_metrics.local_transition_loss_transition_function_estimation \
                     < local_losses_metrics.local_transition_loss:
                 score['local_transition_loss'] = \
-                    local_losses_metrics.local_transition_loss_transition_function_estimation
+                    local_losses_metrics.local_transition_loss_transition_function_estimation.numpy()
 
             for key, value in local_losses_metrics.value_difference.items():
                 tf.print(key, value)
@@ -1479,6 +1480,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         if infos is None:
             infos = dict()
+        else:
+            for key, value in infos.items():
+                infos[key] = str(value)
 
         save_path = os.path.join(save_directory, model_name)
         if not os.path.exists(save_path):
@@ -1495,7 +1499,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         # dump model infos
         with open(os.path.join(save_path, 'model_infos.json'), 'w') as file:
-            json.dump(self._params | infos, file)
+            json.dump({**self._params, **infos}, file)
 
         print('Model saved to:', save_path)
 
@@ -1509,16 +1513,19 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             save_best_only: bool = True,
     ):
         self._score(score['eval_policy'])
+        score['training_step'] = training_step
 
         if checkpoint_model:
             import os
-            if save_best_only and os.path.exists(os.path.join(save_directory, model_name)):
-                with open(os.path.join(save_directory, model_name, 'model_infos.json')) as f:
+            if save_best_only and os.path.exists(os.path.join(save_directory, model_name, 'model_infos.json')):
+                with open(os.path.join(save_directory, model_name, 'model_infos.json'), 'r') as f:
                     infos = json.load(f)
-                eval_policy = float(infos.get('eval_policy', None))
-                local_transition_loss = float(infos.get('local_transition_loss', None))
-                local_reward_loss = float(infos.get('local_reward_loss', None))
-                if eval_policy is not None and score['eval_policy'] > eval_policy:
+                eval_policy = float(infos['eval_policy']) if 'eval_policy' in infos.keys() else None
+                local_transition_loss = float(infos.get('local_transition_loss', None)) \
+                    if 'local_transition_loss' in infos.keys() else None
+                local_reward_loss = float(infos.get('local_reward_loss', None)) \
+                    if 'local_reward_loss' in infos.keys() else None
+                if eval_policy is None or score['eval_policy'] > eval_policy:
                     self.save(save_directory, model_name, score)
                 elif np.abs(eval_policy - score['eval_policy']) < epsilon and (
                         local_transition_loss is not None and local_reward_loss is not None and
