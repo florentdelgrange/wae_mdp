@@ -242,7 +242,7 @@ def estimate_local_losses_from_samples(
                     lambda _state: tfd.Independent(
                             tfd.Deterministic(loc=state_embedding_function(
                             _state, ergodic_batched_labeling_function(labeling_function)(_state))),
-                        reinterpreted_batch_ndims=1)))
+                        reinterpreted_batch_ndims=1)),)
             value_diff["value_diff_" + name] = tf.abs(
                 observers[-1].result() - values)
             time_metrics['value_diff_' + name] = time.time() - time_metrics['value_diff_' + name]
@@ -374,7 +374,7 @@ def estimate_local_transition_loss(
 @tf.function
 def reset_transition_probs(
         original_reset_state: Float,
-        latent_reset_states: tf.Tensor,
+        latent_reset_state: tf.Tensor,
         next_latent_states: tf.Tensor,
         latent_action_space: tf.Tensor,
         latent_transition_fn: Callable[[tf.Tensor, tf.Tensor], tfd.Distribution],
@@ -395,7 +395,7 @@ def reset_transition_probs(
                        over latent actions
 
     Returns: the probability of transitioning from a latent reset state, sampled from the stochastic embedding of the
-             original reset state, to the input next latent state.
+             original reset state, to the input next latent states.
     """
     num_actions = tf.shape(latent_action_space)[-1]
 
@@ -409,7 +409,7 @@ def reset_transition_probs(
                 latent_action_space,
             ).prob(
                 latent_reset_states,
-                full_latent_state_sapce=True),
+                full_latent_state_space=True),
             axis=0)
 
     return stochastic_state_embedding(
@@ -432,6 +432,7 @@ def compute_values(
         epsilon: Float,
         gamma: Float,
         stochastic_state_embedding: Callable[[tf.Tensor], tfd.Distribution],
+        v_init: Optional[Float] = None,
 ):
     latent_state_space = binary_latent_space(latent_state_size)
     latent_transition_fn = lambda state, action: TransitionFnDecorator(
@@ -441,6 +442,7 @@ def compute_values(
     p_init = stochastic_state_embedding(
         tf.tile(tf.zeros_like(state[:1, ...]), [tf.shape(latent_state_space)[0], 1])
     ).prob(latent_state_space)
+    is_reset_state_test_fn=lambda latent_state: is_reset_state(latent_state, atomic_prop_dims)
 
     values = value_iteration(
         latent_state_size=latent_state_size,
@@ -450,11 +452,46 @@ def compute_values(
         gamma=gamma,
         policy=PolicyDecorator(latent_policy),
         epsilon=epsilon,
-        is_reset_state_test_fn=lambda latent_state: is_reset_state(latent_state, atomic_prop_dims),
-        episodic_return=True,
-        debug=False)
+        is_reset_state_test_fn=is_reset_state_test_fn,
+        episodic_return=tf.equal(tf.reduce_max(p_init), 1.),
+        error_type='absolute',
+        v_init=v_init)
+    
+    if tf.equal(tf.reduce_max(p_init), 1.):
+        # deterministic reset
+        reset_state = stochastic_state_embedding(
+            tf.tile(tf.zeros_like(state[:1, ...]), [tf.shape(latent_state_space)[0], 1])
+        ).sample()
+        reset_state = tf.cast(reset_state, tf.float32)
 
-    return tf.reduce_sum(p_init * values, axis=0)
+        latent_action_space = tf.one_hot(
+            indices=tf.range(number_of_discrete_actions),
+            depth=tf.cast(number_of_discrete_actions, tf.int32),
+            dtype=tf.float32)
+        
+        p_init = tf.reduce_sum(
+            tf.transpose(
+                PolicyDecorator(latent_policy)(
+                    reset_state
+                ).probs_parameter()
+            ) * tf.map_fn(
+                fn=lambda latent_action: latent_transition_fn(
+                    reset_state,
+                    tf.tile(tf.expand_dims(latent_action, 0), [tf.shape(latent_state_space)[0], 1]),
+                ).prob(
+                    tf.cast(latent_state_space, tf.float32),
+                    full_latent_state_space=True),
+                elems=latent_action_space),
+            axis=0) * (1. - tf.cast(is_reset_state_test_fn(latent_state_space), tf.float32))
+        tf.print("p_init\n", p_init, summarize=-1)
+        
+        return tf.reduce_sum(
+            p_init * values
+        ) / tf.reduce_sum(p_init)
+        
+    else:
+        return tf.reduce_sum(p_init * values, axis=0)
+
 
 
 class TransitionFnDecorator:
