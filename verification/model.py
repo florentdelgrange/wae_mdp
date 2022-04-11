@@ -102,7 +102,7 @@ class TransitionFunction:
                 next_label, next_latent_state_no_label = value
             else:
                 next_label = None
-                next_latent_state_no_label, _ = value
+                next_latent_state_no_label = value[0]
             full_latent_state_space = kwargs.get('full_latent_state_space', False)
             if full_latent_state_space:
                 if self.split_label_from_latent_space:
@@ -177,9 +177,8 @@ class TransitionFunctionCopy(TransitionFunction):
             indices = tf.where(tf.math.not_equal(probs, tf.zeros_like(probs)))
             values = tf.gather_nd(probs, indices)
             # base 10
-            _latent_state = tf.cast(
-                tf.reduce_sum(latent_state * 2 ** tf.range(latent_state_size), axis=-1),
-                dtype=tf.int64)
+            _latent_state = tf.reduce_sum(tf.cast(latent_state, tf.float32) * 2. ** tf.range(latent_state_size, dtype=tf.float32), axis=-1)
+            _latent_state = tf.cast(_latent_state, tf.int64)
             _latent_action = tf.argmax(latent_action)
             return tf.concat([
                 _latent_state * tf.ones_like(indices, dtype=tf.int64),
@@ -191,7 +190,10 @@ class TransitionFunctionCopy(TransitionFunction):
             indices = tf.zeros([0, 3], dtype=tf.int64)
             values = tf.zeros([0], dtype=tf.float32)
             for latent_state in latent_state_space:
-                for latent_action in tf.one_hot(tf.range(num_actions), depth=num_actions):
+                tf.autograph.experimental.set_loop_options(
+                    shape_invariants=[(indices, tf.TensorShape([None, 3])),
+                                        (values, tf.TensorShape([None]))])
+                for latent_action in tf.one_hot(tf.range(num_actions), depth=tf.cast(num_actions, dtype=tf.int32)):
                     _indices, _values = get_sparse_entry(latent_state, latent_action)
                     indices = tf.concat([indices, _indices], axis=0)
                     values = tf.concat([values, _values], axis=0)
@@ -264,7 +266,10 @@ class RewardFunctionCopy(TransitionFunction):
             indices = tf.zeros([0, 3], dtype=tf.int64)
             values = tf.zeros([0], dtype=tf.float32)
             for latent_state in latent_state_space:
-                for latent_action in tf.one_hot(tf.range(num_actions), depth=num_actions):
+                tf.autograph.experimental.set_loop_options(
+                    shape_invariants=[(indices, tf.TensorShape([None, 3])),
+                                        (values, tf.TensorShape([None]))])
+                for latent_action in tf.one_hot(tf.range(num_actions), depth=tf.cast(num_actions, tf.int32)):
                     _indices, _values = get_sparse_entry(latent_state, latent_action)
                     indices = tf.concat([indices, _indices], axis=0)
                     values = tf.concat([values, _values], axis=0)
