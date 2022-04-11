@@ -18,7 +18,7 @@ from util.io.dataset_generator import map_rl_trajectory_to_vae_input, \
     ergodic_batched_labeling_function, is_reset_state
 from reinforcement_learning.environments.latent_environment import LatentEmbeddingTFEnvironmentWrapper
 from verification import binary_latent_space
-from verification.transition_function import TransitionFrequencyEstimator
+from verification.model import TransitionFrequencyEstimator, TransitionFunctionCopy, RewardFunctionCopy
 from verification.value_iteration import value_iteration
 
 
@@ -189,14 +189,15 @@ def estimate_local_losses_from_samples(
         empirical_latent_transition_function = TransitionFrequencyEstimator(
             _samples.latent_state, _samples.latent_action, _samples.next_latent_state,
             backup_transition_function=latent_transition_function,
-            assert_distribution=assert_transition_distribution)
+            assert_distribution=assert_transition_distribution,
+            split_label_from_latent_space=True)
 
         time_metrics['transition_function_estimation'] = time.time() - \
                                                          time_metrics['transition_function_estimation']
     else:
         empirical_latent_transition_function = None
         _transition_function_estimation_num_frames = 0
-        transition_function_estimation_time = 0
+        time_metrics['transition_function_estimation'] = 0
 
     time_metrics['local_transition_loss'] = time.time()
 
@@ -370,56 +371,6 @@ def estimate_local_transition_loss(
         latent_transition_distribution = latent_transition_function(latent_state, latent_action)
         return tf.reduce_mean(1. - latent_transition_distribution.prob(next_label, next_latent_state_no_label))
 
-
-@tf.function
-def reset_transition_probs(
-        original_reset_state: Float,
-        latent_reset_state: tf.Tensor,
-        next_latent_states: tf.Tensor,
-        latent_action_space: tf.Tensor,
-        latent_transition_fn: Callable[[tf.Tensor, tf.Tensor], tfd.Distribution],
-        stochastic_state_embedding: Callable[[tf.Tensor], tfd.Distribution],
-        latent_policy: Optional[Callable[[tf.Tensor], tfd.OneHotCategorical]] = None,
-) -> Float:
-    """
-    Compute the probability of transitioning from the latent reset state to the input next latent states.
-
-    Args:
-        original_reset_state: reset state from the original environment (usually tf.zeros)
-        latent_reset_states: binary-encoded reset states
-        next_latent_states: binary-encoded next latent states
-        latent_action_space: all one-hot encoded latent actions
-        latent_transition_fn: function mapping latent state-action pairs to a distribution over binary latent states
-        stochastic_state_embedding: function mapping original states to a distribution over latent states
-        latent_policy: latent policy mapping each latent state to a (one-hot categorical) distribution
-                       over latent actions
-
-    Returns: the probability of transitioning from a latent reset state, sampled from the stochastic embedding of the
-             original reset state, to the input next latent states.
-    """
-    num_actions = tf.shape(latent_action_space)[-1]
-
-    def markov_chain_transition_fn(latent_state: Float):
-        tiled_latent_state = tf.tile(tf.expand_dims(latent_state, 0), [num_actions, 1])
-        return tf.reduce_sum(
-            latent_policy(
-                tiled_latent_state
-            ).probs_parameter() * latent_transition_fn(
-                tiled_latent_state,
-                latent_action_space,
-            ).prob(
-                latent_reset_states,
-                full_latent_state_space=True),
-            axis=0)
-
-    return stochastic_state_embedding(
-        original_reset_state
-    ).prob(latent_reset_states) * tf.map_fn(
-        fn=markov_chain_transition_fn,
-        elems=next_latent_states,
-        dtype=tf.float32)
-
-
 @tf.function
 def compute_values(
         latent_state_size: int,
@@ -438,11 +389,20 @@ def compute_values(
     latent_transition_fn = lambda state, action: TransitionFnDecorator(
         next_state_distribution=latent_transition_function(state, action),
         atomic_prop_dims=atomic_prop_dims)
+    latent_transition_fn = TransitionFunctionCopy(
+        num_states=tf.cast(tf.pow(2, latent_state_size), dtype=tf.int32),
+        num_actions=number_of_discrete_actions,
+        transition_function=latent_transition_fn)
+    latent_reward_function = RewardFunctionCopy(
+        num_states=tf.cast(tf.pow(2, latent_state_size), dtype=tf.int32),
+        num_actions=number_of_discrete_actions,
+        reward_function=latent_reward_function,
+        copied_transition_function=latent_transition_fn)
 
     p_init = stochastic_state_embedding(
         tf.tile(tf.zeros_like(state[:1, ...]), [tf.shape(latent_state_space)[0], 1])
     ).prob(latent_state_space)
-    is_reset_state_test_fn=lambda latent_state: is_reset_state(latent_state, atomic_prop_dims)
+    is_reset_state_test_fn = lambda latent_state: is_reset_state(latent_state, atomic_prop_dims)
 
     values = value_iteration(
         latent_state_size=latent_state_size,
@@ -456,7 +416,7 @@ def compute_values(
         episodic_return=tf.equal(tf.reduce_max(p_init), 1.),
         error_type='absolute',
         v_init=v_init)
-    
+
     if tf.equal(tf.reduce_max(p_init), 1.):
         # deterministic reset
         reset_state = stochastic_state_embedding(
@@ -483,8 +443,7 @@ def compute_values(
                     full_latent_state_space=True),
                 elems=latent_action_space),
             axis=0) * (1. - tf.cast(is_reset_state_test_fn(latent_state_space), tf.float32))
-        tf.print("p_init\n", p_init, summarize=-1)
-        
+
         return tf.reduce_sum(
             p_init * values
         ) / tf.reduce_sum(p_init)
