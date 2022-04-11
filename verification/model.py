@@ -177,7 +177,8 @@ class TransitionFunctionCopy(TransitionFunction):
             indices = tf.where(tf.math.not_equal(probs, tf.zeros_like(probs)))
             values = tf.gather_nd(probs, indices)
             # base 10
-            _latent_state = tf.reduce_sum(tf.cast(latent_state, tf.float32) * 2. ** tf.range(latent_state_size, dtype=tf.float32), axis=-1)
+            _latent_state = tf.reduce_sum(
+                tf.cast(latent_state, tf.float32) * 2. ** tf.range(latent_state_size, dtype=tf.float32), axis=-1)
             _latent_state = tf.cast(_latent_state, tf.int64)
             _latent_action = tf.argmax(latent_action)
             return tf.concat([
@@ -192,7 +193,7 @@ class TransitionFunctionCopy(TransitionFunction):
             for latent_state in latent_state_space:
                 tf.autograph.experimental.set_loop_options(
                     shape_invariants=[(indices, tf.TensorShape([None, 3])),
-                                        (values, tf.TensorShape([None]))])
+                                      (values, tf.TensorShape([None]))])
                 for latent_action in tf.one_hot(tf.range(num_actions), depth=tf.cast(num_actions, dtype=tf.int32)):
                     _indices, _values = get_sparse_entry(latent_state, latent_action)
                     indices = tf.concat([indices, _indices], axis=0)
@@ -207,7 +208,7 @@ class TransitionFunctionCopy(TransitionFunction):
         self.atomic_prop_dims = atomic_prop_dims
 
 
-class RewardFunctionCopy(TransitionFunction):
+class RewardFunctionCopy:
 
     def __init__(
             self,
@@ -217,10 +218,10 @@ class RewardFunctionCopy(TransitionFunction):
             copied_transition_function: Optional[TransitionFunctionCopy] = None,
             epsilon: float = 1e-6,
     ):
-        latent_state_size = tf.cast(
+        self.latent_state_size = tf.cast(
             tf.math.log(tf.cast(num_states, tf.float32) / tf.math.log(2.)),
             tf.int32)
-        latent_state_space = binary_latent_space(latent_state_size, dtype=tf.float32)
+        latent_state_space = binary_latent_space(self.latent_state_size, dtype=tf.float32)
 
         @tf.function
         def get_sparse_entry(latent_state, latent_action):
@@ -252,7 +253,7 @@ class RewardFunctionCopy(TransitionFunction):
             values = tf.gather_nd(rewards, indices)
             # base 10
             _latent_state = tf.cast(
-                tf.reduce_sum(latent_state * 2 ** tf.range(latent_state_size), axis=-1),
+                tf.reduce_sum(latent_state * 2 ** tf.range(self.latent_state_size), axis=-1),
                 dtype=tf.int64)
             _latent_action = tf.argmax(latent_action)
 
@@ -268,14 +269,35 @@ class RewardFunctionCopy(TransitionFunction):
             for latent_state in latent_state_space:
                 tf.autograph.experimental.set_loop_options(
                     shape_invariants=[(indices, tf.TensorShape([None, 3])),
-                                        (values, tf.TensorShape([None]))])
+                                      (values, tf.TensorShape([None]))])
                 for latent_action in tf.one_hot(tf.range(num_actions), depth=tf.cast(num_actions, tf.int32)):
                     _indices, _values = get_sparse_entry(latent_state, latent_action)
                     indices = tf.concat([indices, _indices], axis=0)
                     values = tf.concat([values, _values], axis=0)
             return indices, values
 
-        super(RewardFunctionCopy, self).__init__(transition_matrix=gather_transition_probs())
+        self.transitions = gather_transition_probs()
+        self.num_states = num_states
+
+    @tf.function
+    def __call__(self, latent_state: tf.Tensor, latent_action: tf.Tensor, *args, **kwargs):
+        """
+        Get the full entry for R(latent_state, latent_action, .)
+        latent_state, latent_actions are assumed to be batched, but only the first batch element is used to provide
+        the entry (the others are ignored).
+
+        Args:
+            latent_state: batched binary latent state
+            latent_action: batched one-hot encoded action
+
+        Returns: the rewards for all the next states, given latent state and latent action.
+        """
+        latent_state = tf.cast(latent_state[0, ...], tf.int32)
+        state = tf.reduce_sum(latent_state[0, ...] * 2 ** tf.range(self.latent_state_size), axis=-1)
+        action = tf.argmax(latent_action[0, ...], axis=-1)
+
+        return tf.squeeze(tf.sparse.to_dense(tf.sparse.slice(
+            self.transitions, [state, action, 0], [1, 1, self.num_states])))
 
 
 class TransitionFrequencyEstimator(TransitionFunction):
