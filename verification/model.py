@@ -40,7 +40,7 @@ class TransitionFunction:
     ):
         self.num_states = transition_matrix.dense_shape[0]
         self.latent_state_size = tf.cast(
-            tf.math.log(tf.cast(self.num_states, tf.float32) / tf.math.log(2.)),
+            tf.math.log(tf.cast(self.num_states, tf.float32)) / tf.math.log(2.),
             tf.int32)
         self.num_actions = transition_matrix.dense_shape[1]
         self.transitions = transition_matrix
@@ -57,7 +57,7 @@ class TransitionFunction:
     def __call__(self, latent_state: tf.Tensor, latent_action: tf.Tensor):
         """
         Gives the transition distribution formed by the input latent state and latent action.
-        The returned distribution is a namedtuple with the following method 'prob'
+        The returned distribution is a namedtuple with the following method 'prob':
             prob(next_latent_state, full_latent_state=False), which returns either the probability of
                 - the next_latent_state, given in binary;
                 - the full matrix entry P(.|latent_state, latent_action) if full_latent_state is set, i.e.,
@@ -198,7 +198,7 @@ class TransitionFunctionCopy(TransitionFunction):
             return indices, values
 
         indices, values = gather_transition_probs()
-        super().__init__(
+        super(TransitionFunctionCopy, self).__init__(
             transition_matrix=tf.sparse.SparseTensor(
                 indices, values, dense_shape=[num_states, num_actions, num_states]),
             split_label_from_latent_space=split_label_from_latent_space)
@@ -270,7 +270,7 @@ class RewardFunctionCopy(TransitionFunction):
                     values = tf.concat([values, _values], axis=0)
             return indices, values
 
-        super().__init__(transition_matrix=gather_transition_probs())
+        super(RewardFunctionCopy, self).__init__(transition_matrix=gather_transition_probs())
 
 
 class TransitionFrequencyEstimator(TransitionFunction):
@@ -291,9 +291,9 @@ class TransitionFrequencyEstimator(TransitionFunction):
 
         @tf.function
         def compute_transition_counter():
-            states = tf.reduce_sum(latent_states * 2 ** tf.range(self.latent_state_size), axis=-1)
+            states = tf.reduce_sum(latent_states * 2 ** tf.range(latent_state_size), axis=-1)
             actions = tf.cast(tf.argmax(latent_actions, axis=-1), dtype=tf.int32)
-            next_states = tf.reduce_sum(next_latent_states * 2 ** tf.range(self.latent_state_size), axis=-1)
+            next_states = tf.reduce_sum(next_latent_states * 2 ** tf.range(latent_state_size), axis=-1)
 
             # flat transition indices
             transitions = states * num_actions * num_states + actions * num_states + next_states
@@ -337,7 +337,7 @@ class TransitionFrequencyEstimator(TransitionFunction):
 
             return tf.sparse.reorder(transition_tensor)
 
-        super().__init__(
+        super(TransitionFrequencyEstimator, self).__init__(
             transition_matrix=compute_transition_probabilities(transition_counter, probs, i, j),
             backup_transition_function=backup_transition_function,
             assert_distribution=assert_distribution,
