@@ -1,7 +1,6 @@
 from collections import namedtuple
 from typing import Optional, Callable, Dict, Any
 import time
-import sys
 
 import tensorflow as tf
 from tf_agents.environments.tf_py_environment import TFPyEnvironment
@@ -64,12 +63,12 @@ def estimate_local_losses_from_samples(
                                 state to rewards. Latent states and actions are assumed to be of type int32 while
                                 returned reward type is float32.
         labeling_function: labeling function (mapping from real states to subset of atomic propositions)
-        latent_transition_function: mapping from (binary) latent states and (one-hot) actions (given in int32) to
+        latent_transition_function: mapping from (binary) latent states and (one-hot) actions to
                                     a probability distribution over latent states.
                                     A probability distribution object is assumed to have a prob method (e.g.,
                                     tensorflow probability distribution objects) such that
-                                    distribution.prob(label, latent_state_no_label) is the probability of the
-                                    latent state given by tf.concat([label, latent_state_no_label], axis=-1)
+                                    distribution.prob(next_state) is the probability of transitioning to the next
+                                    latent state
         estimate_transition_function_from_samples: whether to estimate the latent transition function from samples
                                                    or not. If True, the latent transition function estimated this
                                                    way stores the probability matrix into a sparse tensor.
@@ -87,11 +86,11 @@ def estimate_local_losses_from_samples(
 
     if latent_transition_function is None and not estimate_transition_function_from_samples:
         raise ValueError('no latent transition function provided')
-    
+
     # scale the reward function
     _latent_reward_fn = latent_reward_function
     latent_reward_function = lambda _state, _action, _next_state: (
-        reward_scaling * _latent_reward_fn(_state, _action, _next_state))
+            reward_scaling * _latent_reward_fn(_state, _action, _next_state))
     # generate environment wrapper for discrete actions
     latent_environment = LatentEmbeddingTFEnvironmentWrapper(
         tf_env=environment,
@@ -119,7 +118,6 @@ def estimate_local_losses_from_samples(
     # initialize driver
     observers = [replay_buffer.add_batch]
     if estimate_value_difference:
-        observers.append(metrics.AverageReturnMetric(batch_size=latent_environment.batch_size))
         observers.append(metrics.AverageDiscountedReturnMetric(
             gamma=gamma,
             batch_size=latent_environment.batch_size))
@@ -142,7 +140,7 @@ def estimate_local_losses_from_samples(
         num_discrete_actions=number_of_discrete_actions,
         labeling_function=ergodic_batched_labeling_function(labeling_function))
 
-    def sample_from_replay_buffer(num_transitions: Optional[int] = None, single_deterministic_pass=False):
+    def _sample_from_replay_buffer(num_transitions: Optional[int] = None, single_deterministic_pass=False):
         dataset = replay_buffer.as_dataset(
             num_parallel_calls=tf.data.experimental.AUTOTUNE,
             num_steps=2,
@@ -166,9 +164,24 @@ def estimate_local_losses_from_samples(
             state, label, latent_state, latent_action, reward, next_state, next_label,
             next_latent_state, tf.shape(state)[0])
 
+    time_metrics['model_generation'] = time.time()
+    # Model generation
+    latent_transition_function = TransitionFunctionCopy(
+        num_states=tf.cast(tf.pow(2, latent_state_size), dtype=tf.int32),
+        num_actions=number_of_discrete_actions,
+        transition_function=latent_transition_function,
+        epsilon=1e-12)
+    latent_reward_function = RewardFunctionCopy(
+        num_states=tf.cast(tf.pow(2, latent_state_size), dtype=tf.int32),
+        num_actions=number_of_discrete_actions,
+        reward_function=latent_reward_function,
+        copied_transition_function=latent_transition_function,
+        epsilon=1e-12)
+    time_metrics['model_generation'] = time.time() - time_metrics['model_generation']
+
     time_metrics['local_reward_loss'] = time.time()
 
-    samples = sample_from_replay_buffer(num_transitions=steps)
+    samples = _sample_from_replay_buffer(num_transitions=steps)
     (state, label, latent_state, latent_action, reward, next_state, next_label,
      next_latent_state) = (
         samples.state, samples.label, samples.latent_state, samples.latent_action, samples.reward,
@@ -179,27 +192,28 @@ def estimate_local_losses_from_samples(
             state_embedding_function(state, None)
         )[-1]
 
-    next_latent_state_no_label = next_latent_state[..., atomic_prop_dims:]
-
     local_reward_loss = estimate_local_reward_loss(
         state, label, latent_action, reward, next_state, next_label,
-        latent_reward_function, latent_state, next_latent_state,)
+        latent_reward_function, latent_state, next_latent_state, )
 
     time_metrics['local_reward_loss'] = time.time() - time_metrics['local_reward_loss']
 
     if estimate_transition_function_from_samples:
 
-        time_metrics['transition_function_estimation'] = time.time()
-        _samples = sample_from_replay_buffer(single_deterministic_pass=True)
+        time_metrics['empirical_model_generation'] = time.time()
+        _samples = _sample_from_replay_buffer(single_deterministic_pass=True)
         _transition_function_estimation_num_frames = _samples.batch_size.numpy()
         empirical_latent_transition_function = TransitionFrequencyEstimator(
             _samples.latent_state, _samples.latent_action, _samples.next_latent_state,
             backup_transition_function=latent_transition_function,
-            assert_distribution=assert_transition_distribution,
-            split_label_from_latent_space=True)
+            assert_distribution=assert_transition_distribution, )
+        empirical_latent_transition_function = TransitionFunctionCopy(
+            num_states=tf.cast(tf.pow(2, latent_state_size), dtype=tf.int32),
+            num_actions=number_of_discrete_actions,
+            transition_function=empirical_latent_transition_function,
+            epsilon=1e-12)
 
-        time_metrics['transition_function_estimation'] = time.time() - \
-                                                         time_metrics['transition_function_estimation']
+        time_metrics['empirical_model_generation'] = time.time() - time_metrics['empirical_model_generation']
     else:
         empirical_latent_transition_function = None
         _transition_function_estimation_num_frames = 0
@@ -209,7 +223,7 @@ def estimate_local_losses_from_samples(
 
     local_transition_loss = estimate_local_transition_loss(
         state, label, latent_action, next_state, next_label,
-        latent_transition_function, latent_state, next_latent_state_no_label,
+        latent_transition_function, latent_state, next_latent_state,
         probabilistic_state_embedding=probabilistic_state_embedding)
 
     time_metrics['local_transition_loss'] = time.time() - time_metrics['local_transition_loss']
@@ -218,7 +232,7 @@ def estimate_local_losses_from_samples(
     if empirical_latent_transition_function is not None:
         local_transition_loss_transition_fn_estimation = estimate_local_transition_loss(
             state, label, latent_action, next_state, next_label,
-            empirical_latent_transition_function, latent_state, next_latent_state_no_label,
+            empirical_latent_transition_function, latent_state, next_latent_state,
             probabilistic_state_embedding=probabilistic_state_embedding)
     else:
         local_transition_loss_transition_fn_estimation = None
@@ -247,12 +261,9 @@ def estimate_local_losses_from_samples(
                         _state, ergodic_batched_labeling_function(labeling_function)(_state))
                 ) if probabilistic_state_embedding else (
                     lambda _state: tfd.Independent(
-                            tfd.Deterministic(loc=state_embedding_function(
+                        tfd.Deterministic(loc=state_embedding_function(
                             _state, ergodic_batched_labeling_function(labeling_function)(_state))),
-                        reinterpreted_batch_ndims=1)),)
-            tf.print("Empirical avg. return", observers[-2].result(), output_stream=sys.stdout)
-            tf.print("Empirical avg. discounted return", observers[-1].result(), output_stream=sys.stdout)
-            tf.print("latent values", values, output_stream=sys.stdout)
+                        reinterpreted_batch_ndims=1)), )
             value_diff["value_diff_" + name] = tf.abs(
                 observers[-1].result() - values)
             time_metrics['value_diff_' + name] = time.time() - time_metrics['value_diff_' + name]
@@ -334,17 +345,16 @@ def estimate_local_transition_loss(
         next_label: tf.Tensor,
         latent_transition_function: Callable[[tf.Tensor, tf.Tensor], tfd.Distribution],
         latent_state: Optional[tf.Tensor] = None,
-        next_latent_state_no_label: Optional[tf.Tensor] = None,
+        next_latent_state: Optional[tf.Tensor] = None,
         state_embedding_function: Optional[Callable[[tf.Tensor, Optional[tf.Tensor]], tf.Tensor]] = None,
         probabilistic_state_embedding: Optional[Callable[[tf.Tensor, tf.Tensor], tfd.Distribution]] = None
 ):
     if latent_state is None:
         latent_state = state_embedding_function(state, label)
-    if next_latent_state_no_label is None:
-        next_latent_state_no_label = state_embedding_function(next_state, None)
+    if next_latent_state is None:
+        next_latent_state = state_embedding_function(next_state, tf.cast(next_label, tf.float32))
 
-    next_label = tf.cast(next_label, tf.float32)
-    next_latent_state_no_label = tf.cast(next_latent_state_no_label, tf.float32)
+    next_latent_state = tf.cast(next_latent_state, tf.float32)
 
     if probabilistic_state_embedding:
         latent_state_space = binary_latent_space(tf.shape(latent_state)[-1], dtype=tf.float32)
@@ -364,8 +374,7 @@ def estimate_local_transition_loss(
                 tf.abs(
                     embedding_distribution.prob(latent_state_space) -
                     latent_transition_distribution.prob(
-                        latent_state_space[..., :tf.shape(next_label)[-1]],
-                        latent_state_space[..., tf.shape(next_label)[-1]:],
+                        latent_state_space,
                         full_latent_state_space=True)),
                 axis=0)
 
@@ -377,7 +386,8 @@ def estimate_local_transition_loss(
 
     else:
         latent_transition_distribution = latent_transition_function(latent_state, latent_action)
-        return tf.reduce_mean(1. - latent_transition_distribution.prob(next_label, next_latent_state_no_label))
+        return tf.reduce_mean(1. - latent_transition_distribution.prob(next_latent_state))
+
 
 @tf.function
 def compute_values(
@@ -386,28 +396,14 @@ def compute_values(
         state: tf.Tensor,
         number_of_discrete_actions: int,
         latent_policy: Callable[[tf.Tensor], tfd.OneHotCategorical],
-        latent_transition_function: Callable[[tf.Tensor, tf.Tensor], tfd.Distribution],
-        latent_reward_function: Callable[[tf.Tensor, tf.Tensor, tf.Tensor], Float],
+        latent_transition_fn: TransitionFunctionCopy,
+        latent_reward_function: RewardFunctionCopy,
         epsilon: Float,
         gamma: Float,
         stochastic_state_embedding: Callable[[tf.Tensor], tfd.Distribution],
         v_init: Optional[Float] = None,
 ):
     latent_state_space = binary_latent_space(latent_state_size)
-    latent_transition_fn = lambda state, action: TransitionFnDecorator(
-        next_state_distribution=latent_transition_function(state, action),
-        atomic_prop_dims=atomic_prop_dims)
-    latent_transition_fn = TransitionFunctionCopy(
-        num_states=tf.cast(tf.pow(2, latent_state_size), dtype=tf.int32),
-        num_actions=number_of_discrete_actions,
-        transition_function=latent_transition_fn,
-        epsilon=1e-12)
-    latent_reward_function = RewardFunctionCopy(
-        num_states=tf.cast(tf.pow(2, latent_state_size), dtype=tf.int32),
-        num_actions=number_of_discrete_actions,
-        reward_function=latent_reward_function,
-        copied_transition_function=latent_transition_fn,
-        epsilon=1e-12)
 
     p_init = stochastic_state_embedding(
         tf.tile(tf.zeros_like(state[:1, ...]), [tf.shape(latent_state_space)[0], 1])
@@ -440,7 +436,7 @@ def compute_values(
             indices=tf.range(number_of_discrete_actions),
             depth=tf.cast(number_of_discrete_actions, tf.int32),
             dtype=tf.float32)
-        
+
         p_init = tf.reduce_sum(
             tf.transpose(
                 PolicyDecorator(latent_policy)(
@@ -459,41 +455,16 @@ def compute_values(
         return tf.reduce_sum(
             p_init * values
         ) / tf.reduce_sum(p_init)
-        
+
     else:
         return tf.reduce_sum(p_init * values, axis=0)
-
-
-
-class TransitionFnDecorator:
-    """
-    Decorates a latent transition function P with a new prob function so that:
-    P_new(s' | s, a) = P(l(s'), [s' without label] | s, a)
-    where l is the labeling function
-
-    Usage:
-    ```python
-    decorated_transition_fn = lambda state, action: TransitionFnDecorator(
-        next_state_distribution=transition_fn(state, action),
-        atomic_prop_dims=atomic_prop_dims)
-    ```
-    """
-
-    def __init__(self, next_state_distribution, atomic_prop_dims):
-        self.next_state_distribution = next_state_distribution
-        self.atomic_prop_dims = atomic_prop_dims
-
-    def prob(self, latent_state, *args, **kwargs):
-        return self.next_state_distribution.prob(
-            latent_state[..., :self.atomic_prop_dims],
-            latent_state[..., self.atomic_prop_dims:],
-            *args, **kwargs)
 
 
 class PolicyDecorator:
     """
     Decorates a TFPolicy π to retrieve a mapping from states to the space of distributions over actions.
     """
+
     def __init__(self, policy: tf_policy.TFPolicy):
         self._policy = policy
 

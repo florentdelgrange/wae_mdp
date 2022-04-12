@@ -1305,15 +1305,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         if self.time_stacked_states:
             labeling_function = lambda x: labeling_function(x)[:, -1, ...]
 
-        class LatentTransitionFunction:
-            def __init__(self, discrete_latent_transition, latent_state, latent_action):
-                self._distribution = discrete_latent_transition(
-                    latent_state=tf.cast(latent_state, tf.float32),
-                    latent_action=tf.cast(latent_action, tf.float32))
-
-            def prob(self, label, state_without_label, **kwargs) -> Float:
-                return self._distribution.prob(tf.concat([label, state_without_label], axis=-1))
-
         return estimate_local_losses_from_samples(
             environment=environment,
             latent_policy=self.get_latent_policy(action_dtype=tf.int64),
@@ -1330,10 +1321,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     next_latent_state=tf.cast(next_latent_state, dtype=tf.float32),
                 ).mode()),
             labeling_function=labeling_function,
-            latent_transition_function=lambda latent_state, latent_action: LatentTransitionFunction(
-                discrete_latent_transition=self.discrete_latent_transition,
-                latent_state=latent_state,
-                latent_action=latent_action),
+            latent_transition_function=self.discrete_latent_transition,
             estimate_transition_function_from_samples=estimate_transition_function_from_samples,
             replay_buffer_max_frames=replay_buffer_max_frames,
             reward_scaling=reward_scaling,

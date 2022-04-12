@@ -80,10 +80,10 @@ class TransitionFunction:
         def _get_prob_value(transition):
             latent_state, state, action, next_latent_state_no_label, next_label = transition
             if self.split_label_from_latent_space:
-                next_state = tf.cast(tf.concat([next_label, next_latent_state_no_label], axis=-1), tf.int32)
+                next_latent_state = tf.cast(tf.concat([next_label, next_latent_state_no_label], axis=-1), tf.int32)
             else:
-                next_state = next_latent_state_no_label
-            next_state = tf.reduce_sum(next_state * 2 ** tf.range(self.latent_state_size), axis=-1)
+                next_latent_state = next_latent_state_no_label
+            next_state = tf.reduce_sum(next_latent_state * 2 ** tf.range(self.latent_state_size), axis=-1)
 
             # check if the action has been visited in the given state during the transition sparse tensor construction
             action_is_enabled = tf.squeeze(
@@ -96,12 +96,16 @@ class TransitionFunction:
                 return 0. if tf.equal(tf.size(probs), 0) else probs
             # if not, then use a backup transition function to retrieve the probability distribution for [state, action]
             else:
+                if self.split_label_from_latent_space:
+                    next_latent_state = [tf.expand_dims(next_label, axis=0),
+                                         tf.expand_dims(next_latent_state_no_label, axis=0)]
+                else:
+                    next_latent_state = [tf.expand_dims(next_latent_state, 0)]
                 return tf.squeeze(
                     backup_transition_fn(
                         tf.expand_dims(latent_state, axis=0),
                         tf.expand_dims(tf.one_hot(action, depth=tf.cast(self.num_actions, tf.int32)), axis=0)
-                    ).prob(tf.expand_dims(next_label, axis=0),
-                           tf.expand_dims(next_latent_state_no_label, axis=0)))
+                    ).prob(*next_latent_state))
 
         @tf.function
         def _prob(*value, **kwargs):
@@ -286,7 +290,7 @@ class RewardFunctionCopy:
                         indices = tf.concat([indices, _indices], axis=0)
                         values = tf.concat([values, _values], axis=0)
             return indices, values
-        
+
         indices, values = gather_transition_probs()
         self.num_states = num_states
         self.transitions = tf.sparse.SparseTensor(
@@ -382,3 +386,28 @@ class TransitionFrequencyEstimator(TransitionFunction):
             backup_transition_function=backup_transition_function,
             assert_distribution=assert_distribution,
             split_label_from_latent_space=split_label_from_latent_space)
+
+
+class TransitionFnDecorator:
+    """
+    Decorates a latent transition function P with a new prob function so that:
+    P_new(s' | s, a) = P(l(s'), [s' without label] | s, a)
+    with l the labeling function
+
+    Usage:
+    ```python
+    decorated_transition_fn = lambda state, action: TransitionFnDecorator(
+        next_state_distribution=transition_fn(state, action),
+        atomic_prop_dims=atomic_prop_dims)
+    ```
+    """
+
+    def __init__(self, next_state_distribution, atomic_prop_dims):
+        self.next_state_distribution = next_state_distribution
+        self.atomic_prop_dims = atomic_prop_dims
+
+    def prob(self, latent_state, *args, **kwargs):
+        return self.next_state_distribution.prob(
+            latent_state[..., :self.atomic_prop_dims],
+            latent_state[..., self.atomic_prop_dims:],
+            *args, **kwargs)

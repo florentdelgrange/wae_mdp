@@ -14,6 +14,7 @@ from reinforcement_learning.environments.latent_environment import LatentEmbeddi
 from reinforcement_learning.environments.no_reward_shaping import NoRewardShapingWrapper
 from reinforcement_learning.environments.perturbed_env import PerturbedEnvironment
 from util.io.video import VideoEmbeddingObserver
+from verification.model import TransitionFnDecorator
 
 try:
     import reverb
@@ -2245,11 +2246,9 @@ class VariationalMarkovDecisionProcess(tf.Module):
             labeling_function=(
                 lambda x: labeling_function(x)[:, -1, ...]
             ) if self.time_stacked_states else labeling_function,
-            latent_transition_function=(
-                lambda latent_state, action:
-                self.discrete_latent_transition(
-                    latent_state=tf.cast(latent_state, tf.float32),
-                    action=action)),
+            latent_transition_function=lambda state, action: TransitionFnDecorator(
+                next_state_distribution=self.discrete_latent_transition(tf.cast(state, tf.float32), action),
+                atomic_prop_dims=self.atomic_prop_dims),
             estimate_transition_function_from_samples=estimate_transition_function_from_samples,
             assert_transition_distribution=assert_estimated_transition_function_distribution,
             replay_buffer_max_frames=replay_buffer_max_frames,
