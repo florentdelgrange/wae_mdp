@@ -415,7 +415,9 @@ def compute_values(
         is_reset_state_test_fn=is_reset_state_test_fn,
         episodic_return=tf.equal(tf.reduce_max(p_init), 1.),
         error_type='absolute',
-        v_init=v_init)
+        v_init=v_init,
+        transition_matrix=tf.sparse.to_dense(latent_transition_fn.transitions),
+        reward_matrix=tf.sparse.to_dense(latent_reward_function.transitions))
 
     if tf.equal(tf.reduce_max(p_init), 1.):
         # deterministic reset
