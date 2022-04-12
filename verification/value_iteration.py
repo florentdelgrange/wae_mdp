@@ -251,7 +251,8 @@ def compute_next_q_value(
             next_states = state_space
         tiled_state = tile(state)
         tiled_action = tile(action)
-        reward = reward_fn(tiled_state, tiled_action, next_states)[..., 0]  # unidimensional reward
+
+        reward = tf.squeeze(reward_fn(tiled_state, tiled_action, next_states))
 
         return tf.reduce_sum(
             transition_fn(
