@@ -1338,7 +1338,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             replay_buffer_max_frames=replay_buffer_max_frames,
             reward_scaling=reward_scaling,
             atomic_prop_dims=self.atomic_props_dims,
-            estimate_value_difference=False)
+            estimate_value_difference=True)
 
     def eval_and_save(
             self,

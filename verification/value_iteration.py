@@ -35,7 +35,7 @@ def value_iteration(
         epsilon: Float = 1e-6,
         is_reset_state_test_fn: Optional[Callable[[tf.Tensor], Bool]] = None,
         episodic_return: bool = True,
-        debug: bool = True,
+        debug: bool = False,
         v_init: Optional[Float] = None,
         transition_matrix: Optional[tf.Tensor] = None,
         reward_matrix: Optional[tf.Tensor] = None,
@@ -81,6 +81,10 @@ def value_iteration(
 
     delta = tf.constant(float('inf'))
     state_space = binary_latent_space(latent_state_size, dtype=tf.float32)
+    if is_reset_state_test_fn is None:
+        not_reset_states = tf.ones(shape=tf.shape(state_space)[:1])
+    else:
+        not_reset_states = 1. - tf.cast(is_reset_state_test_fn(state_space), tf.float32)
     action_space = tf.one_hot(indices=tf.range(num_actions), depth=tf.cast(num_actions, tf.int32), dtype=tf.float32)
     policy_probs = policy(state_space).probs_parameter()
 
@@ -119,17 +123,14 @@ def value_iteration(
         delta = _compute_error(values, next_values, error_scale)
         return next_values, delta
 
-    if reward_matrix is not None and is_reset_state_test_fn is not None and episodic_return:
-        reward_matrix = tf.transpose(
-            tf.transpose(reward_matrix) *
-            (1. - tf.cast(is_reset_state_test_fn(state_space), tf.float32)))
-
     @tf.function
     def _update_values_matrices(values: tf.Tensor, _, error_scale: Float = 1.):
         q_values = tf.reduce_sum(
             transition_matrix * (reward_matrix + gamma * values),
             axis=-1)
         next_values = tf.reduce_sum(q_values * policy_probs, axis=-1)
+        if episodic_return:
+            next_values *= not_reset_states
         delta = _compute_error(values, next_values, error_scale)
         return next_values, delta
 
@@ -144,10 +145,9 @@ def value_iteration(
                     x=tf.ones_like(values),
                     y=values / next_values)))
         if debug:
-            progress = tf.maximum((tf.math.log(delta) - tf.math.log(error_scale)) * 100. / tf.math.log(epsilon), 0.)
-            # sys.stdout.write('\r')
-            # tf.print("progress: {:.3g} % -- current error: {:.3g}".format(progress, delta))
-            # sys.stdout.write("progress: {:.3g} % -- current error: {:.3g}".format(progress, delta))
+            progress = tf.clip_by_value(
+                (tf.math.log(delta) - tf.math.log(error_scale)) * 100. / tf.math.log(epsilon),
+                0., 100.)
             tf.print('\r', "VI progress:", progress, '% --', 'current error:', delta, output_stream=sys.stdout)
             sys.stdout.flush()
         return delta
@@ -156,9 +156,11 @@ def value_iteration(
         update_values = _update_values_matrices
     else:
         update_values = _update_values
-
-    values, delta = update_values(values, delta)
-    error_scale = tf.maximum(delta, 1.)
+    
+    error_scale = 1.
+    if debug:
+        values, delta = update_values(values, delta)
+        error_scale = delta
 
     values, _ = tf.while_loop(
         cond=lambda _, _delta: tf.greater_equal(_delta, epsilon),
