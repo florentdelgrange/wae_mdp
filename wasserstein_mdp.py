@@ -174,8 +174,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.trainable_prior = trainable_prior
         self.include_state_encoder_entropy = not (
                 entropy_regularizer_scale_factor < epsilon
-                and state_encoder_type is EncodingType.DETERMINISTIC)
-        self.include_action_encoder_entropy = action_entropy_regularizer_scaling < epsilon
+                or state_encoder_type is EncodingType.DETERMINISTIC)
+        self.include_action_encoder_entropy = not (action_entropy_regularizer_scaling < epsilon)
+        self._state_encoder_type = state_encoder_type
 
         if self.action_discretizer:
             self.number_of_discrete_actions = number_of_discrete_actions
@@ -357,11 +358,15 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             'steady_state_regularizer': Mean('steady_state_wasserstein_regularizer'),
             'gradient_penalty': Mean('gradient_penalty'),
             'marginal_state_encoder_entropy': Mean('marginal_state_encoder_entropy'),
-            'state_encoder_entropy': Mean('state_encoder_entropy'),
-            'entropy_regularizer': Mean('entropy_regularizer'),
             'transition_log_probs': Mean('transition_log_probs'),
-            'binary_encoding_log_probs': Mean('binary_encoding_log_probs'),
         }
+        if self.include_state_encoder_entropy or self.include_action_encoder_entropy:
+            self.loss_metrics['entropy_regularizer'] = Mean('entropy_regularizer')
+        if state_encoder_type is not EncodingType.DETERMINISTIC:
+            self.loss_metrics.update({
+                'binary_encoding_log_probs': Mean('binary_encoding_log_probs'),
+                'state_encoder_entropy': Mean('state_encoder_entropy'),
+            })
         if self.policy_based_decoding:
             self.loss_metrics['marginal_variance'] = Mean(name='marginal_variance')
         elif self.action_discretizer:
@@ -779,11 +784,12 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             steady_state_gradient_penalty + transition_loss_gradient_penalty)
         self.loss_metrics['marginal_state_encoder_entropy'](
             self.marginal_state_encoder_entropy(logits=logits, sample_probability=sample_probability))
-        self.loss_metrics['state_encoder_entropy'](
-            tfd.Independent(
-                tfd.Bernoulli(logits=logits),
-                reinterpreted_batch_ndims=1
-            ).entropy())
+        if self._state_encoder_type is not EncodingType.DETERMINISTIC: 
+            self.loss_metrics['state_encoder_entropy'](
+                tfd.Independent(
+                    tfd.Bernoulli(logits=logits),
+                    reinterpreted_batch_ndims=1
+                ).entropy())
         self.loss_metrics['latent_policy_entropy'](
             self.discrete_latent_policy(latent_state).entropy())
         self.loss_metrics['transition_log_probs'](
@@ -793,10 +799,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     tf.argmax(latent_action, axis=-1),
                     depth=self.number_of_discrete_actions)
             ).log_prob(tf.round(next_latent_state)))
-        self.loss_metrics['binary_encoding_log_probs'](
-            self.binary_encode_state(
-                state=state
-            ).log_prob(tf.round(latent_state)[..., self.atomic_props_dims:]))
+        if self._state_encoder_type is not EncodingType.DETERMINISTIC:
+            self.loss_metrics['binary_encoding_log_probs'](
+                self.binary_encode_state(
+                    state=state
+                ).log_prob(tf.round(latent_state)[..., self.atomic_props_dims:]))
         if self.action_discretizer and not self.policy_based_decoding:
             self.loss_metrics['marginal_action_encoder_entropy'](
                 self.marginal_action_encoder_entropy(latent_state, action))
@@ -804,7 +811,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 self.discrete_action_encoding(latent_state, action).entropy())
         elif self.policy_based_decoding:
             self.loss_metrics['marginal_variance'](marginal_variance)
-        self.loss_metrics['entropy_regularizer'](entropy_regularizer)
+        if self.include_state_encoder_entropy or self.include_action_encoder_entropy:
+            self.loss_metrics['entropy_regularizer'](entropy_regularizer)
 
         if debug:
             tf.print("latent_state", latent_state, summarize=-1)
@@ -1090,8 +1098,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         if self.include_state_encoder_entropy:
             entropy_regularizer = self.entropy_regularizer_scale_factor * output['entropy_regularizer']
-        else:
+        elif self.include_action_encoder_entropy:
             entropy_regularizer = output['entropy_regularizer']
+        else:
+            entropy_regularizer = 0.
 
         loss = lambda minimize: tf.reduce_mean(
             (-1.) ** (1. - minimize) * is_weights * (
