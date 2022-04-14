@@ -53,6 +53,7 @@ class TransitionFunction:
             state_action_pairs = tf.sparse.reduce_sum(self.transitions, axis=-1, output_is_sparse=True)
             tf.assert_less(tf.abs(1. - state_action_pairs.values), epsilon)
         self.backup_transition_function = backup_transition_function
+        self.latent_state_space = binary_latent_space(self.latent_state_size, dtype=tf.float32)
 
     def __call__(self, latent_state: tf.Tensor, latent_action: tf.Tensor):
         """
@@ -83,7 +84,9 @@ class TransitionFunction:
                 next_latent_state = tf.cast(tf.concat([next_label, next_latent_state_no_label], axis=-1), tf.int32)
             else:
                 next_latent_state = next_latent_state_no_label
-            next_state = tf.reduce_sum(next_latent_state * 2 ** tf.range(self.latent_state_size), axis=-1)
+            next_state = tf.reduce_sum(
+                tf.cast(next_latent_state, tf.float32) * 2. ** tf.range(self.latent_state_size, dtype=tf.float32),
+                axis=-1)
 
             # check if the action has been visited in the given state during the transition sparse tensor construction
             action_is_enabled = tf.squeeze(
@@ -111,15 +114,15 @@ class TransitionFunction:
         def _prob(*value, **kwargs):
             if self.split_label_from_latent_space:
                 next_label, next_latent_state_no_label = value
+                next_latent_state = tf.concat(next_label, next_latent_state_no_label, axis=-1)
             else:
-                next_label = None
-                next_latent_state_no_label = value[0]
+                next_label = next_latent_state_no_label = next_latent_state = value[0]
             full_latent_state_space = kwargs.get('full_latent_state_space', False)
             if full_latent_state_space:
                 if self.split_label_from_latent_space:
                     return _probs_row(next_label, next_latent_state_no_label)
                 else:
-                    return _probs_row(next_latent_state_no_label)
+                    return _probs_row(next_latent_state)
             else:
                 return tf.map_fn(
                     fn=_get_prob_value,
@@ -134,10 +137,13 @@ class TransitionFunction:
                 return tf.squeeze(tf.sparse.to_dense(tf.sparse.slice(
                     self.transitions, [state[0, ...], action[0, ...], 0], [1, 1, self.num_states])))
             else:
-                return backup_transition_fn(
+                _distr = backup_transition_fn(
                     latent_state,
-                    tf.one_hot(action, depth=tf.cast(self.num_actions, tf.int32))
-                ).prob(*value)
+                    tf.one_hot(action, depth=tf.cast(self.num_actions, tf.int32)))
+                try:
+                    return _distr.prob(*value, full_latent_state_space=True)
+                except TypeError:
+                    return _distr.prob(*value)
 
         return namedtuple('next_state_transition_distribution', ['prob'])(_prob)
 
@@ -172,15 +178,17 @@ class TransitionFunctionCopy(TransitionFunction):
             tile = lambda t: tf.tile(
                 tf.expand_dims(t, 0),
                 [num_states, 1])
+            _distr = transition_function(tile(latent_state), tile(latent_action))
             if split_label_from_latent_space:
-                probs = transition_function(tile(latent_state), tile(latent_action)).prob(
+                next_latent_states = [
                     latent_state_space[..., :atomic_prop_dims],
-                    latent_state_space[..., atomic_prop_dims:],
-                    full_latent_state_space=True)
+                    latent_state_space[..., atomic_prop_dims:]]
             else:
-                probs = transition_function(
-                    tile(latent_state), tile(latent_action)
-                ).prob(latent_state_space, full_latent_state_space=True)
+                next_latent_states = [latent_state_space]
+            try:
+                probs = _distr.prob(*next_latent_states, full_latent_state_space=True)
+            except TypeError:
+                probs = _distr.prob(*next_latent_states)
             # sparsify
             probs = tf.where(
                 condition=probs > epsilon,

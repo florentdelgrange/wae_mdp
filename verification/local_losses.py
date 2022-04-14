@@ -164,21 +164,6 @@ def estimate_local_losses_from_samples(
             state, label, latent_state, latent_action, reward, next_state, next_label,
             next_latent_state, tf.shape(state)[0])
 
-    time_metrics['model_generation'] = time.time()
-    # Model generation
-    latent_transition_function = TransitionFunctionCopy(
-        num_states=tf.cast(tf.pow(2, latent_state_size), dtype=tf.int32),
-        num_actions=number_of_discrete_actions,
-        transition_function=latent_transition_function,
-        epsilon=1e-12)
-    latent_reward_function = RewardFunctionCopy(
-        num_states=tf.cast(tf.pow(2, latent_state_size), dtype=tf.int32),
-        num_actions=number_of_discrete_actions,
-        reward_function=latent_reward_function,
-        copied_transition_function=latent_transition_function,
-        epsilon=1e-12)
-    time_metrics['model_generation'] = time.time() - time_metrics['model_generation']
-
     time_metrics['local_reward_loss'] = time.time()
 
     samples = _sample_from_replay_buffer(num_transitions=steps)
@@ -207,18 +192,13 @@ def estimate_local_losses_from_samples(
             _samples.latent_state, _samples.latent_action, _samples.next_latent_state,
             backup_transition_function=latent_transition_function,
             assert_distribution=assert_transition_distribution, )
-        empirical_latent_transition_function = TransitionFunctionCopy(
-            num_states=tf.cast(tf.pow(2, latent_state_size), dtype=tf.int32),
-            num_actions=number_of_discrete_actions,
-            transition_function=empirical_latent_transition_function,
-            epsilon=1e-12)
 
         time_metrics['empirical_model_generation'] = time.time() - time_metrics['empirical_model_generation']
     else:
         empirical_latent_transition_function = None
         _transition_function_estimation_num_frames = 0
         time_metrics['transition_function_estimation'] = 0
-
+    
     time_metrics['local_transition_loss'] = time.time()
 
     local_transition_loss = estimate_local_transition_loss(
@@ -241,8 +221,31 @@ def estimate_local_losses_from_samples(
 
     value_diff = dict()
     if estimate_value_difference:
+
+        time_metrics['model_generation'] = time.time()
+        # Model generation
+        latent_transition_function = TransitionFunctionCopy(
+            num_states=tf.cast(tf.pow(2, latent_state_size), dtype=tf.int32),
+            num_actions=number_of_discrete_actions,
+            transition_function=latent_transition_function,
+            epsilon=1e-12)
+        latent_reward_function = RewardFunctionCopy(
+            num_states=tf.cast(tf.pow(2, latent_state_size), dtype=tf.int32),
+            num_actions=number_of_discrete_actions,
+            reward_function=latent_reward_function,
+            copied_transition_function=latent_transition_function,
+            epsilon=1e-12)
+        time_metrics['model_generation'] += time.time() - time_metrics['model_generation']
+
         transition_functions = {"latent_transition_function": latent_transition_function}
         if empirical_latent_transition_function is not None:
+            _model_gen_time = time.time()
+            empirical_latent_transition_function = TransitionFunctionCopy(
+                num_states=tf.cast(tf.pow(2, latent_state_size), dtype=tf.int32),
+                num_actions=number_of_discrete_actions,
+                transition_function=empirical_latent_transition_function,
+                epsilon=1e-12)
+            time_metrics['empirical_model_generation'] = time.time() - _model_gen_time
             transition_functions["empirical_latent_transition_function"] = empirical_latent_transition_function
         for name, transition_fn in transition_functions.items():
             time_metrics['value_diff_' + name] = time.time()
@@ -252,7 +255,7 @@ def estimate_local_losses_from_samples(
                 state=state,
                 number_of_discrete_actions=number_of_discrete_actions,
                 latent_policy=latent_policy,
-                latent_transition_function=transition_fn,
+                latent_transition_fn=transition_fn,
                 latent_reward_function=latent_reward_function,
                 epsilon=epsilon,
                 gamma=gamma,
@@ -298,7 +301,11 @@ def estimate_local_losses_from_samples(
                         "estimated transition function (from {:d} transitions):".format(steps),
                     'value_diff_latent_transition_function': "Value difference",
                     "value_diff_empirical_latent_transition_function":
-                        "Value difference (empirical latent transition function)"
+                        "Value difference (empirical latent transition function)",
+                    "model_generation": "Model generation",
+                    "empirical_model_generation":
+                        "Transition model generation (empirical frequency estimation, from {:d} transitions)".format(
+                            steps)
                 }
         ).items():
             if _name != 'start':
@@ -423,7 +430,7 @@ def compute_values(
         error_type='absolute',
         v_init=v_init,
         transition_matrix=tf.sparse.to_dense(latent_transition_fn.transitions),
-        reward_matrix=tf.sparse.to_dense(latent_reward_function.transitions))
+        reward_matrix=tf.sparse.to_dense(latent_reward_function.transitions),)
 
     if tf.equal(tf.reduce_max(p_init), 1.):
         # deterministic reset

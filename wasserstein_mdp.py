@@ -1321,7 +1321,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     next_latent_state=tf.cast(next_latent_state, dtype=tf.float32),
                 ).mode()),
             labeling_function=labeling_function,
-            latent_transition_function=self.discrete_latent_transition,
+            latent_transition_function=lambda _latent_state, _latent_action: self.discrete_latent_transition(
+                tf.cast(_latent_state, tf.float32), tf.cast(_latent_action, tf.float32)),
             estimate_transition_function_from_samples=estimate_transition_function_from_samples,
             replay_buffer_max_frames=replay_buffer_max_frames,
             reward_scaling=reward_scaling,
