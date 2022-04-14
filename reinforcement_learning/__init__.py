@@ -1,5 +1,10 @@
+from typing import Dict, Callable
+
+import gym.envs
 import tensorflow as tf
 import math
+
+from tf_agents.typing.types import Bool
 
 
 @tf.function
@@ -121,30 +126,49 @@ labeling_functions = {
         observation[..., 2] < 0.
     ], axis=-1),
 }
+labeling_functions["pacman-v0"] = lambda _: load_pacman_labeling_fn(labeling_functions)
+
+
+def load_pacman_labeling_fn(
+        labeling_fn_dict: Dict[str, Callable[[tf.Tensor], Bool]]
+) -> Callable[[tf.Tensor], Bool]:
+    if 'pacman-v0' in [env_spec.id for env_spec in gym.envs.registry.all()]:
+        from gym_pacman.envs import pacman_env
+
+        def pacman_labeling_fn(observation):
+            return tf.numpy_function(pacman_env.labeling_function, inp=observation, Tout=tf.float32)
+
+        labeling_fn_dict['pacman-v0'] = pacman_labeling_fn
+        return pacman_labeling_fn
+
 
 reward_scaling = {
     'Pendulum-v0': 1. / (2 * (math.pi ** 2 + 0.1 * 8 ** 2 + 0.001 * 2 ** 2)),
     'CartPole-v0': 1. / 2,
-    'LunarLander-v2': 1. / 400,
+    # 'LunarLander-v2': 1. / 400,
     'MountainCar-v0': 1. / 2,
-    'Acrobot-v1': 1. / 2,
-    'BipedalWalker-v2': 1. / 200.,
-}  # to scale the rewards in [-1./2, 1./2]
+    # 'Acrobot-v1': 1. / 2,
+    # 'BipedalWalker-v2': 1. / 200.,
+}  # scale the rewards in [-1./2, 1./2]
 
 for d in [labeling_functions, reward_scaling]:
-    d['LunarLanderContinuous-v2'] = d['LunarLander-v2']
-    d['LunarLanderNoRewardShaping-v2'] = d['LunarLander-v2']
-    d['LunarLanderRandomInit-v2'] = d['LunarLander-v2']
-    d['LunarLanderContinuousRandomInit-v2'] = d['LunarLander-v2']
-    d['LunarLanderContinuousRandomInitNoRewardShaping-v2'] = d['LunarLander-v2']
-    d['LunarLanderRewardShapingAugmented-v2'] = d['LunarLander-v2']
-    d['LunarLanderRandomInitRewardShapingAugmented-v2'] = d['LunarLander-v2']
-    d['LunarLanderRandomInitNoRewardShaping-v2'] = d['LunarLander-v2']
-    d['LunarLanderContinuousRewardShapingAugmented-v2'] = d['LunarLander-v2']
-    d['LunarLanderContinuousRandomInitRewardShapingAugmented-v2'] = d['LunarLander-v2']
-    d['MountainCarContinuous-v0'] = d['MountainCar-v0']
-    d['PendulumRandomInit-v0'] = d['Pendulum-v0']
-    d['AcrobotRandomInit-v1'] = d['Acrobot-v1']
-    d['Pendulum-v1'] = d['Pendulum-v0']
-    d['PendulumRandomInit-v1'] = d['Pendulum-v1']
-    d['BipedalWalker-v3'] = d['BipedalWalker-v2']
+    for key, value in {
+        'LunarLanderContinuous-v2': 'LunarLander-v2',
+        'LunarLanderNoRewardShaping-v2': 'LunarLander-v2',
+        'LunarLanderRandomInit-v2': 'LunarLander-v2',
+        'LunarLanderContinuousRandomInit-v2': 'LunarLander-v2',
+        'LunarLanderContinuousRandomInitNoRewardShaping-v2': 'LunarLander-v2',
+        'LunarLanderRewardShapingAugmented-v2': 'LunarLander-v2',
+        'LunarLanderRandomInitRewardShapingAugmented-v2': 'LunarLander-v2',
+        'LunarLanderRandomInitNoRewardShaping-v2': 'LunarLander-v2',
+        'LunarLanderContinuousRewardShapingAugmented-v2': 'LunarLander-v2',
+        'LunarLanderContinuousRandomInitRewardShapingAugmented-v2': 'LunarLander-v2',
+        'MountainCarContinuous-v0': 'MountainCar-v0',
+        'PendulumRandomInit-v0': 'Pendulum-v0',
+        'AcrobotRandomInit-v1': 'Acrobot-v1',
+        'Pendulum-v1': 'Pendulum-v0',
+        'PendulumRandomInit-v1': 'Pendulum-v1',
+        'BipedalWalker-v3': 'BipedalWalker-v2',
+    }.items():
+        if value in d.keys():
+            d[key] = d[value]
