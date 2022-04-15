@@ -383,6 +383,15 @@ def main(argv):
     np.random.seed(seed)
     tf.random.set_seed(seed)
 
+    # extra imports
+    try:
+        for module in params['import']:
+            importlib.import_module(module)
+    except BaseException as err:
+        serr = str(err)
+        print("Extra module:", serr, "cannot be loaded")
+        return -1
+
     if params['hyperparameter_search']:
         hyperparameter_search.search(
             fixed_parameters=params,
@@ -638,6 +647,7 @@ def main(argv):
             env_name=environment_name,
             labeling_function=reinforcement_learning.labeling_functions[environment_name],
             log_interval=params['log_interval'],
+            checkpoint_interval=params['checkpoint_interval'],
             log_name=vae_name,
             epsilon_greedy=params['epsilon_greedy'] if phase == 0 else 0.,
             epsilon_greedy_decay_rate=params['epsilon_greedy_decay_rate'],
@@ -683,7 +693,8 @@ def main(argv):
             local_losses_evaluation=params['local_losses_evaluation'],
             local_losses_eval_steps=params['local_losses_evaluation_steps'],
             local_losses_eval_replay_buffer_size=params['local_losses_replay_buffer_size'],
-            local_losses_reward_scaling=reinforcement_learning.reward_scaling.get(environment_name, 1.),
+            local_losses_reward_scaling=reinforcement_learning.reward_scaling.get(
+                environment_name, vae_mdp_model._dynamic_reward_scaling),
             embed_video_evaluation=params['generate_videos'],
             environment_perturbation=params['environment_perturbation'],
             recursive_environment_perturbation=params['recursive_environment_perturbation'],
@@ -954,6 +965,11 @@ if __name__ == '__main__':
         default=200,
         help="Number of time steps between each log."
     )
+    flags.DEFINE_integer(
+        'checkpoint_interval',
+        default=250,
+        help="Number of time steps between each log."
+    )
     flags.DEFINE_bool(
         'checkpoint',
         default=True,
@@ -1102,7 +1118,7 @@ if __name__ == '__main__':
     )
     flags.DEFINE_float(
         'action_entropy_regularizer_scaling',
-        default=1.,
+        default=0.,
         help="Scale factor of the action entropy regularizer."
     )
     flags.DEFINE_float(
@@ -1241,6 +1257,11 @@ if __name__ == '__main__':
         'no_reward_shaping',
         help='Whether to remove reward shaping from the input environment or not.',
         default=False
+    )
+    flags.DEFINE_multi_string(
+        'import',
+        help='list of modules to additionally import',
+        default=[]
     )
 
     FLAGS = flags.FLAGS
