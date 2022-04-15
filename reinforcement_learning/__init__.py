@@ -126,7 +126,8 @@ labeling_functions = {
         observation[..., 2] < 0.
     ], axis=-1),
 }
-labeling_functions["pacman-v0"] = lambda _: load_pacman_labeling_fn(labeling_functions)
+labeling_functions["pacman-v0"] = lambda observation: \
+    load_pacman_labeling_fn(labeling_functions)(observation)
 
 
 def load_pacman_labeling_fn(
@@ -134,9 +135,21 @@ def load_pacman_labeling_fn(
 ) -> Callable[[tf.Tensor], Bool]:
     if 'pacman-v0' in [env_spec.id for env_spec in gym.envs.registry.all()]:
         from gym_pacman.envs import pacman_env
+        
+        @tf.function
+        def pacman_labeling_fn(obs):
+            # return tf.py_function(pacman_env.labeling_function, inp=obs, Tout=tf.bool)
+            obs = tf.reshape(obs, shape=(-1, pacman_env.DIM * pacman_env.DIM, pacman_env.MAX + 1))
+            obs = tf.cast(obs, tf.bool)
+            return tf.stack([
+                tf.reduce_any(
+                    tf.logical_not(tf.logical_and(obs[..., pacman_env.PACMAN], obs[..., pacman_env.GHOST])),
+                    axis=-1),
+                tf.reduce_any(
+                    tf.logical_and(obs[..., pacman_env.PACMAN], obs[..., pacman_env.DOOR]),
+                    axis=-1)
+            ], axis=-1)
 
-        def pacman_labeling_fn(observation):
-            return tf.numpy_function(pacman_env.labeling_function, inp=observation, Tout=tf.float32)
 
         labeling_fn_dict['pacman-v0'] = pacman_labeling_fn
         return pacman_labeling_fn
