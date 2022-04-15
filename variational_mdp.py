@@ -512,6 +512,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
         self.temperature_metrics = {
             't_1': self.encoder_temperature,
             't_2': self.prior_temperature}
+        self._dynamic_reward_scaling = tf.Variable(1., trainable=False)
 
     def reset_metrics(self):
         for value in self.loss_metrics.values():
@@ -1706,7 +1707,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 "replay_buffer_frames", 'kl_annealing_scale_factor', 'state_rate',
                 "state_distortion", 'action_rate', 'action_distortion', 'mean_state_bits_used', 'wis_exponent',
                 'priority_logistic_smoothness', 'priority_logistic_mean',
-                'priority_logistic_max', 'priority_logistic_min'
+                'priority_logistic_max', 'priority_logistic_min',
+                'dynamic_reward_scaling'
             ],
             interval=0.1) if display_progressbar else None
 
@@ -1817,6 +1819,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 "replay_buffer_frames": replay_buffer.num_frames()} if not parallel_environments else {
                 "replay_buffer_frames": replay_buffer.num_frames(),
             }
+            if tf.math.not_equal(1., self._dynamic_reward_scaling):
+                additional_training_metrics['dynamic_reward_scaling'] = self._dynamic_reward_scaling
             if epsilon_greedy > 0.:
                 additional_training_metrics['epsilon_greedy'] = epsilon_greedy
             if use_prioritized_replay_buffer and not bucket_based_priorities:
@@ -1836,7 +1840,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 display_progressbar=display_progressbar,
                 start_step=start_step, epoch=0, progressbar=progressbar,
                 eval_and_save_model_interval=eval_and_save_model_interval,
-                eval_steps=eval_steps * batch_size,
+                eval_steps=eval_steps,
                 save_directory=save_directory, log_name=log_name, train_summary_writer=train_summary_writer,
                 log_interval=log_interval, start_annealing_step=start_annealing_step,
                 additional_metrics=additional_training_metrics,
@@ -1952,6 +1956,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
                                train_summary_writer=train_summary_writer,
                                eval_policy_driver=eval_policy_driver,
                                local_losses_estimator=local_losses_estimator)
+            self._dynamic_reward_scaling.assign(1.)
+
         if global_step.numpy() % log_interval == 0:
             if train_summary_writer is not None:
                 with train_summary_writer.as_default():

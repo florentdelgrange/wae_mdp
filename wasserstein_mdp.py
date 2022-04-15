@@ -813,6 +813,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.loss_metrics['marginal_variance'](marginal_variance)
         if self.include_state_encoder_entropy or self.include_action_encoder_entropy:
             self.loss_metrics['entropy_regularizer'](entropy_regularizer)
+        # dynamic reward scaling
+        self._dynamic_reward_scaling.assign(
+            tf.math.minimum(
+                self._dynamic_reward_scaling,
+                tf.pow(2. * tf.reduce_max(tf.abs(reward)), -1.)))
 
         if debug:
             tf.print("latent_state", latent_state, summarize=-1)
