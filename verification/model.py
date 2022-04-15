@@ -3,6 +3,7 @@ from typing import Callable, Optional
 
 import tensorflow as tf
 import tensorflow_probability as tfp
+from tensorflow.python.util.deprecation import deprecated
 from tf_agents.typing.types import Float
 
 from verification import binary_latent_space
@@ -209,6 +210,7 @@ class TransitionFunctionCopy(TransitionFunction):
                 indices], axis=-1), values
 
         @tf.function
+        @deprecated(date='2022-04-15', instructions='probs gathered through for loops')
         def gather_transition_probs():
             indices = tf.zeros([0, 3], dtype=tf.int64)
             values = tf.zeros([0], dtype=tf.float32)
@@ -222,7 +224,12 @@ class TransitionFunctionCopy(TransitionFunction):
                     values = tf.concat([values, _values], axis=0)
             return indices, values
 
-        indices, values = gather_transition_probs()
+        action_space = tf.one_hot(tf.range(num_actions), depth=tf.cast(num_actions, dtype=tf.int32))
+        indices, values = tf.map_fn(
+            fn=lambda s_a: get_sparse_entry(s_a[0], s_a[1]),
+            elems=(tf.repeat(latent_state_space, repeats=num_actions, axis=0),
+                   tf.tile(action_space, multiples=[num_states, 1])),
+            fn_output_signature=[tf.int32, tf.float32])
         super(TransitionFunctionCopy, self).__init__(
             transition_matrix=tf.sparse.SparseTensor(
                 indices, values, dense_shape=[num_states, num_actions, num_states]),
