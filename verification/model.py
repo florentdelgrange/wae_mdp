@@ -196,21 +196,23 @@ class TransitionFunctionCopy(TransitionFunction):
                 y=tf.zeros_like(probs))
             # normalize
             probs = probs / tf.reduce_sum(probs)
-            indices = tf.where(tf.math.not_equal(probs, tf.zeros_like(probs)))
+            indices = tf.cast(tf.where(tf.math.not_equal(probs, tf.zeros_like(probs))), tf.int32)
             values = tf.gather_nd(probs, indices)
             # base 10
             _latent_state = tf.reduce_sum(
                 tf.cast(latent_state, tf.float32) * 2. ** tf.range(latent_state_size, dtype=tf.float32), axis=-1)
-            _latent_state = tf.cast(_latent_state, tf.int64)
-            _latent_action = tf.argmax(latent_action)
+            _latent_state = tf.cast(_latent_state, tf.int32)
+            _latent_action = tf.cast(tf.argmax(latent_action), tf.int32)
+            tf.print("done: entry [S=", _latent_state, 'A=', _latent_action, ']: ',
+                     tf.cast(_latent_state, tf.float32) / tf.cast(num_states, tf.float32), '%')
             return tf.concat([
-                _latent_state * tf.ones_like(indices, dtype=tf.int64),
-                _latent_action * tf.ones_like(indices, dtype=tf.int64),
+                _latent_state * tf.ones_like(indices, dtype=tf.int32),
+                _latent_action * tf.ones_like(indices, dtype=tf.int32),
                 indices], axis=-1), values
 
         @tf.function
         def gather_transition_probs():
-            indices = tf.zeros([0, 3], dtype=tf.int64)
+            indices = tf.zeros([0, 3], dtype=tf.int32)
             values = tf.zeros([0], dtype=tf.float32)
             for latent_state in latent_state_space:
                 tf.autograph.experimental.set_loop_options(
@@ -225,7 +227,7 @@ class TransitionFunctionCopy(TransitionFunction):
         indices, values = gather_transition_probs()
         super(TransitionFunctionCopy, self).__init__(
             transition_matrix=tf.sparse.SparseTensor(
-                indices, values, dense_shape=[num_states, num_actions, num_states]),
+                tf.cast(indices, tf.int64), values, dense_shape=[num_states, num_actions, num_states]),
             split_label_from_latent_space=split_label_from_latent_space)
         self.atomic_prop_dims = atomic_prop_dims
 
@@ -271,22 +273,22 @@ class RewardFunctionCopy:
                     condition=tf.greater(probs, tf.zeros_like(probs)),
                     x=rewards,
                     y=tf.zeros_like(rewards))
-            indices = tf.where(tf.greater(tf.abs(rewards), epsilon))
+            indices = tf.cast(tf.where(tf.greater(tf.abs(rewards), epsilon)), tf.int32)
             values = tf.gather_nd(rewards, indices)
             # base 10
             _latent_state = tf.reduce_sum(
                 tf.cast(latent_state, tf.float32) * 2. ** tf.range(self.latent_state_size, dtype=tf.float32), axis=-1)
-            _latent_state = tf.cast(_latent_state, tf.int64)
-            _latent_action = tf.argmax(latent_action)
+            _latent_state = tf.cast(_latent_state, tf.int32)
+            _latent_action = tf.cast(tf.argmax(latent_action), tf.int32)
 
             return tf.concat([
-                _latent_state * tf.ones_like(indices, dtype=tf.int64),
-                _latent_action * tf.ones_like(indices, dtype=tf.int64),
+                _latent_state * tf.ones_like(indices, dtype=tf.int32),
+                _latent_action * tf.ones_like(indices, dtype=tf.int32),
                 indices], axis=-1), values
 
         @tf.function
         def gather_transition_probs():
-            indices = tf.zeros([0, 3], dtype=tf.int64)
+            indices = tf.zeros([0, 3], dtype=tf.int32)
             values = tf.zeros([0], dtype=tf.float32)
             for latent_state in latent_state_space:
                 tf.autograph.experimental.set_loop_options(
@@ -302,7 +304,7 @@ class RewardFunctionCopy:
         indices, values = gather_transition_probs()
         self.num_states = num_states
         self.transitions = tf.sparse.SparseTensor(
-            indices, values, dense_shape=[num_states, num_actions, num_states])
+            tf.cast(indices, tf.int64), values, dense_shape=[num_states, num_actions, num_states])
 
     @tf.function
     def __call__(self, latent_state: tf.Tensor, latent_action: tf.Tensor, *args, **kwargs):
