@@ -56,6 +56,12 @@ class TransitionFunction:
         self.backup_transition_function = backup_transition_function
         self.latent_state_space = binary_latent_space(self.latent_state_size, dtype=tf.float32)
 
+    def to_dense(self, *args, **kwargs) -> tf.Tensor:
+        """
+        Returns: The dense representation of the transition function tensor
+        """
+        return tf.sparse.to_dense(self.transitions)
+
     def __call__(self, latent_state: tf.Tensor, latent_action: tf.Tensor):
         """
         Gives the transition distribution formed by the input latent state and latent action.
@@ -275,6 +281,12 @@ class RewardFunctionCopy:
             fn_output_signature=tf.SparseTensorSpec(shape=[num_actions, num_states]))
         self.num_states = num_states
 
+    def to_dense(self) -> tf.Tensor:
+        """
+        Returns: The dense representation of the transition function tensor
+        """
+        return tf.sparse.to_dense(self.transitions)
+
     @tf.function
     def __call__(self, latent_state: tf.Tensor, latent_action: tf.Tensor, *args, **kwargs):
         """
@@ -366,28 +378,39 @@ class TransitionFrequencyEstimator(TransitionFunction):
             assert_distribution=assert_distribution,
             split_label_from_latent_space=split_label_from_latent_space)
 
+    @tf.function
+    def to_dense(self, backup_tensor: Optional[tf.Tensor] = None, *args, **kwargs) -> tf.Tensor:
+        """
+        Args:
+            backup_tensor: a backup tensor for zero entries
+        Returns:
+            the dense representation of this transition function
+        """
+        dense_tensor = tf.sparse.to_dense(self.transitions)
+        if backup_tensor:
+            return tf.where(
+                dense_tensor > 0,
+                dense_tensor,
+                backup_tensor)
+        else:
+            return dense_tensor
+
     def merge(self, other: TransitionFunction, epsilon: Float = 1e-12):
         a_idx = self.transitions.indices
         b_idx = other.transitions.indices
         to_retain = tf.Variable(
             tf.cast(tf.ones_like(other.transitions.values), tf.bool),
             trainable=False)
-        tf.print(b_idx, tf.shape(b_idx))
-        import time
-        time.sleep(10)
 
         @tf.function
         def _to_retain(i, j, to_retain):
             i = tf.minimum(i, tf.shape(a_idx)[0] - 1)
             j = tf.minimum(j, tf.shape(b_idx)[0] - 1)
-            tf.print("i", i, "--", "j", j)
             s, a, s_prime = a_idx[i, 0], a_idx[i, 1], a_idx[i, 2]
             _s, _a, _s_prime = b_idx[j, 0], b_idx[j, 1], b_idx[j, 2]
-            tf.print("a_idx:", a_idx[i, ...])
-            tf.print("b_idx:", b_idx[j, ...])
             if tf.greater_equal(
-                s * self.num_actions * self.num_states + a * self.num_states + s_prime,
-                _s * self.num_actions * self.num_states + _a * self.num_states + _s_prime
+                    s * self.num_actions * self.num_states + a * self.num_states + s_prime,
+                    _s * self.num_actions * self.num_states + _a * self.num_states + _s_prime
             ):
                 if tf.reduce_all(tf.equal(a_idx[i, ...], b_idx[j, ...])):
                     to_retain[j].assign(False)
@@ -395,9 +418,8 @@ class TransitionFrequencyEstimator(TransitionFunction):
                 j += 1
             else:
                 i += 1
-            tf.print("retain?", to_retain[j])
             return i, j
-        
+
         with tf.device('/CPU:0'):
             i, j = tf.constant(0, dtype=tf.int32), tf.constant(0, dtype=tf.int32)
             tf.while_loop(
@@ -406,12 +428,13 @@ class TransitionFrequencyEstimator(TransitionFunction):
                     tf.less(j, tf.shape(b_idx)[0])),
                 body=lambda i, j: _to_retain(i, j, to_retain),
                 loop_vars=[i, j],
-                swap_memory=True,)
+                swap_memory=True, )
 
             self.transitions = tf.sparse.add(
                 self.transitions,
                 tf.sparse.retain(other.transitions, to_retain),
-                threshold=epsilon,)
+                threshold=epsilon, )
+
 
 class TransitionFnDecorator:
     """
