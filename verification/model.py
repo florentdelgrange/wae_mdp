@@ -174,13 +174,13 @@ class TransitionFunctionCopy(TransitionFunction):
             tf.int32)
         latent_state_space = binary_latent_space(latent_state_size, dtype=tf.float32)
         action_space = tf.one_hot(tf.range(num_actions), depth=tf.cast(num_actions, dtype=tf.int32))
-        tiled_action_space = tf.tile(action_space, multiples=[num_states, 1])
-        state_action_space = tf.repeat(latent_state_space, repeats=num_actions, axis=0)
+        repeated_action_space = tf.repeat(action_space, repeats=num_states, axis=0)
+        state_action_space = tf.tile(latent_state_space, multiples=[num_actions, 1])
 
         @tf.function
         def _get_sparse_entry(latent_state):
             state = tf.tile(tf.expand_dims(latent_state, 0), [num_states * num_actions, 1])
-            action = tiled_action_space
+            action = repeated_action_space
             _distr = transition_function(state, action)
             if split_label_from_latent_space:
                 next_latent_states = [
@@ -195,12 +195,12 @@ class TransitionFunctionCopy(TransitionFunction):
                 x=probs,
                 y=tf.zeros_like(probs))
             # normalize
-            probs = probs / tf.reduce_sum(probs)
+            probs = tf.reshape(probs, [num_actions, num_states])
+            probs = probs / tf.reduce_sum(tf.expand_dims(probs, 1), axis=-1)
             indices = tf.where(tf.math.not_equal(probs, tf.zeros_like(probs)))
-            actions = tf.argmax(tf.gather_nd(action, indices), axis=-1)
             values = tf.gather_nd(probs, indices)
             return tf.sparse.SparseTensor(
-                indices=tf.concat([tf.expand_dims(actions, -1), indices], axis=-1),
+                indices=indices,
                 values=values,
                 dense_shape=[num_actions, num_states])
 
@@ -229,20 +229,24 @@ class RewardFunctionCopy:
             reward_function: Callable[[tf.Tensor, tf.Tensor, tf.Tensor], Float],
             transition_function: Optional[Callable[[tf.Tensor, tf.Tensor], tfd.Distribution]] = None,
             split_label_from_latent_space: bool = False,
+            atomic_prop_dims: Optional[int] = None,
             epsilon: float = 1e-6,
     ):
+        if split_label_from_latent_space and atomic_prop_dims is None:
+            raise ValueError("You need provide atomic_prop_dims if split_label_from_latent_space is set.")
+
         self.latent_state_size = tf.cast(
             tf.math.log(tf.cast(num_states, tf.float32)) / tf.math.log(2.),
             tf.int32)
         latent_state_space = binary_latent_space(self.latent_state_size, dtype=tf.float32)
         action_space = tf.one_hot(tf.range(num_actions), depth=tf.cast(num_actions, dtype=tf.int32))
-        tiled_action_space = tf.tile(action_space, multiples=[num_states, 1])
-        state_action_space = tf.repeat(latent_state_space, repeats=num_actions, axis=0)
+        repeated_action_space = tf.repeat(action_space, repeats=num_states, axis=0)
+        state_action_space = tf.tile(latent_state_space, multiples=[num_actions, 1])
 
         @tf.function
         def _get_sparse_entry(latent_state):
             state = tf.tile(tf.expand_dims(latent_state, 0), [num_states * num_actions, 1])
-            action = tiled_action_space
+            action = repeated_action_space
             rewards = tf.squeeze(reward_function(state, action, state_action_space))
             if transition_function is not None:
                 _distr = transition_function(state, action)
@@ -257,11 +261,11 @@ class RewardFunctionCopy:
                     condition=probs > epsilon,
                     x=rewards,
                     y=tf.zeros_like(rewards))
+            rewards = tf.reshape(rewards, [num_actions, num_states])
             indices = tf.where(tf.greater(tf.abs(rewards), epsilon))
             values = tf.gather_nd(rewards, indices)
-            actions = tf.argmax(tf.gather_nd(action, indices), axis=-1)
             return tf.sparse.SparseTensor(
-                indices=tf.concat([tf.expand_dims(actions, -1), indices], axis=-1),
+                indices=indices,
                 values=values,
                 dense_shape=[num_actions, num_states])
 
@@ -334,7 +338,7 @@ class TransitionFrequencyEstimator(TransitionFunction):
         j = tf.Variable(0, trainable=False)
 
         @tf.function
-        def compute_transition_probabilities(
+        def _compute_transition_probabilities(
                 transition_counter: tf.sparse.SparseTensor,
                 probs: tf.Variable,
                 i: tf.Variable,
@@ -357,7 +361,7 @@ class TransitionFrequencyEstimator(TransitionFunction):
             return tf.sparse.reorder(transition_tensor)
 
         super(TransitionFrequencyEstimator, self).__init__(
-            transition_matrix=compute_transition_probabilities(transition_counter, probs, i, j),
+            transition_matrix=_compute_transition_probabilities(transition_counter, probs, i, j),
             backup_transition_function=backup_transition_function,
             assert_distribution=assert_distribution,
             split_label_from_latent_space=split_label_from_latent_space)
@@ -378,10 +382,10 @@ class TransitionFrequencyEstimator(TransitionFunction):
             j = tf.minimum(j, tf.shape(b_idx)[0] - 1)
             tf.print("i", i, "--", "j", j)
             s, a, s_prime = a_idx[i, 0], a_idx[i, 1], a_idx[i, 2]
-            s_, a_, s_prime_ = b_idx[j, 0], b_idx[j, 1], b_idx[j, 2]
+            _s, _a, _s_prime = b_idx[j, 0], b_idx[j, 1], b_idx[j, 2]
             tf.print("a_idx:", a_idx[i, ...])
             tf.print("b_idx:", b_idx[j, ...])
-            if tf.geq(
+            if tf.greater_equal(
                 s * self.num_actions * self.num_states + a * self.num_states + s_prime,
                 _s * self.num_actions * self.num_states + _a * self.num_states + _s_prime
             ):
