@@ -273,6 +273,7 @@ def search(
                 print("{}={}".format(key, hyperparameters[key]))
 
         hyperparameters['global_network_layers'] = hyperparameters['hidden'] * [hyperparameters['neurons']]
+        hyperparameters['wae'] = fixed_parameters['wae']
         update_layer_params(hyperparameters)
 
         evaluation_window_size = fixed_parameters['evaluation_window_size']
