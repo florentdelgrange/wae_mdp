@@ -149,7 +149,16 @@ def search(
         else:
             time_stacked_states = 1
 
-        latent_state_size = fixed_parameters['latent_size']
+        specs = get_environment_specs(
+            environment_suite=environment_suite,
+            environment_name=environment_name,
+            discrete_action_space=not fixed_parameters['action_discretizer'],
+            time_stacked_states=time_stacked_states)
+        if fixed_parameters['latent_size'] <= 0:
+            latent_state_size = trial.suggest_int(
+                'latent_state_size', specs.label_shape[0] + 3, max(15, specs.label_shape[0] + 8))
+        else:
+            latent_state_size = fixed_parameters['latent_size']
 
         prioritized_experience_replay = fixed_parameters['prioritized_experience_replay']
 
@@ -195,7 +204,11 @@ def search(
             state_decoder_pre_processing_network = False
 
         if fixed_parameters['action_discretizer']:
-            number_of_discrete_actions = fixed_parameters['number_of_discrete_actions']
+            if fixed_parameters['number_of_discrete_actions'] <= 0:
+                number_of_discrete_actions = trial.suggest_int(
+                    'number_of_discrete_actions', 2, fixed_parameters['number_of_discrete_actions'])
+            else:
+                number_of_discrete_actions = fixed_parameters['number_of_discrete_actions']
             action_temperature_base = 1. / (number_of_discrete_actions - 1)
             if fixed_parameters['action_encoder_temperature'] < 0:
                 action_encoder_temperature = trial.suggest_categorical(
@@ -209,11 +222,6 @@ def search(
                 latent_policy_temperature = fixed_parameters['latent_policy_temperature']
 
         else:
-            specs = get_environment_specs(
-                environment_suite=environment_suite,
-                environment_name=environment_name,
-                discrete_action_space=not fixed_parameters['action_discretizer'],
-                time_stacked_states=time_stacked_states)
             action_temperature_base = 1. / (specs.action_shape[0] - 1)
             number_of_discrete_actions = fixed_parameters['number_of_discrete_actions']
             action_encoder_temperature = -1.
