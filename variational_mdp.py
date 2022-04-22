@@ -14,6 +14,7 @@ from reinforcement_learning.environments.latent_environment import LatentEmbeddi
 from reinforcement_learning.environments.no_reward_shaping import NoRewardShapingWrapper
 from reinforcement_learning.environments.perturbed_env import PerturbedEnvironment
 from util.io.video import VideoEmbeddingObserver
+from verification.model import TransitionFnDecorator
 
 try:
     import reverb
@@ -193,7 +194,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
         # the evaluation window contains eiter the N max evaluation scores encountered during training if the evaluation
         # criterion is MAX, or the N last evaluation scores encountered if the evaluation criterion is MEAN.
         self.evaluation_criterion = evaluation_criterion
-        self.evaluation_window = tf.Variable(
+        self._evaluation_window = tf.Variable(
             initial_value=-1. * np.inf * tf.ones(shape=(evaluation_window_size,)),
             trainable=False,
             name='evaluation_window')
@@ -511,6 +512,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
         self.temperature_metrics = {
             't_1': self.encoder_temperature,
             't_2': self.prior_temperature}
+        self._dynamic_reward_scaling = tf.Variable(1., trainable=False)
 
     def reset_metrics(self):
         for value in self.loss_metrics.values():
@@ -1035,6 +1037,10 @@ class VariationalMarkovDecisionProcess(tf.Module):
         check = lambda x: 1 if 1 - eps > x > eps else 0
         mean_bits_used += tf.reduce_sum(tf.map_fn(check, mean), axis=0).numpy()
         return {'mean_state_bits_used': mean_bits_used}
+
+    @property
+    def evaluation_window(self):
+        return self._evaluation_window
 
     @property
     def _has_dedicated_label_transition_network(self):
@@ -1562,7 +1568,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             dataset_iterator=dataset_iterator,
             epsilon_greedy=epsilon_greedy)
 
-    def save(self, save_directory, model_name: str, signatures: Optional[Dict]):
+    def save(self, save_directory, model_name: str, signatures: Optional[Dict] = None, *args, **kwargs):
         if check_numerics:
             tf.debugging.disable_check_numerics()
 
@@ -1572,7 +1578,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
         (state_shape, label_shape, action_shape, reward_shape) = (
             tuple(shape) for shape in
-            [self.state_shape, (self.atomic_props_dims, ), self.action_shape, self.reward_shape])
+            [self.state_shape, (self.atomic_props_dims,), self.action_shape, self.reward_shape])
 
         if signatures is None:
             signatures = dict()
@@ -1701,7 +1707,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 "replay_buffer_frames", 'kl_annealing_scale_factor', 'state_rate',
                 "state_distortion", 'action_rate', 'action_distortion', 'mean_state_bits_used', 'wis_exponent',
                 'priority_logistic_smoothness', 'priority_logistic_mean',
-                'priority_logistic_max', 'priority_logistic_min'
+                'priority_logistic_max', 'priority_logistic_min',
+                'dynamic_reward_scaling'
             ],
             interval=0.1) if display_progressbar else None
 
@@ -1801,17 +1808,12 @@ class VariationalMarkovDecisionProcess(tf.Module):
             # Collect a few steps and save them to the replay buffer.
             driver.run(env.current_time_step())
 
-            if tf.logical_and(tf.equal(global_step, 100), save_directory is not None):
-                _time = time.time()
-                print("Saving base model")
-                self.save(save_directory, os.path.join(log_name, 'base'))
-                save_time = time.time() - _time
-                save_time += 10.  # epsilon
-
             additional_training_metrics = {
                 "replay_buffer_frames": replay_buffer.num_frames()} if not parallel_environments else {
                 "replay_buffer_frames": replay_buffer.num_frames(),
             }
+            if tf.math.not_equal(1., self._dynamic_reward_scaling):
+                additional_training_metrics['dynamic_reward_scaling'] = self._dynamic_reward_scaling
             if epsilon_greedy > 0.:
                 additional_training_metrics['epsilon_greedy'] = epsilon_greedy
             if use_prioritized_replay_buffer and not bucket_based_priorities:
@@ -1831,7 +1833,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 display_progressbar=display_progressbar,
                 start_step=start_step, epoch=0, progressbar=progressbar,
                 eval_and_save_model_interval=eval_and_save_model_interval,
-                eval_steps=eval_steps * batch_size,
+                eval_steps=eval_steps,
                 save_directory=save_directory, log_name=log_name, train_summary_writer=train_summary_writer,
                 log_interval=log_interval, start_annealing_step=start_annealing_step,
                 additional_metrics=additional_training_metrics,
@@ -1872,13 +1874,18 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 if tf.reduce_any(tf.logical_or(tf.math.is_nan(value), tf.math.is_inf(value))):
                     logging.warning("{} is NaN or Inf: {}".format(key, value))
 
+        score = tf.reduce_mean(self.evaluation_window[self.evaluation_window > - np.inf])
+
         # save the final model
-        if save_directory is not None:
-            self.save(save_directory, os.path.join(log_name, 'step{:d}'.format(global_step.numpy())))
+        if save_directory is not None and checkpoint is not None:
+            self.save(
+                save_directory,
+                os.path.join(log_name, 'step{:d}'.format(global_step.numpy())),
+                infos={'step': global_step.numpy(), 'score': score})
         if close_at_the_end:
             close()
 
-        return {'score': tf.reduce_mean(self.evaluation_window[self.evaluation_window > - np.inf]),
+        return {'score': score,
                 'continue': not (wall_time_exceeded or close_at_the_end or memory_limit_exceeded)}
 
     def training_step(
@@ -1942,6 +1949,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
                                train_summary_writer=train_summary_writer,
                                eval_policy_driver=eval_policy_driver,
                                local_losses_estimator=local_losses_estimator)
+            self._dynamic_reward_scaling.assign(1.)
+
         if global_step.numpy() % log_interval == 0:
             if train_summary_writer is not None:
                 with train_summary_writer.as_default():
@@ -2236,11 +2245,9 @@ class VariationalMarkovDecisionProcess(tf.Module):
             labeling_function=(
                 lambda x: labeling_function(x)[:, -1, ...]
             ) if self.time_stacked_states else labeling_function,
-            latent_transition_function=(
-                lambda latent_state, action:
-                self.discrete_latent_transition(
-                    latent_state=tf.cast(latent_state, tf.float32),
-                    action=action)),
+            latent_transition_function=lambda state, action: TransitionFnDecorator(
+                next_state_distribution=self.discrete_latent_transition(tf.cast(state, tf.float32), action),
+                atomic_prop_dims=self.atomic_prop_dims),
             estimate_transition_function_from_samples=estimate_transition_function_from_samples,
             assert_transition_distribution=assert_estimated_transition_function_distribution,
             replay_buffer_max_frames=replay_buffer_max_frames,

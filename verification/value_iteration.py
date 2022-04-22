@@ -23,6 +23,22 @@ error = {
 }
 
 
+def vi_tensor_size(
+        latent_state_size: Int,
+        num_actions: Int,
+        episodic_return: bool = True,
+) -> tf.int32:
+    state_space_size = 2 ** latent_state_size
+    return tf.float32.size * (
+        state_space_size * latent_state_size + # state space
+        num_actions ** 2 +  # action space
+        (state_space_size if episodic_return else 0) +  # reset state test
+        state_space_size * num_actions +  # policy probs
+        2 * state_space_size ** 2 * num_actions +  # transitions and rewards
+        state_space_size * num_actions +  # q-values
+        3 * state_space_size  # values, next values, delta computation
+    )
+
 @tf.function
 def value_iteration(
         latent_state_size: Int,
@@ -35,8 +51,10 @@ def value_iteration(
         epsilon: Float = 1e-6,
         is_reset_state_test_fn: Optional[Callable[[tf.Tensor], Bool]] = None,
         episodic_return: bool = True,
-        debug: bool = True,
+        debug: bool = False,
         v_init: Optional[Float] = None,
+        transition_matrix: Optional[tf.Tensor] = None,
+        reward_matrix: Optional[tf.Tensor] = None,
 ) -> Dict[str, Float]:
     """
     Iteratively compute the value of (i.e., the expected return obtained from running an input policy from) each state up
@@ -61,6 +79,13 @@ def value_iteration(
                          If True, is_reset_state_fn has to be provided. In that case, values obtained by transitioning
                          to a reset state will be ignored.
         debug: whether to display iteration error and time metrics 
+        v_init: (optional) initial values; if not provided, values are initialized with zeros
+        transition_matrix: (optional) Transition probabilities in the form of a [S, A, S] tensor, where S is the number
+                           of states and A is the number of actions. If provided along with reward_matrix, computations
+                           are made directly via tensor operations (requires more memory, but yields faster operations).
+        reward_matrix: (optional) Rewards in the form of a [S, A, S] tensor, where S is the number
+                       of states and A is the number of actions. If provided along with transition_matrix, computations
+                       are made directly via tensor operations (requires more memory, but yields faster operations).
     """
     if error_type not in [Error.RELATIVE, Error.ABSOLUTE]:
         error_type = error[error_type]
@@ -72,10 +97,14 @@ def value_iteration(
 
     delta = tf.constant(float('inf'))
     state_space = binary_latent_space(latent_state_size, dtype=tf.float32)
+    if is_reset_state_test_fn is None:
+        not_reset_states = tf.ones(shape=tf.shape(state_space)[:1])
+    else:
+        not_reset_states = 1. - tf.cast(is_reset_state_test_fn(state_space), tf.float32)
     action_space = tf.one_hot(indices=tf.range(num_actions), depth=tf.cast(num_actions, tf.int32), dtype=tf.float32)
     policy_probs = policy(state_space).probs_parameter()
 
-    def q_s(state: Float, values: tf.Tensor):
+    def _q_s(state: Float, values: tf.Tensor):
         _state = tf.reduce_sum(tf.cast(state, tf.int32) * 2 ** tf.range(tf.shape(state)[0]), axis=-1)
         return tf.transpose(
             tf.map_fn(
@@ -96,50 +125,56 @@ def value_iteration(
                 fn_output_signature=tf.float32))
 
     @tf.function
-    def update_values(
-            values: tf.Tensor,
-            delta: Float,
-            error_scale: Float = 1.,
-    ):
+    def _update_values(values: tf.Tensor, _):
         q_values = tf.map_fn(
-            fn=lambda state: q_s(state, values),
+            fn=lambda state: _q_s(state, values),
             elems=state_space,
             fn_output_signature=tf.float32)
         next_values = tf.map_fn(
             fn=lambda state: compute_next_value(
                 state=state,
                 q_values=q_values,
-                num_actions=num_actions,
                 policy_probs=policy_probs, ),
             elems=state_space)
+        delta = _compute_error(values, next_values)
+        return next_values, delta
 
+    @tf.function
+    def _update_values_matrices(values: tf.Tensor, _):
+        q_values = tf.reduce_sum(
+            transition_matrix * (reward_matrix + gamma * values),
+            axis=-1)
+        next_values = tf.reduce_sum(q_values * policy_probs, axis=-1)
+        if episodic_return:
+            next_values *= not_reset_states
+        delta = _compute_error(values, next_values)
+        return next_values, delta
+
+    @tf.function
+    def _compute_error(values, next_values):
         if error_type is Error.ABSOLUTE:
             delta = tf.reduce_max(tf.abs(next_values - values))
         else:
             delta = tf.reduce_max(
-                tf.abs(1. -
-                       tf.where(
-                           condition=values == next_values,
-                           x=tf.ones_like(values),
-                           y=values / next_values)))
-
+                tf.abs(1. - tf.where(
+                    condition=values == next_values,
+                    x=tf.ones_like(values),
+                    y=values / next_values)))
         if debug:
-            progress = tf.maximum((tf.math.log(delta) - tf.math.log(error_scale)) * 100. / tf.math.log(epsilon), 0.)
-            # sys.stdout.write('\r')
-            # tf.print("progress: {:.3g} % -- current error: {:.3g}".format(progress, delta))
-            # sys.stdout.write("progress: {:.3g} % -- current error: {:.3g}".format(progress, delta))
+            progress = tf.clip_by_value(
+                tf.math.log(delta) * 100. / tf.math.log(epsilon), 0., 100.)
             tf.print('\r', "VI progress:", progress, '% --', 'current error:', delta, output_stream=sys.stdout)
             sys.stdout.flush()
+        return delta
 
-        return next_values, delta
-
-
-    values, delta = update_values(values, delta)
-    error_scale = tf.maximum(delta, 1.)
-
+    if transition_matrix is not None and reward_matrix is not None:
+        update_values = _update_values_matrices
+    else:
+        update_values = _update_values
+    
     values, _ = tf.while_loop(
         cond=lambda _, _delta: tf.greater_equal(_delta, epsilon),
-        body=lambda _values, _delta: update_values(_values, _delta, error_scale),
+        body=update_values,
         loop_vars=[values, delta], )
 
     return values
@@ -148,7 +183,6 @@ def value_iteration(
 def compute_next_value(
         state: tf.Tensor,
         q_values: tf.Tensor,
-        num_actions: int,
         policy_probs: Optional[tf.Tensor] = None,
         policy: Optional[Callable[[Int], tfd.OneHotCategorical]] = None,
 ) -> Float:
@@ -159,7 +193,6 @@ def compute_next_value(
                where S is the number of bits used to represent each individual state
         q_values: tensor containing the Q-values of the current step; expected shape: [2**S, A]
                where 2**S is the size of the state space, and A is the size of the action space
-        num_actions: number of actions, i.e., A.
         policy_probs: tensor containing the probability of each individual action returned by the policy;
                       expected shape: [2**S, A].
                       If not provided, then the policy function is used directly to compute those probabilities.
@@ -230,7 +263,8 @@ def compute_next_q_value(
             next_states = state_space
         tiled_state = tile(state)
         tiled_action = tile(action)
-        reward = reward_fn(tiled_state, tiled_action, next_states)[..., 0]  # unidimensional reward
+
+        reward = tf.squeeze(reward_fn(tiled_state, tiled_action, next_states))
 
         return tf.reduce_sum(
             transition_fn(

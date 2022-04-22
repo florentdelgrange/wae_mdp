@@ -117,8 +117,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             entropy_regularizer_scale_factor: float = 0.,
             entropy_regularizer_decay_rate: float = 0.,
             entropy_regularizer_scale_factor_min_value: float = 0.,
-            evaluation_window_size: int = 1,
-            evaluation_criterion: EvaluationCriterion = EvaluationCriterion.MAX,
             importance_sampling_exponent: Optional[Float] = 1.,
             importance_sampling_exponent_growth_rate: Optional[Float] = 0.,
             time_stacked_lstm_units: int = 128,
@@ -132,6 +130,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             state_encoder_type: EncodingType = EncodingType.AUTOREGRESSIVE,
             policy_based_decoding: bool = False,
             deterministic_state_embedding: bool = True,
+            state_encoder_softclipping: bool = True,
             *args, **kwargs
     ):
         super(WassersteinMarkovDecisionProcess, self).__init__(
@@ -143,8 +142,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             prior_temperature_decay_rate=prior_temperature_decay_rate,
             pre_loaded_model=True, optimizer=None,
             reset_state_label=reset_state_label,
-            evaluation_window_size=evaluation_window_size,
-            evaluation_criterion=evaluation_criterion,
+            evaluation_window_size=0,
+            evaluation_criterion=EvaluationCriterion.MEAN,
             importance_sampling_exponent=importance_sampling_exponent,
             importance_sampling_exponent_growth_rate=importance_sampling_exponent_growth_rate,
             time_stacked_lstm_units=time_stacked_lstm_units,
@@ -176,8 +175,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.trainable_prior = trainable_prior
         self.include_state_encoder_entropy = not (
                 entropy_regularizer_scale_factor < epsilon
-                and state_encoder_type is EncodingType.DETERMINISTIC)
-        self.include_action_encoder_entropy = action_entropy_regularizer_scaling < epsilon
+                or state_encoder_type is EncodingType.DETERMINISTIC)
+        self.include_action_encoder_entropy = not (action_entropy_regularizer_scaling < epsilon)
+        self._state_encoder_type = state_encoder_type
 
         if self.action_discretizer:
             self.number_of_discrete_actions = number_of_discrete_actions
@@ -198,11 +198,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.latent_policy_temperature = latent_policy_temperature
 
         self._sample_additional_transition = False
-        # softclipping for latent states logits; 3 offers an probability error of about 5e-2
-        # scale = 10.
-        # self.softclip = tfb.Chain([tfb.Scale(scale), tfb.Tanh(), tfb.Scale(1. / scale)], name="softclip")
-        # self.softclip = tfb.SoftClip(low=-scale, high=scale)
-        self.softclip = tfb.Identity()
+        if state_encoder_softclipping:
+            self.softclip = tf.nn.tanh
+        else:
+            self.softclip = tfb.Identity()
 
         state = tfkl.Input(shape=state_shape, name="state")
         action = tfkl.Input(shape=action_shape, name="action")
@@ -263,7 +262,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             hidden_units=transition_network.hidden_units,
             conditional_event_shape=(self.latent_state_size + self.number_of_discrete_actions,),
             temperature=self.state_prior_temperature,
-            output_softclip=self.softclip,
             name='autoregressive_transition_network')
         # stationary distribution over latent states
         self.latent_stationary_network: AutoRegressiveBernoulliNetwork = SteadyStateNetwork(
@@ -273,7 +271,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             hidden_units=transition_network.hidden_units,
             trainable_prior=trainable_prior,
             temperature=self.state_prior_temperature,
-            output_softclip=self.softclip,
             name='latent_stationary_network')
         # latent policy
         self.latent_policy_network = LatentPolicyNetwork(
@@ -359,11 +356,15 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             'steady_state_regularizer': Mean('steady_state_wasserstein_regularizer'),
             'gradient_penalty': Mean('gradient_penalty'),
             'marginal_state_encoder_entropy': Mean('marginal_state_encoder_entropy'),
-            'state_encoder_entropy': Mean('state_encoder_entropy'),
-            'entropy_regularizer': Mean('entropy_regularizer'),
             'transition_log_probs': Mean('transition_log_probs'),
-            'binary_encoding_log_probs': Mean('binary_encoding_log_probs'),
         }
+        if self.include_state_encoder_entropy or self.include_action_encoder_entropy:
+            self.loss_metrics['entropy_regularizer'] = Mean('entropy_regularizer')
+        if state_encoder_type is not EncodingType.DETERMINISTIC:
+            self.loss_metrics.update({
+                'binary_encoding_log_probs': Mean('binary_encoding_log_probs'),
+                'state_encoder_entropy': Mean('state_encoder_entropy'),
+            })
         if self.policy_based_decoding:
             self.loss_metrics['marginal_variance'] = Mean(name='marginal_variance')
         elif self.action_discretizer:
@@ -375,6 +376,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 't_1_action': self.action_encoder_temperature,
                 't_2_action': self.latent_policy_temperature,
             })
+
+        self._score = Mean("wae_score")
+        self._last_score = None
+
+    @property
+    def evaluation_window(self):
+        return tf.expand_dims(self._score.result(), 0)
 
     def anneal(self):
         super().anneal()
@@ -774,11 +782,12 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             steady_state_gradient_penalty + transition_loss_gradient_penalty)
         self.loss_metrics['marginal_state_encoder_entropy'](
             self.marginal_state_encoder_entropy(logits=logits, sample_probability=sample_probability))
-        self.loss_metrics['state_encoder_entropy'](
-            tfd.Independent(
-                tfd.Bernoulli(logits=logits),
-                reinterpreted_batch_ndims=1
-            ).entropy())
+        if self._state_encoder_type is not EncodingType.DETERMINISTIC: 
+            self.loss_metrics['state_encoder_entropy'](
+                tfd.Independent(
+                    tfd.Bernoulli(logits=logits),
+                    reinterpreted_batch_ndims=1
+                ).entropy())
         self.loss_metrics['latent_policy_entropy'](
             self.discrete_latent_policy(latent_state).entropy())
         self.loss_metrics['transition_log_probs'](
@@ -788,10 +797,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     tf.argmax(latent_action, axis=-1),
                     depth=self.number_of_discrete_actions)
             ).log_prob(tf.round(next_latent_state)))
-        self.loss_metrics['binary_encoding_log_probs'](
-            self.binary_encode_state(
-                state=state
-            ).log_prob(tf.round(latent_state)[..., self.atomic_props_dims:]))
+        if self._state_encoder_type is not EncodingType.DETERMINISTIC:
+            self.loss_metrics['binary_encoding_log_probs'](
+                self.binary_encode_state(
+                    state=state
+                ).log_prob(tf.round(latent_state)[..., self.atomic_props_dims:]))
         if self.action_discretizer and not self.policy_based_decoding:
             self.loss_metrics['marginal_action_encoder_entropy'](
                 self.marginal_action_encoder_entropy(latent_state, action))
@@ -799,7 +809,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 self.discrete_action_encoding(latent_state, action).entropy())
         elif self.policy_based_decoding:
             self.loss_metrics['marginal_variance'](marginal_variance)
-        self.loss_metrics['entropy_regularizer'](entropy_regularizer)
+        if self.include_state_encoder_entropy or self.include_action_encoder_entropy:
+            self.loss_metrics['entropy_regularizer'](entropy_regularizer)
+        # dynamic reward scaling
+        self._dynamic_reward_scaling.assign(
+            tf.math.minimum(
+                self._dynamic_reward_scaling,
+                tf.pow(2. * tf.reduce_max(tf.abs(reward)), -1.)))
 
         if debug:
             tf.print("latent_state", latent_state, summarize=-1)
@@ -1085,8 +1101,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         if self.include_state_encoder_entropy:
             entropy_regularizer = self.entropy_regularizer_scale_factor * output['entropy_regularizer']
-        else:
+        elif self.include_action_encoder_entropy:
             entropy_regularizer = output['entropy_regularizer']
+        else:
+            entropy_regularizer = 0.
 
         loss = lambda minimize: tf.reduce_mean(
             (-1.) ** (1. - minimize) * is_weights * (
@@ -1300,15 +1318,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         if self.time_stacked_states:
             labeling_function = lambda x: labeling_function(x)[:, -1, ...]
 
-        class LatentTransitionFunction:
-            def __init__(self, discrete_latent_transition, latent_state, latent_action):
-                self._distribution = discrete_latent_transition(
-                    latent_state=tf.cast(latent_state, tf.float32),
-                    latent_action=tf.cast(latent_action, tf.float32))
-
-            def prob(self, label, state_without_label, **kwargs) -> Float:
-                return self._distribution.prob(tf.concat([label, state_without_label], axis=-1))
-
         return estimate_local_losses_from_samples(
             environment=environment,
             latent_policy=self.get_latent_policy(action_dtype=tf.int64),
@@ -1325,10 +1334,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     next_latent_state=tf.cast(next_latent_state, dtype=tf.float32),
                 ).mode()),
             labeling_function=labeling_function,
-            latent_transition_function=lambda latent_state, latent_action: LatentTransitionFunction(
-                discrete_latent_transition=self.discrete_latent_transition,
-                latent_state=latent_state,
-                latent_action=latent_action),
+            latent_transition_function=lambda _latent_state, _latent_action: self.discrete_latent_transition(
+                tf.cast(_latent_state, tf.float32), tf.cast(_latent_action, tf.float32)),
             estimate_transition_function_from_samples=estimate_transition_function_from_samples,
             replay_buffer_max_frames=replay_buffer_max_frames,
             reward_scaling=reward_scaling,
@@ -1409,7 +1416,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             score['eval_policy'] = self.eval_policy(
                 eval_policy_driver=eval_policy_driver,
                 train_summary_writer=train_summary_writer,
-                global_step=global_step)
+                global_step=global_step
+            ).numpy()
 
         if local_losses_estimator is not None:
             local_losses_metrics = local_losses_estimator()
@@ -1442,13 +1450,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             tf.print('Local transition loss: {:.2f}'.format(local_losses_metrics.local_transition_loss))
             tf.print('Local transition loss (empirical transition function): {:.2f}'
                      ''.format(local_losses_metrics.local_transition_loss_transition_function_estimation))
-            score['local_reward_loss'] = local_losses_metrics.local_reward_loss
-            score['local_transition_loss'] = local_losses_metrics.local_transition_loss
+            score['local_reward_loss'] = local_losses_metrics.local_reward_loss.numpy()
+            score['local_transition_loss'] = local_losses_metrics.local_transition_loss.numpy()
             if local_losses_metrics.local_transition_loss_transition_function_estimation is not None and \
                     local_losses_metrics.local_transition_loss_transition_function_estimation \
                     < local_losses_metrics.local_transition_loss:
                 score['local_transition_loss'] = \
-                    local_losses_metrics.local_transition_loss_transition_function_estimation
+                    local_losses_metrics.local_transition_loss_transition_function_estimation.numpy()
 
             for key, value in local_losses_metrics.value_difference.items():
                 tf.print(key, value)
@@ -1457,45 +1465,46 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         if eval_steps > 0:
             print('eval loss: ', metrics['eval_loss'].result().numpy())
 
-        if eval_policy_driver is not None or eval_steps > 0:
+        if eval_policy_driver is not None:
             self.assign_score(
                 score=score,
                 checkpoint_model=save_directory is not None and log_name is not None,
                 save_directory=save_directory,
-                model_name=log_name,
+                model_name='model',
                 training_step=global_step.numpy())
 
         gc.collect()
 
         return metrics['eval_loss'].result()
 
-    def save(self, save_directory, model_name: str, infos: Optional[Dict] = None):
+    def save(self, save_directory, model_name: str, infos: Optional[Dict] = None, *args, **kwargs):
         import os
         import json
 
         if infos is None:
             infos = dict()
+        else:
+            for key, value in infos.items():
+                infos[key] = str(value)
 
         save_path = os.path.join(save_directory, model_name)
         if not os.path.exists(save_path):
             os.makedirs(save_path)
-
-        # save base model architecture
-        tf.saved_model.save(self._base_architecture, save_path)
 
         # save model variables through checkpointing
         optimizer = self.detach_optimizer()
         priority_handler = self.priority_handler
         self.priority_handler = None
         checkpoint = tf.train.Checkpoint(model=self)
-        checkpoint.save(os.path.join(os.path.join('ckpt')))
+        checkpoint.save(os.path.join(save_path, 'ckpt'))
         self.attach_optimizer(optimizer)
         self.priority_handler = priority_handler
 
         # dump model infos
         with open(os.path.join(save_path, 'model_infos.json'), 'w') as file:
-            json.dump(self._params | infos, file)
-            print('parameters written to:', save_path)
+            json.dump({**self._params, **infos}, file)
+
+        print('Model saved to:', save_path)
 
     def assign_score(
             self,
@@ -1506,33 +1515,21 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             training_step: int,
             save_best_only: bool = True,
     ):
-        """
-        Stores the input score into the model evaluation window according to its evaluation criterion.
-        If the evaluation window is modified this way and the checkpoint_model flag is set, then a model checkpoint is
-        stored into the specified save directory.
-        """
-        if (self.evaluation_criterion is EvaluationCriterion.MEAN) \
-                or tf.reduce_any(self.evaluation_window == -1. * np.inf):
-            _score = score['eval_policy']
-            for i in tf.range(tf.shape(self.evaluation_window)[0]):
-                _score_tmp = self.evaluation_window[i]
-                self.evaluation_window[i].assign(_score)
-                _score = _score_tmp
-        elif self.evaluation_criterion is EvaluationCriterion.MAX:
-            for i in tf.range(tf.shape(self.evaluation_window)[0]):
-                if self.evaluation_window[i] <= score['eval_policy']:
-                    self.evaluation_window[i].assign(score['eval_policy'])
-                    break
+        self._score(score['eval_policy'])
+        score['training_step'] = training_step
+        self._last_score = score['eval_policy']
 
         if checkpoint_model:
             import os
-            if save_best_only and os.path.exists(os.path.join(save_directory, model_name)):
-                with open(os.path.join(save_directory, model_name, 'model_infos.json')) as f:
+            if save_best_only and os.path.exists(os.path.join(save_directory, model_name, 'model_infos.json')):
+                with open(os.path.join(save_directory, model_name, 'model_infos.json'), 'r') as f:
                     infos = json.load(f)
-                eval_policy = float(infos.get('eval_policy', None))
-                local_transition_loss = float(infos.get('local_transition_loss', None))
-                local_reward_loss = float(infos.get('local_reward_loss', None))
-                if eval_policy is not None and score['eval_policy'] > eval_policy:
+                eval_policy = float(infos['eval_policy']) if 'eval_policy' in infos.keys() else None
+                local_transition_loss = float(infos.get('local_transition_loss', None)) \
+                    if 'local_transition_loss' in infos.keys() else None
+                local_reward_loss = float(infos.get('local_reward_loss', None)) \
+                    if 'local_reward_loss' in infos.keys() else None
+                if eval_policy is None or score['eval_policy'] > eval_policy:
                     self.save(save_directory, model_name, score)
                 elif np.abs(eval_policy - score['eval_policy']) < epsilon and (
                         local_transition_loss is not None and local_reward_loss is not None and
@@ -1561,6 +1558,6 @@ def load(model_path: str):
 
     model = WassersteinMarkovDecisionProcess(**params)
     checkpoint = tf.train.Checkpoint(model=model)
-    checkpoint.restore(model_path)
+    checkpoint.restore(os.path.join(model_path, 'ckpt-1'))
 
     return model

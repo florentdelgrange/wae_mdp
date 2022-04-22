@@ -383,11 +383,20 @@ def main(argv):
     np.random.seed(seed)
     tf.random.set_seed(seed)
 
+    # extra imports
+    try:
+        for module in params['import']:
+            importlib.import_module(module)
+    except BaseException as err:
+        serr = str(err)
+        print("Extra module:", serr, "cannot be loaded")
+        return -1
+
     if params['hyperparameter_search']:
         hyperparameter_search.search(
             fixed_parameters=params,
             num_steps=params['max_steps'],
-            study_name='study_seed={}'.format(params['seed']),
+            study_name=params['study_name'],
             n_trials=params['hyperparameter_search_trials'],
             wall_time=None if params['wall_time'] == '.' else params['wall_time'])
         return 0
@@ -606,13 +615,14 @@ def main(argv):
                 'deterministic': EncodingType.DETERMINISTIC
             }[params['state_encoder_type']],
             deterministic_state_embedding=params['deterministic_state_embedding'],
+            state_encoder_softclipping=params['state_encoder_softclipping']
         )
         models = [wae_mdp]
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
 
     for phase, vae_mdp_model in enumerate(models):
         checkpoint_directory = os.path.join(
-            params['save_dir'], 'saves', environment_name, 'training_checkpoints', vae_name)
+            params['save_dir'], 'saves', environment_name, vae_name, 'training_checkpoints')
         if params['checkpoint']:
             print("checkpoint path:", checkpoint_directory)
             checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=vae_mdp_model, step=step)
@@ -638,7 +648,8 @@ def main(argv):
             env_name=environment_name,
             labeling_function=reinforcement_learning.labeling_functions[environment_name],
             log_interval=params['log_interval'],
-            log_name=os.path.join(params['logdir'], environment_name, vae_name),
+            checkpoint_interval=params['checkpoint_interval'],
+            log_name=vae_name,
             epsilon_greedy=params['epsilon_greedy'] if phase == 0 else 0.,
             epsilon_greedy_decay_rate=params['epsilon_greedy_decay_rate'],
             batch_size=batch_size, optimizer=optimizer, checkpoint=checkpoint,
@@ -660,10 +671,10 @@ def main(argv):
                 params['max_steps'] if not params['decompose_training'] or phase == 1
                 else params['max_steps'] // 2),
             display_progressbar=params['display_progressbar'],
-            save_directory=params['save_dir'] if params['checkpoint'] else None,
+            save_directory=params['save_dir'],
             parallel_environments=params['parallel_env'] > 1,
             num_parallel_environments=params['parallel_env'],
-            eval_steps=int(1e3) if not params['do_not_eval'] else 0,
+            eval_steps=int(1e5) if not params['do_not_eval'] else 0,
             eval_and_save_model_interval=params['evaluation_interval'],
             policy_evaluation_num_episodes=(
                 0 if not (params['action_discretizer'] or params['latent_policy'])
@@ -683,7 +694,8 @@ def main(argv):
             local_losses_evaluation=params['local_losses_evaluation'],
             local_losses_eval_steps=params['local_losses_evaluation_steps'],
             local_losses_eval_replay_buffer_size=params['local_losses_replay_buffer_size'],
-            local_losses_reward_scaling=reinforcement_learning.reward_scaling.get(environment_name, 1.),
+            local_losses_reward_scaling=reinforcement_learning.reward_scaling.get(
+                environment_name, vae_mdp_model._dynamic_reward_scaling),
             embed_video_evaluation=params['generate_videos'],
             environment_perturbation=params['environment_perturbation'],
             recursive_environment_perturbation=params['recursive_environment_perturbation'],
@@ -954,6 +966,11 @@ if __name__ == '__main__':
         default=200,
         help="Number of time steps between each log."
     )
+    flags.DEFINE_integer(
+        'checkpoint_interval',
+        default=250,
+        help="Number of time steps between each log."
+    )
     flags.DEFINE_bool(
         'checkpoint',
         default=True,
@@ -1019,6 +1036,11 @@ if __name__ == '__main__':
         'hyperparameter_search_trials',
         help='Number of trials for the hyperparameter search',
         default=1
+    )
+    flags.DEFINE_string(
+        'study_name',
+        help='Name of the hyperparameter search study',
+        default='study'
     )
     flags.DEFINE_bool(
         'prune_trials',
@@ -1102,7 +1124,7 @@ if __name__ == '__main__':
     )
     flags.DEFINE_float(
         'action_entropy_regularizer_scaling',
-        default=1.,
+        default=0.,
         help="Scale factor of the action entropy regularizer."
     )
     flags.DEFINE_float(
@@ -1217,7 +1239,8 @@ if __name__ == '__main__':
     flags.DEFINE_bool(
         'freeze_state_encoder_type',
         default=False,
-        help="Whether to perform a hyperparameter search on the state encoder type or not (if the hyperparameter search flag is set)."
+        help="Whether to perform a hyperparameter search on the state encoder type or not"
+             "(if the hyperparameter search flag is set)."
     )
     flags.DEFINE_bool(
         'deterministic_state_embedding',
@@ -1241,6 +1264,16 @@ if __name__ == '__main__':
         'no_reward_shaping',
         help='Whether to remove reward shaping from the input environment or not.',
         default=False
+    )
+    flags.DEFINE_multi_string(
+        'import',
+        help='list of modules to additionally import',
+        default=[]
+    )
+    flags.DEFINE_bool(
+        'state_encoder_softclipping',
+        help='Whether to apply softclipping (usually a tanh) on the logits of the encoders',
+        default=True
     )
 
     FLAGS = flags.FLAGS
