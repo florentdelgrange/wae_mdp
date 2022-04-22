@@ -615,6 +615,7 @@ def main(argv):
                 'deterministic': EncodingType.DETERMINISTIC
             }[params['state_encoder_type']],
             deterministic_state_embedding=params['deterministic_state_embedding'],
+            state_encoder_softclipping=params['state_encoder_softclipping']
         )
         models = [wae_mdp]
     step = tf.Variable(0, trainable=False, dtype=tf.int64)
@@ -673,7 +674,7 @@ def main(argv):
             save_directory=params['save_dir'],
             parallel_environments=params['parallel_env'] > 1,
             num_parallel_environments=params['parallel_env'],
-            eval_steps=int(1e3) if not params['do_not_eval'] else 0,
+            eval_steps=int(1e5) if not params['do_not_eval'] else 0,
             eval_and_save_model_interval=params['evaluation_interval'],
             policy_evaluation_num_episodes=(
                 0 if not (params['action_discretizer'] or params['latent_policy'])
@@ -1262,6 +1263,11 @@ if __name__ == '__main__':
         'import',
         help='list of modules to additionally import',
         default=[]
+    )
+    flags.DEFINE_bool(
+        'state_encoder_softclipping',
+        help='Whether to apply softclipping (usually a tanh) on the logits of the encoders',
+        default=True
     )
 
     FLAGS = flags.FLAGS

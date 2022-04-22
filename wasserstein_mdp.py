@@ -130,6 +130,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             state_encoder_type: EncodingType = EncodingType.AUTOREGRESSIVE,
             policy_based_decoding: bool = False,
             deterministic_state_embedding: bool = True,
+            state_encoder_softclipping: bool = True,
             *args, **kwargs
     ):
         super(WassersteinMarkovDecisionProcess, self).__init__(
@@ -197,11 +198,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.latent_policy_temperature = latent_policy_temperature
 
         self._sample_additional_transition = False
-        # softclipping for latent states logits; 3 offers an probability error of about 5e-2
-        # scale = 10.
-        # self.softclip = tfb.Chain([tfb.Scale(scale), tfb.Tanh(), tfb.Scale(1. / scale)], name="softclip")
-        # self.softclip = tfb.SoftClip(low=-scale, high=scale)
-        self.softclip = tfb.Identity()
+        if state_encoder_softclipping:
+            self.softclip = tf.nn.tanh
+        else:
+            self.softclip = tfb.Identity()
 
         state = tfkl.Input(shape=state_shape, name="state")
         action = tfkl.Input(shape=action_shape, name="action")
@@ -262,7 +262,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             hidden_units=transition_network.hidden_units,
             conditional_event_shape=(self.latent_state_size + self.number_of_discrete_actions,),
             temperature=self.state_prior_temperature,
-            output_softclip=self.softclip,
             name='autoregressive_transition_network')
         # stationary distribution over latent states
         self.latent_stationary_network: AutoRegressiveBernoulliNetwork = SteadyStateNetwork(
@@ -272,7 +271,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             hidden_units=transition_network.hidden_units,
             trainable_prior=trainable_prior,
             temperature=self.state_prior_temperature,
-            output_softclip=self.softclip,
             name='latent_stationary_network')
         # latent policy
         self.latent_policy_network = LatentPolicyNetwork(
