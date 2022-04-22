@@ -396,7 +396,7 @@ def main(argv):
         hyperparameter_search.search(
             fixed_parameters=params,
             num_steps=params['max_steps'],
-            study_name='study_seed={}'.format(params['seed']),
+            study_name=params['study_name'],
             n_trials=params['hyperparameter_search_trials'],
             wall_time=None if params['wall_time'] == '.' else params['wall_time'])
         return 0
@@ -1037,6 +1037,11 @@ if __name__ == '__main__':
         help='Number of trials for the hyperparameter search',
         default=1
     )
+    flags.DEFINE_string(
+        'study_name',
+        help='Name of the hyperparameter search study',
+        default='study'
+    )
     flags.DEFINE_bool(
         'prune_trials',
         help='Whether to allow for pruning trials during hyperparameter search or not',
@@ -1234,7 +1239,8 @@ if __name__ == '__main__':
     flags.DEFINE_bool(
         'freeze_state_encoder_type',
         default=False,
-        help="Whether to perform a hyperparameter search on the state encoder type or not (if the hyperparameter search flag is set)."
+        help="Whether to perform a hyperparameter search on the state encoder type or not"
+             "(if the hyperparameter search flag is set)."
     )
     flags.DEFINE_bool(
         'deterministic_state_embedding',
