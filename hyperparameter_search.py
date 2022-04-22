@@ -212,13 +212,19 @@ def search(
                 number_of_discrete_actions = fixed_parameters['number_of_discrete_actions']
             action_temperature_base = 1. / (number_of_discrete_actions - 1)
             if fixed_parameters['action_encoder_temperature'] < 0:
-                action_encoder_temperature = trial.suggest_categorical(
-                    "action_encoder_temperature", [action_temperature_base, action_temperature_base / 1.5])
+                if fixed_parameters["number_of_discrete_actions"] <= 0:
+                    action_encoder_temperature = action_temperature_base
+                else:
+                    action_encoder_temperature = trial.suggest_categorical(
+                        "action_encoder_temperature", [action_temperature_base, action_temperature_base / 1.5])
             else:
                 action_encoder_temperature = fixed_parameters['action_encoder_temperature']
             if fixed_parameters['latent_policy_temperature'] < 0:
-                latent_policy_temperature = trial.suggest_categorical(
-                    "latent_policy_temperature", [action_temperature_base, action_temperature_base / 1.5])
+                if fixed_parameters["number_of_discrete_actions"] <= 0:
+                    latent_policy_temperature = action_temperature_base / 1.5
+                else:
+                    latent_policy_temperature = trial.suggest_categorical(
+                        "latent_policy_temperature", [action_temperature_base, action_temperature_base / 1.5])
             else:
                 latent_policy_temperature = fixed_parameters['latent_policy_temperature']
 
