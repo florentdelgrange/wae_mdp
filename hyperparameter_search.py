@@ -232,7 +232,7 @@ def search(
                 latent_policy_temperature = fixed_parameters['latent_policy_temperature']
 
         if fixed_parameters['wae']:
-            for attr in ['learning_rate', 'adam_beta_1', 'adam_bet2', 'batch_size', 'collect_steps_per_iteration',
+            for attr in ['learning_rate', 'adam_beta_1', 'adam_beta2', 'batch_size', 'collect_steps_per_iteration',
                          'latent_state_size', 'state_encoder_softclipping', 'temperature_decay',
                          'encoder_temperature_decay_rate', 'prior_temperature_decay_rate',
                          'entropy_regularizer_scale_factor', 'entropy_regularizer_decay_rate',
