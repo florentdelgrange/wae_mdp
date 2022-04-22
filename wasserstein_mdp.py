@@ -1472,7 +1472,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 score=score,
                 checkpoint_model=save_directory is not None and log_name is not None,
                 save_directory=save_directory,
-                model_name=log_name,
+                model_name='model',
                 training_step=global_step.numpy())
 
         gc.collect()

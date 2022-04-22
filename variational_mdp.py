@@ -1808,13 +1808,6 @@ class VariationalMarkovDecisionProcess(tf.Module):
             # Collect a few steps and save them to the replay buffer.
             driver.run(env.current_time_step())
 
-            if tf.logical_and(tf.equal(global_step, 100), save_directory is not None):
-                _time = time.time()
-                print("Saving base model")
-                self.save(save_directory, log_name)
-                save_time = time.time() - _time
-                save_time += 10.  # epsilon
-
             additional_training_metrics = {
                 "replay_buffer_frames": replay_buffer.num_frames()} if not parallel_environments else {
                 "replay_buffer_frames": replay_buffer.num_frames(),
@@ -1884,7 +1877,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
         score = tf.reduce_mean(self.evaluation_window[self.evaluation_window > - np.inf])
 
         # save the final model
-        if save_directory is not None:
+        if save_directory is not None and checkpoint is not None:
             self.save(
                 save_directory,
                 os.path.join(log_name, 'step{:d}'.format(global_step.numpy())),
