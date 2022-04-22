@@ -324,8 +324,10 @@ def search(
                 action_encoder_temperature=hyperparameters['action_encoder_temperature'],
                 latent_policy_temperature=hyperparameters['latent_policy_temperature'],
                 wasserstein_regularizer_scale_factor=wasserstein_regularizer_scale_factor,
-                encoder_temperature_decay_rate=0.,
-                prior_temperature_decay_rate=0.,
+                encoder_temperature_decay_rate=hyperparameters['encoder_temperature_decay_rate'] \
+                    if hyperparameters['temperature_decay'] else 0.,
+                prior_temperature_decay_rate=hyperparameters['prior_temperature_decay_rate'] \
+                    if hyperparameters['temperature_decay'] else 0.,
                 importance_sampling_exponent=hyperparameters['importance_sampling_exponent'],
                 importance_sampling_exponent_growth_rate=hyperparameters['importance_sampling_exponent_growth_rate'],
                 entropy_regularizer_scale_factor=hyperparameters['entropy_regularizer_scale_factor'],
