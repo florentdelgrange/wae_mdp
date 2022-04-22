@@ -73,6 +73,7 @@ def search(
         hidden = trial.suggest_int('hidden', 1, 3)
         activation = trial.suggest_categorical('activation', ['relu', 'leaky_relu', 'smooth_elu', 'tanh'])
         entropy_regularizer_scale_factor = 0.
+        entropy_regularizer_decay_rate = 0.
         action_entropy_regularizer_scaling = 0.
 
         # temperatures
@@ -232,7 +233,7 @@ def search(
                 latent_policy_temperature = fixed_parameters['latent_policy_temperature']
 
         if fixed_parameters['wae']:
-            for attr in ['learning_rate', 'adam_beta_1', 'adam_beta2', 'batch_size', 'collect_steps_per_iteration',
+            for attr in ['learning_rate', 'adam_beta_1', 'adam_beta_2', 'batch_size', 'collect_steps_per_iteration',
                          'latent_state_size', 'state_encoder_softclipping', 'temperature_decay',
                          'encoder_temperature_decay_rate', 'prior_temperature_decay_rate',
                          'entropy_regularizer_scale_factor', 'entropy_regularizer_decay_rate',
