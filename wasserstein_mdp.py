@@ -43,7 +43,7 @@ class WassersteinRegularizerScaleFactor(NamedTuple):
 
     def sanity_check(self):
         if self.global_scaling is None and (self.steady_state_scaling is None or
-                                            self.local_transition_loss_scaling):
+                                            self.local_transition_loss_scaling is None):
             raise ValueError("Either a global scaling value or a unique scaling value for"
                              "each Wasserstein regularizer should be provided.")
 
