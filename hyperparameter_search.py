@@ -3,6 +3,7 @@ import math
 import os
 import sys
 import time
+import random
 from typing import Optional
 
 import tensorflow as tf
@@ -248,6 +249,14 @@ def search(
 
     def optimize_trial(trial: optuna.Trial):
         hyperparameters = suggest_hyperparameters(trial)
+
+        # set the seed according to the trial number
+        seed = trial.number
+        os.environ['PYTHONHASHSEED'] = str(seed)
+        random.seed(seed)
+        np.random.seed(seed)
+        tf.random.set_seed(seed)
+
         hyperparameters['latent_size'] = hyperparameters['latent_state_size']
 
         print("Suggested hyperparameters")
