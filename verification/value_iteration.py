@@ -23,6 +23,22 @@ error = {
 }
 
 
+def vi_tensor_size(
+        latent_state_size: Int,
+        num_actions: Int,
+        episodic_return: bool = True,
+) -> tf.int32:
+    state_space_size = 2 ** latent_state_size
+    return tf.float32.size * (
+        state_space_size * latent_state_size + # state space
+        num_actions ** 2 +  # action space
+        (state_space_size if episodic_return else 0) +  # reset state test
+        state_space_size * num_actions +  # policy probs
+        2 * state_space_size ** 2 * num_actions +  # transitions and rewards
+        state_space_size * num_actions +  # q-values
+        3 * state_space_size  # values, next values, delta computation
+    )
+
 @tf.function
 def value_iteration(
         latent_state_size: Int,
@@ -109,7 +125,7 @@ def value_iteration(
                 fn_output_signature=tf.float32))
 
     @tf.function
-    def _update_values(values: tf.Tensor, _, error_scale: Float = 1.):
+    def _update_values(values: tf.Tensor, _):
         q_values = tf.map_fn(
             fn=lambda state: _q_s(state, values),
             elems=state_space,
@@ -120,22 +136,22 @@ def value_iteration(
                 q_values=q_values,
                 policy_probs=policy_probs, ),
             elems=state_space)
-        delta = _compute_error(values, next_values, error_scale)
+        delta = _compute_error(values, next_values)
         return next_values, delta
 
     @tf.function
-    def _update_values_matrices(values: tf.Tensor, _, error_scale: Float = 1.):
+    def _update_values_matrices(values: tf.Tensor, _):
         q_values = tf.reduce_sum(
             transition_matrix * (reward_matrix + gamma * values),
             axis=-1)
         next_values = tf.reduce_sum(q_values * policy_probs, axis=-1)
         if episodic_return:
             next_values *= not_reset_states
-        delta = _compute_error(values, next_values, error_scale)
+        delta = _compute_error(values, next_values)
         return next_values, delta
 
     @tf.function
-    def _compute_error(values, next_values, error_scale: Float = 1.):
+    def _compute_error(values, next_values):
         if error_type is Error.ABSOLUTE:
             delta = tf.reduce_max(tf.abs(next_values - values))
         else:
@@ -146,8 +162,7 @@ def value_iteration(
                     y=values / next_values)))
         if debug:
             progress = tf.clip_by_value(
-                (tf.math.log(delta) - tf.math.log(error_scale)) * 100. / tf.math.log(epsilon),
-                0., 100.)
+                tf.math.log(delta) * 100. / tf.math.log(epsilon), 0., 100.)
             tf.print('\r', "VI progress:", progress, '% --', 'current error:', delta, output_stream=sys.stdout)
             sys.stdout.flush()
         return delta
@@ -157,14 +172,9 @@ def value_iteration(
     else:
         update_values = _update_values
     
-    error_scale = 1.
-    if debug:
-        values, delta = update_values(values, delta)
-        error_scale = delta
-
     values, _ = tf.while_loop(
         cond=lambda _, _delta: tf.greater_equal(_delta, epsilon),
-        body=lambda _values, _delta: update_values(_values, _delta, error_scale),
+        body=update_values,
         loop_vars=[values, delta], )
 
     return values

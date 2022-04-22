@@ -50,9 +50,8 @@ class TransitionFunction:
             tf.sparse.reduce_sum(self.transitions, axis=-1, output_is_sparse=True),
             dtype=tf.bool)
         if assert_distribution:
-            epsilon = 1e-6
             state_action_pairs = tf.sparse.reduce_sum(self.transitions, axis=-1, output_is_sparse=True)
-            tf.assert_less(tf.abs(1. - state_action_pairs.values), epsilon)
+            tf.debugging.assert_near(state_action_pairs.values, 1.)
         self.backup_transition_function = backup_transition_function
         self.latent_state_space = binary_latent_space(self.latent_state_size, dtype=tf.float32)
 
@@ -212,8 +211,6 @@ class TransitionFunctionCopy(TransitionFunction):
 
         transitions = tf.map_fn(
             fn=_get_sparse_entry,
-            # elems=(tf.repeat(latent_state_space, repeats=num_actions, axis=0),
-            #        tf.tile(action_space, multiples=[num_states, 1])),
             elems=latent_state_space,
             fn_output_signature=tf.SparseTensorSpec(shape=[num_actions, num_states]))
 
@@ -222,7 +219,7 @@ class TransitionFunctionCopy(TransitionFunction):
 
         super(TransitionFunctionCopy, self).__init__(
             transition_matrix=transitions,
-            split_label_from_latent_space=split_label_from_latent_space)
+            split_label_from_latent_space=split_label_from_latent_space,)
         self.atomic_prop_dims = atomic_prop_dims
 
 
@@ -375,7 +372,6 @@ class TransitionFrequencyEstimator(TransitionFunction):
         super(TransitionFrequencyEstimator, self).__init__(
             transition_matrix=_compute_transition_probabilities(transition_counter, probs, i, j),
             backup_transition_function=backup_transition_function,
-            assert_distribution=assert_distribution,
             split_label_from_latent_space=split_label_from_latent_space)
 
     @tf.function
@@ -387,54 +383,18 @@ class TransitionFrequencyEstimator(TransitionFunction):
             the dense representation of this transition function
         """
         dense_tensor = tf.sparse.to_dense(self.transitions)
-        if backup_tensor:
-            return tf.where(
-                dense_tensor > 0,
-                dense_tensor,
-                backup_tensor)
+        if backup_tensor is not None:
+            tf.debugging.assert_near(tf.reduce_sum(backup_tensor, axis=-1), 1.)
+            x = tf.where(
+                condition=tf.repeat(
+                    tf.expand_dims(tf.sparse.to_dense(self.enabled_actions), -1),
+                    repeats=tf.shape(dense_tensor)[-1],
+                    axis=-1),
+                x=dense_tensor,
+                y=backup_tensor)
+            return x
         else:
             return dense_tensor
-
-    def merge(self, other: TransitionFunction, epsilon: Float = 1e-12):
-        a_idx = self.transitions.indices
-        b_idx = other.transitions.indices
-        to_retain = tf.Variable(
-            tf.cast(tf.ones_like(other.transitions.values), tf.bool),
-            trainable=False)
-
-        @tf.function
-        def _to_retain(i, j, to_retain):
-            i = tf.minimum(i, tf.shape(a_idx)[0] - 1)
-            j = tf.minimum(j, tf.shape(b_idx)[0] - 1)
-            s, a, s_prime = a_idx[i, 0], a_idx[i, 1], a_idx[i, 2]
-            _s, _a, _s_prime = b_idx[j, 0], b_idx[j, 1], b_idx[j, 2]
-            if tf.greater_equal(
-                    s * self.num_actions * self.num_states + a * self.num_states + s_prime,
-                    _s * self.num_actions * self.num_states + _a * self.num_states + _s_prime
-            ):
-                if tf.reduce_all(tf.equal(a_idx[i, ...], b_idx[j, ...])):
-                    to_retain[j].assign(False)
-                    i += 1
-                j += 1
-            else:
-                i += 1
-            return i, j
-
-        with tf.device('/CPU:0'):
-            i, j = tf.constant(0, dtype=tf.int32), tf.constant(0, dtype=tf.int32)
-            tf.while_loop(
-                cond=lambda i, j: tf.math.logical_and(
-                    tf.less(i, tf.shape(a_idx)[0]),
-                    tf.less(j, tf.shape(b_idx)[0])),
-                body=lambda i, j: _to_retain(i, j, to_retain),
-                loop_vars=[i, j],
-                swap_memory=True, )
-
-            self.transitions = tf.sparse.add(
-                self.transitions,
-                tf.sparse.retain(other.transitions, to_retain),
-                threshold=epsilon, )
-
 
 class TransitionFnDecorator:
     """
