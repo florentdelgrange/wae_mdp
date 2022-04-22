@@ -1525,14 +1525,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 with open(os.path.join(save_directory, model_name, 'model_infos.json'), 'r') as f:
                     infos = json.load(f)
                 eval_policy = float(infos['eval_policy']) if 'eval_policy' in infos.keys() else None
-                local_transition_loss = float(infos.get('local_transition_loss', None)) \
+                local_transition_loss = float(infos.get('local_transition_loss', np.inf)) \
                     if 'local_transition_loss' in infos.keys() else None
-                local_reward_loss = float(infos.get('local_reward_loss', None)) \
+                local_reward_loss = float(infos.get('local_reward_loss', np.inf)) \
                     if 'local_reward_loss' in infos.keys() else None
                 if eval_policy is None or score['eval_policy'] > eval_policy:
                     self.save(save_directory, model_name, score)
                 elif np.abs(eval_policy - score['eval_policy']) < epsilon and (
-                        local_transition_loss is not None and local_reward_loss is not None and
                         'local_transition_loss' in score.keys() and 'local_reward_loss' in score.keys()):
                     if score['local_transition_loss'] < local_transition_loss:
                         self.save(save_directory, model_name, score)

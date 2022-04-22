@@ -1656,6 +1656,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             environment_perturbation: float = 3. / 4.,
             recursive_environment_perturbation: bool = True,
             enforce_no_reward_shaping: bool = False,
+            local_losses_estimator: Optional[Callable] = None,
     ):
         if wall_time is not None:
             if start_time is None:
@@ -1742,7 +1743,6 @@ class VariationalMarkovDecisionProcess(tf.Module):
             local_losses_estimator = environments.local_losses_estimator
         else:
             env = environment
-            local_losses_estimator = None
 
         if dataset_components is None:
             if epsilon_greedy > 0.:

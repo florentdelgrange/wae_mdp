@@ -494,7 +494,8 @@ def search(
                 wall_time=wall_time,
                 memory_limit=fixed_parameters['memory'] if fixed_parameters['memory'] > 0. else None,
                 epsilon_greedy=hyperparameters['epsilon_greedy'],
-                epsilon_greedy_decay_rate=hyperparameters['epsilon_greedy_decay_rate'])
+                epsilon_greedy_decay_rate=hyperparameters['epsilon_greedy_decay_rate'],
+                local_losses_estimator=environments.local_losses_estimator)
 
         def sanity_check(score: float) -> bool:
             if math.isinf(score) or math.isnan(score):
