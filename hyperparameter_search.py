@@ -157,7 +157,7 @@ def search(
             time_stacked_states=time_stacked_states)
         if fixed_parameters['latent_size'] <= 0:
             latent_state_size = trial.suggest_int(
-                'latent_state_size', specs.label_shape[0] + 3, max(14, specs.label_shape[0] + 8))
+                'latent_state_size', specs.label_shape[0] + 3, max(15, specs.label_shape[0] + 8))
         else:
             latent_state_size = fixed_parameters['latent_size']
 
