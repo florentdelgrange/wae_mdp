@@ -88,7 +88,7 @@ labeling_functions = {
     'Hopper-v3': lambda observation: tf.stack([
         # An element of `observation[1:] is contained in the closed interval specified by the environment
         # argument `healthy_state_range`
-        tf.reduce_all(tf.logical_and(-100. < observation[..., 1:], observation[..., 1] < 100.), axis=-1),
+        tf.reduce_all(tf.logical_and(-100. < observation[..., 1:], observation[..., 1:] < 100.), axis=-1),
         # The height of the hopper is contained in the closed interval specified by the argument
         # `healthy_z_range` (usually meaning that it has fallen)
         observation[..., 0] > 0.7,
