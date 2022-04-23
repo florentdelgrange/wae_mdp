@@ -1420,7 +1420,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             ).numpy()
 
         if local_losses_estimator is not None:
-            local_losses_metrics = local_losses_estimator()
+            # TODO: handle the bug related to the latent state dimensionality
+            try:
+                local_losses_metrics = local_losses_estimator()
+            except ValueError as e:
+                print("The following error occurred while estimating the transition loss:")
+                print(e)
+                local_losses_metrics = None
 
         if train_summary_writer is not None and eval_steps > 0:
             with train_summary_writer.as_default():
