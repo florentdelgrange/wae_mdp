@@ -557,12 +557,45 @@ def main(argv):
                 "local_transition_loss_gradient_penalty_multiplier"],
         )
         vae_name = generate_wae_name(params=params, wasserstein_regularizer=wasserstein_regularizer_scale_factor)
-        autoencoder_optimizer = getattr(tf.optimizers, params['optimizer'])(learning_rate=params['learning_rate'])
+        if params['end_learning_rate'] is None:
+            lr = params['learning_rate']
+        else:
+            lr = tf.optimizers.schedules.PolynomialDecay(
+                initial_learning_rate=params['learning_rate'],
+                decay_steps=3 * params['max_steps'] // 4,
+                end_learning_rate=params['end_learning_rate'],
+                power=.99,)
+        autoencoder_optimizer = getattr(tf.optimizers, params['optimizer'])(
+            learning_rate=lr,
+            clipnorm=params['gradient_clipnorm'],
+            clipvalue=params['gradient_clipvalue'],
+            **({'beta_1': params['adam_beta_1'],
+                'beta_2': params['adam_beta_2']}
+                if params['optimizer'] == 'Adam'
+                else dict()))
+        print("autoencoder optimizer", autoencoder_optimizer,
+                autoencoder_optimizer.beta_1, autoencoder_optimizer.beta_2,
+                autoencoder_optimizer.learning_rate,
+                autoencoder_optimizer.clipnorm, autoencoder_optimizer.clipvalue)
         if params['wasserstein_optimizer'] is None:
             wasserstein_optimizer = autoencoder_optimizer
         else:
+            if params['end_wasserstein_learning_rate'] is None:
+                wlr = params['wasserstein_learning_rate']
+            else:
+                wlr = tf.optimizers.schedules.PolynomialDecay(
+                    initial_learning_rate=params['wasserstein_learning_rate'],
+                    decay_steps=3 * params['max_steps'] // 4,
+                    end_learning_rate=params['end_wasserstein_learning_rate'],
+                    power=.99,)
             wasserstein_optimizer = getattr(tf.optimizers, params['wasserstein_optimizer'])(
-                learning_rate=params['wasserstein_learning_rate'])
+                learning_rate=wlr,
+                clipnorm=params['gradient_clipnorm'],
+                clipvalue=params['gradient_clipvalue'],
+                **({'beta_1': params['adam_beta_1'],
+                    'beta_2': params['adam_beta_2']}
+                    if params['wasserstein_optimizer'] == 'Adam'
+                   else dict()))
         optimizer = [autoencoder_optimizer, wasserstein_optimizer]
 
         wae_mdp = wasserstein_mdp.WassersteinMarkovDecisionProcess(
@@ -1094,10 +1127,34 @@ if __name__ == '__main__':
         help='Optimizer name (see tf.optimizers).'
     )
     flags.DEFINE_float(
+        'adam_beta_1',
+        default=0.9,
+        help="value of the beta_1 parameter of Adam, if Adam is chosen as the optimizer."
+    )
+    flags.DEFINE_float(
+        'adam_beta_2',
+        default=0.999,
+        help="value of the beta_2 parameter of Adam, if Adam is chosen as the optimizer."
+    ),
+    flags.DEFINE_float(
+        'gradient_clipnorm',
+        default=None,
+        help='Clip optimizer(s) gradients by the specified norm.'
+    )
+    flags.DEFINE_float(
+        'gradient_clipvalue',
+        default=None,
+        help='Clip optimizer(s) gradients by the specified value.'
+    )
+    flags.DEFINE_float(
         'learning_rate',
         default=1e-4,
         help='Learning rate for the optimizer.'
     )
+    flags.DEFINE_float(
+        'end_learning_rate',
+        default=None,
+        help='If provided, decay the learning rate to this value.')
     flags.DEFINE_bool(
         'local_losses_evaluation',
         default=False,
@@ -1211,6 +1268,10 @@ if __name__ == '__main__':
         default=1e-4,
         help='Learning rate for the optimizer of the Wasserstein regularizers.'
     )
+    flags.DEFINE_float(
+        'end_wasserstein_learning_rate',
+        default=None,
+        help='If provided, decay the learning rate to this value.')
     flags.DEFINE_bool(
         'policy_based_decoding',
         default=False,
@@ -1260,7 +1321,7 @@ if __name__ == '__main__':
         'environment_perturbation',
         lower_bound=0.,
         upper_bound=1.,
-        help="Environment perturbation to enforce an ergodic episodic RL process (see Huang et al. 2020).",
+        help="Environment perturbation to enforce an ergodic episodic RL process (see Huang 2020).",
         default=.75
     )
     flags.DEFINE_bool(
