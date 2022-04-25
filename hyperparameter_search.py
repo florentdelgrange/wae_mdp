@@ -74,6 +74,16 @@ def search(
             clipvalue = trial.suggest_categorical('clipvalue', [None, 0.5, 1., 10.])
         else:
             clipnorm = clipvalue = None
+        learning_rate_decay = trial.suggest_categorical('learning_rate_decay', [True, False])
+        if learning_rate_decay:
+            power_decay = trial.suggest_categorical("power_decay", [0.5, 1., 1.5, 2.])
+            learning_rate = tf.optimizers.schedules.PolynomialDecay(
+                initial_learning_rate=learning_rate,
+                decay_steps=fixed_parameters['max_steps'],
+                end_learning_rate=1e-5,
+                power=1.7, )
+        else:
+            power_decay = 1.
         batch_size = 128
         neurons = trial.suggest_categorical('neurons', [64, 128, 256, 512])
         hidden = trial.suggest_int('hidden', 1, 3)
@@ -114,6 +124,13 @@ def search(
 
         wasserstein_optimizer = 'Adam'
         wasserstein_learning_rate = trial.suggest_categorical('wasserstein_learning_rate', [1e-4, 2e-4, 3e-4])
+        if learning_rate_decay:
+            wasserstein_power_decay = trial.suggest_categorical("wasserstein_power_decay", [0.5, 1., 1.5, 2.])
+            learning_rate = tf.optimizers.schedules.PolynomialDecay(
+                initial_learning_rate=wasserstein_learning_rate,
+                decay_steps=fixed_parameters['max_steps'],
+                end_learning_rate=1e-5,
+                power=wasserstein_power_decay, )
 
         if fixed_parameters['policy_based_decoding']:
             policy_based_decoding = trial.suggest_categorical('policy_based_decoding', [True, False])
@@ -253,7 +270,7 @@ def search(
                          'n_critic', 'neurons', 'hidden', 'activation', 'priority_exponent',
                          'importance_sampling_exponent', 'importance_sampling_exponent_growth_rate', 'specs',
                          'bucket_based_priorities', 'epsilon_greedy', 'epsilon_greedy_decay_rate',
-                         'time_stacked_states',
+                         'time_stacked_states', 'learning_rate_decay', 'power_decay', 'wasserstein_power_decay',
                          'state_encoder_pre_processing_network', 'state_decoder_pre_processing_network',
                          'optimizer', 'state_encoder_temperature', 'state_prior_temperature',
                          'action_encoder_temperature', 'latent_policy_temperature',
