@@ -1218,7 +1218,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                         optimizer.apply_gradients(zip(gradients, variables))
 
                 if 'gradients_' + optimization_direction in self.loss_metrics.keys():
-                    self.loss_metrics['gradients_' + optimization_direction](tf.reduce_mean(gradients))
+                    mean_abs_grads = tf.concat(
+                        [tf.reshape(tf.abs(grad), [-1]) for grad in gradients],
+                        axis=-1)
+                    self.loss_metrics['gradients_' + optimization_direction](mean_abs_grads)
 
                 if debug_gradients:
                     for gradient, variable in zip(gradients, variables):
