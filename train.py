@@ -564,7 +564,7 @@ def main(argv):
                 initial_learning_rate=params['learning_rate'],
                 decay_steps=3 * params['max_steps'] // 4,
                 end_learning_rate=params['end_learning_rate'],
-                power=.99,)
+                power=1.7,)
         autoencoder_optimizer = getattr(tf.optimizers, params['optimizer'])(
             learning_rate=lr,
             clipnorm=params['gradient_clipnorm'],
@@ -587,7 +587,7 @@ def main(argv):
                     initial_learning_rate=params['wasserstein_learning_rate'],
                     decay_steps=3 * params['max_steps'] // 4,
                     end_learning_rate=params['end_wasserstein_learning_rate'],
-                    power=.99,)
+                    power=1.7,)
             wasserstein_optimizer = getattr(tf.optimizers, params['wasserstein_optimizer'])(
                 learning_rate=wlr,
                 clipnorm=params['gradient_clipnorm'],
