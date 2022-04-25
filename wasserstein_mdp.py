@@ -357,6 +357,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             'gradient_penalty': Mean('gradient_penalty'),
             'marginal_state_encoder_entropy': Mean('marginal_state_encoder_entropy'),
             'transition_log_probs': Mean('transition_log_probs'),
+            'gradients_max': Mean('gradients_max'),
+            'gradients_min': Mean('gradients_min'),
         }
         if self.include_state_encoder_entropy or self.include_action_encoder_entropy:
             self.loss_metrics['entropy_regularizer'] = Mean('entropy_regularizer')
@@ -1194,8 +1196,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         with tf.GradientTape(persistent=True) as tape:
             loss = self.compute_loss(
                 state, label, action, reward, next_state, next_label,
-                sample_key=sample_key, sample_probability=sample_probability,
-                additional_transition_batch=additional_transition_batch)
+                sample_key=sample_key, sample_probability=sample_probability,)
 
         for optimization_direction, variables in {
             'max': wasserstein_regularizer_variables, 'min': autoencoder_variables
@@ -1215,6 +1216,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 if not numerical_error(gradients, list_of_tensors=True):
                     if optimizer is not None:
                         optimizer.apply_gradients(zip(gradients, variables))
+
+                if 'gradients_' + optimization_direction in self.loss_metrics.keys():
+                    self.loss_metrics['gradients_' + optimization_direction](tf.reduce_mean(gradients))
 
                 if debug_gradients:
                     for gradient, variable in zip(gradients, variables):
