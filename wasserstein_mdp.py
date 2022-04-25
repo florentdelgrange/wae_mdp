@@ -1314,6 +1314,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             assert_estimated_transition_function_distribution: bool = False,
             replay_buffer_max_frames: Optional[int] = int(1e5),
             reward_scaling: Optional[float] = 1.,
+            estimate_value_difference: bool = True,
+            *args, **kwargs
     ):
         if self.time_stacked_states:
             labeling_function = lambda x: labeling_function(x)[:, -1, ...]
@@ -1340,7 +1342,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             replay_buffer_max_frames=replay_buffer_max_frames,
             reward_scaling=reward_scaling,
             atomic_prop_dims=self.atomic_props_dims,
-            estimate_value_difference=True)
+            estimate_value_difference=estimate_value_difference)
 
     def eval_and_save(
             self,

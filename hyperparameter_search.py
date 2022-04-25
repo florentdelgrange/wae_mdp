@@ -439,7 +439,8 @@ def search(
             local_losses_eval_steps=fixed_parameters['local_losses_evaluation_steps'],
             local_losses_eval_replay_buffer_size=fixed_parameters['local_losses_replay_buffer_size'],
             local_losses_reward_scaling=reinforcement_learning.reward_scaling.get(
-                environment_name, vae_mdp._dynamic_reward_scaling))
+                environment_name, vae_mdp._dynamic_reward_scaling),
+            estimate_value_difference=fixed_parameters['value_difference_evaluation'])
 
         environment = environments.training
         policy_evaluation_driver = environments.policy_evaluation_driver
