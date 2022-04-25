@@ -699,7 +699,8 @@ def main(argv):
             embed_video_evaluation=params['generate_videos'],
             environment_perturbation=params['environment_perturbation'],
             recursive_environment_perturbation=params['recursive_environment_perturbation'],
-            enforce_no_reward_shaping=params['no_reward_shaping'])
+            enforce_no_reward_shaping=params['no_reward_shaping'],
+            estimate_value_difference=params['value_difference_evaluation'])
 
     return 0
 
@@ -1101,6 +1102,13 @@ if __name__ == '__main__':
         'local_losses_evaluation',
         default=False,
         help='Whether to estimate local losses during evaluation or not.'
+    )
+    flags.DEFINE_bool(
+        'value_difference_evaluation',
+        default=False,
+        help='Whether to estimate the value difference after the local losses evaluation. '
+             'If set, value iteration is performed, which might use a significant amount of memory according to the '
+             'latent size and number of discrete actions chosen.'
     )
     flags.DEFINE_integer(
         'local_losses_evaluation_steps',

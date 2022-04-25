@@ -1298,6 +1298,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             environment_perturbation: float = 3. / 4.,
             recursive_environment_perturbation: bool = True,
             enforce_no_reward_shaping: bool = False,
+            estimate_value_difference: bool = True
     ):
         # reverb replay buffers are not compatible with batched environments
         parallel_environments = parallel_environments and not use_prioritized_replay_buffer
@@ -1372,7 +1373,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 labeling_function=labeling_function,
                 estimate_transition_function_from_samples=True,
                 replay_buffer_max_frames=local_losses_eval_replay_buffer_size,
-                reward_scaling=local_losses_reward_scaling)
+                reward_scaling=local_losses_reward_scaling,
+                estimate_value_difference=estimate_value_difference)
 
         else:
             local_losses_eval_env = None
@@ -1652,6 +1654,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             local_losses_eval_steps: Optional[int] = int(3e4),
             local_losses_eval_replay_buffer_size: Optional[int] = int(1e5),
             local_losses_reward_scaling: Optional[float] = 1.,
+            estimate_value_difference: bool = True,
             embed_video_evaluation: bool = False,
             environment_perturbation: float = 3. / 4.,
             recursive_environment_perturbation: bool = True,
@@ -1735,7 +1738,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 video_path=os.path.join(save_directory, 'videos') if save_directory is not None else None,
                 environment_perturbation=environment_perturbation,
                 recursive_environment_perturbation=recursive_environment_perturbation,
-                enforce_no_reward_shaping=enforce_no_reward_shaping)
+                enforce_no_reward_shaping=enforce_no_reward_shaping,
+                estimate_value_difference=estimate_value_difference)
 
             env = environment if environment is not None else environments.training
             policy_evaluation_driver = policy_evaluation_driver if policy_evaluation_driver is not None \
@@ -2225,6 +2229,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             assert_estimated_transition_function_distribution: bool = False,
             replay_buffer_max_frames: Optional[int] = int(1e5),
             reward_scaling: Optional[float] = 1.,
+            *args, **kwargs
     ):
         if self.latent_policy_network is None:
             raise ValueError('This VAE is not built for policy abstraction.')
