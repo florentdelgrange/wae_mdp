@@ -68,6 +68,12 @@ def search(
         learning_rate = trial.suggest_categorical('learning_rate', [1e-4, 2e-4, 3e-4])
         adam_beta_1 = trial.suggest_categorical('beta_1', [0., 0.5, 0.9])
         adam_beta_2 = trial.suggest_categorical('beta_2', [0.9, 0.999])
+        gradient_clipping = trial.suggest_categorical('gradient_clipping', [True, False])
+        if gradient_clipping:
+            clipnorm = trial.suggest_categorical('clipnorm', [None, 1.])
+            clipvalue = trial.suggest_categorical('clipvalue', [None, 0.5, 1., 10.])
+        else:
+            clipnorm = clipvalue = None
         batch_size = 128
         neurons = trial.suggest_categorical('neurons', [64, 128, 256, 512])
         hidden = trial.suggest_int('hidden', 1, 3)
@@ -255,7 +261,8 @@ def search(
                          'global_gradient_penalty_scale_factor', 'local_transition_loss_regularizer_scale_factor',
                          'steady_state_wasserstein_regularizer_scale_factor',
                          'n_critic', 'squared_wasserstein', 'enforce_upper_bound', 'trainable_prior',
-                         'state_encoder_type', 'deterministic_state_embedding', 'number_of_discrete_actions'
+                         'state_encoder_type', 'deterministic_state_embedding', 'number_of_discrete_actions',
+                         'clipnorm', 'clipvalue', 'gradient_clipping'
                          ]:
                 defaults[attr] = locals().get(attr, 'default')
         else:
@@ -301,13 +308,17 @@ def search(
             autoencoder_optimizer = tf.optimizers.Adam(  # getattr(tf.optimizers, hyperparameters['optimizer'])(
                 learning_rate=hyperparameters['learning_rate'],
                 beta_1=hyperparameters['adam_beta_1'],
-                beta_2=hyperparameters['adam_beta_2'])
+                beta_2=hyperparameters['adam_beta_2'],
+                clipnorm=hyperparameters['clipnorm'],
+                clipvalue=hyperparameters['clipvalue'])
 
             # getattr(tf.optimizers, hyperparameters['wasserstein_optimizer'])(
             wasserstein_optimizer = tf.optimizers.Adam(
                 learning_rate=hyperparameters['wasserstein_learning_rate'],
                 beta_1=hyperparameters['adam_beta_1'],
-                beta_2=hyperparameters['adam_beta_2'])
+                beta_2=hyperparameters['adam_beta_2'],
+                clipnorm=hyperparameters['clipnorm'],
+                clipvalue=hyperparameters['clipvalue'])
             optimizer = [autoencoder_optimizer, wasserstein_optimizer]
             vae_mdp = wasserstein_mdp.WassersteinMarkovDecisionProcess(
                 state_shape=specs.state_shape,
