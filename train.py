@@ -195,7 +195,9 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
         params['state_prior_temperature'],
         params['activation'],
         params['optimizer'],
-        params['learning_rate'],
+        (params['learning_rate']
+         if 'learning_rate_decay' not in params.keys() else
+         params['learning_rate'].initial_learning_rate),
         int(params['seed']),
         params['entropy_regularizer_scale_factor'],
         params['entropy_regularizer_decay_rate'],
@@ -207,7 +209,11 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
         params['state_encoder_type'])
     if params['wasserstein_optimizer'] is not None:
         wae_name += '_wopt={}_lr={:.2g}'.format(
-            params['wasserstein_optimizer'], params['wasserstein_learning_rate'])
+            params['wasserstein_optimizer'],
+            (params['wasserstein_learning_rate']
+             if 'learning_rate_decay' not in params.keys() else
+             params['wasserstein_learning_rate'].initial_learning_rate),)
+
     if params['squared_wasserstein']:
         wae_name += '_W2'
     if not params['trainable_prior']:
@@ -564,19 +570,19 @@ def main(argv):
                 initial_learning_rate=params['learning_rate'],
                 decay_steps=3 * params['max_steps'] // 4,
                 end_learning_rate=params['end_learning_rate'],
-                power=1.7,)
+                power=1.7, )
         autoencoder_optimizer = getattr(tf.optimizers, params['optimizer'])(
             learning_rate=lr,
             clipnorm=params['gradient_clipnorm'],
             clipvalue=params['gradient_clipvalue'],
             **({'beta_1': params['adam_beta_1'],
                 'beta_2': params['adam_beta_2']}
-                if params['optimizer'] == 'Adam'
-                else dict()))
+               if params['optimizer'] == 'Adam'
+               else dict()))
         print("autoencoder optimizer", autoencoder_optimizer,
-                autoencoder_optimizer.beta_1, autoencoder_optimizer.beta_2,
-                autoencoder_optimizer.learning_rate,
-                autoencoder_optimizer.clipnorm, autoencoder_optimizer.clipvalue)
+              autoencoder_optimizer.beta_1, autoencoder_optimizer.beta_2,
+              autoencoder_optimizer.learning_rate,
+              autoencoder_optimizer.clipnorm, autoencoder_optimizer.clipvalue)
         if params['wasserstein_optimizer'] is None:
             wasserstein_optimizer = autoencoder_optimizer
         else:
@@ -587,14 +593,14 @@ def main(argv):
                     initial_learning_rate=params['wasserstein_learning_rate'],
                     decay_steps=3 * params['max_steps'] // 4,
                     end_learning_rate=params['end_wasserstein_learning_rate'],
-                    power=1.7,)
+                    power=1.7, )
             wasserstein_optimizer = getattr(tf.optimizers, params['wasserstein_optimizer'])(
                 learning_rate=wlr,
                 clipnorm=params['gradient_clipnorm'],
                 clipvalue=params['gradient_clipvalue'],
                 **({'beta_1': params['adam_beta_1'],
                     'beta_2': params['adam_beta_2']}
-                    if params['wasserstein_optimizer'] == 'Adam'
+                   if params['wasserstein_optimizer'] == 'Adam'
                    else dict()))
         optimizer = [autoencoder_optimizer, wasserstein_optimizer]
 
@@ -1342,7 +1348,7 @@ if __name__ == '__main__':
     flags.DEFINE_bool(
         'state_encoder_softclipping',
         help='Whether to apply softclipping (usually a tanh) on the logits of the encoders',
-        default=True
+        default=False
     )
 
     FLAGS = flags.FLAGS

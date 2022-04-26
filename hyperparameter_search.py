@@ -126,7 +126,7 @@ def search(
         wasserstein_learning_rate = trial.suggest_categorical('wasserstein_learning_rate', [1e-4, 2e-4, 3e-4])
         if learning_rate_decay:
             wasserstein_power_decay = trial.suggest_categorical("wasserstein_power_decay", [0.5, 1., 1.5, 2.])
-            learning_rate = tf.optimizers.schedules.PolynomialDecay(
+            wasserstein_learning_rate = tf.optimizers.schedules.PolynomialDecay(
                 initial_learning_rate=wasserstein_learning_rate,
                 decay_steps=fixed_parameters['max_steps'],
                 end_learning_rate=1e-5,
