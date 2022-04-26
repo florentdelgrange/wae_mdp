@@ -195,9 +195,9 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
         params['state_prior_temperature'],
         params['activation'],
         params['optimizer'],
-        (params['learning_rate']
-         if 'learning_rate_decay' not in params.keys() else
-         params['learning_rate'].initial_learning_rate),
+        (params['learning_rate'].initial_learning_rate
+         if hasattr('learning_rate', 'initial_learning_rate') else
+         params['learning_rate']),
         int(params['seed']),
         params['entropy_regularizer_scale_factor'],
         params['entropy_regularizer_decay_rate'],
@@ -210,9 +210,9 @@ def generate_wae_name(params, wasserstein_regularizer: wasserstein_mdp.Wasserste
     if params['wasserstein_optimizer'] is not None:
         wae_name += '_wopt={}_lr={:.2g}'.format(
             params['wasserstein_optimizer'],
-            (params['wasserstein_learning_rate']
-             if 'learning_rate_decay' not in params.keys() else
-             params['wasserstein_learning_rate'].initial_learning_rate),)
+            (params['wasserstein_learning_rate'].initial_learning_rate
+             if hasattr('wasserstein_learning_rate', 'initial_learning_rate') else
+             params['wasserstein_learning_rate']),)
 
     if params['squared_wasserstein']:
         wae_name += '_W2'
