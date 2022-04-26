@@ -130,7 +130,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             state_encoder_type: EncodingType = EncodingType.AUTOREGRESSIVE,
             policy_based_decoding: bool = False,
             deterministic_state_embedding: bool = True,
-            state_encoder_softclipping: bool = True,
+            state_encoder_softclipping: bool = False,
             *args, **kwargs
     ):
         super(WassersteinMarkovDecisionProcess, self).__init__(
