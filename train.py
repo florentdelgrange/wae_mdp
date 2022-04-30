@@ -424,6 +424,9 @@ def main(argv):
     else:
         environment_suite = None
 
+    if params['wae'] and not params['action_discretizer']:
+        params['latent_policy'] = True
+
     specs = get_environment_specs(
         environment_suite=environment_suite,
         environment_name=environment_name,
