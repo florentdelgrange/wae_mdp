@@ -1324,7 +1324,7 @@ if __name__ == '__main__':
     )
     flags.DEFINE_enum(
         'state_encoder_type',
-        'autoregressive',
+        'deterministic',
         ['autoregressive', 'lstm', 'independent', 'deterministic'],
         'State encoder type, defining which technique to use to encode states.'
     )
