@@ -424,6 +424,9 @@ def main(argv):
     else:
         environment_suite = None
 
+    if params['wae'] and not params['action_discretizer']:
+        params['latent_policy'] = True
+
     specs = get_environment_specs(
         environment_suite=environment_suite,
         environment_name=environment_name,
@@ -568,9 +571,10 @@ def main(argv):
         else:
             lr = tf.optimizers.schedules.PolynomialDecay(
                 initial_learning_rate=params['learning_rate'],
-                decay_steps=3 * params['max_steps'] // 4,
+                decay_steps=(3 * params['max_steps'] // 4 if params['learning_rate_decay_steps'] is None
+                                else params['learning_rate_decay_steps']),
                 end_learning_rate=params['end_learning_rate'],
-                power=1.7, )
+                power=params['learning_rate_power_decay'], )
         autoencoder_optimizer = getattr(tf.optimizers, params['optimizer'])(
             learning_rate=lr,
             clipnorm=params['gradient_clipnorm'],
@@ -591,9 +595,10 @@ def main(argv):
             else:
                 wlr = tf.optimizers.schedules.PolynomialDecay(
                     initial_learning_rate=params['wasserstein_learning_rate'],
-                    decay_steps=3 * params['max_steps'] // 4,
+                    decay_steps=(3 * params['max_steps'] // 4 if params['learning_rate_decay_steps'] is None
+                                 else params['learning_rate_decay_steps']),
                     end_learning_rate=params['end_wasserstein_learning_rate'],
-                    power=1.7, )
+                    power=params['wasserstein_learning_rate_power_decay'], )
             wasserstein_optimizer = getattr(tf.optimizers, params['wasserstein_optimizer'])(
                 learning_rate=wlr,
                 clipnorm=params['gradient_clipnorm'],
@@ -1166,6 +1171,14 @@ if __name__ == '__main__':
         'end_learning_rate',
         default=None,
         help='If provided, decay the learning rate to this value.')
+    flags.DEFINE_integer(
+        'learning_rate_decay_steps',
+        default=None,
+        help="If provided with end_learning_rate, decay the learning rate during the provided time step.")
+    flags.DEFINE_float(
+        'learning_rate_power_decay',
+        default=1.7,
+        help='If provided with end_learning_rate, decay the learning rate with the provided power decay')
     flags.DEFINE_bool(
         'local_losses_evaluation',
         default=False,
@@ -1283,6 +1296,10 @@ if __name__ == '__main__':
         'end_wasserstein_learning_rate',
         default=None,
         help='If provided, decay the learning rate to this value.')
+    flags.DEFINE_float(
+        'wasserstein_learning_rate_power_decay',
+        default=1.7,
+        help='If provided with end_learning_rate, decay the Wasserstein learning rate with the provided power decay')
     flags.DEFINE_bool(
         'policy_based_decoding',
         default=False,
@@ -1312,7 +1329,7 @@ if __name__ == '__main__':
     )
     flags.DEFINE_enum(
         'state_encoder_type',
-        'autoregressive',
+        'deterministic',
         ['autoregressive', 'lstm', 'independent', 'deterministic'],
         'State encoder type, defining which technique to use to encode states.'
     )

@@ -81,7 +81,7 @@ def search(
                 initial_learning_rate=learning_rate,
                 decay_steps=fixed_parameters['max_steps'],
                 end_learning_rate=1e-5,
-                power=1.7, )
+                power=power_decay, )
         else:
             power_decay = 1.
         batch_size = 128
@@ -291,6 +291,7 @@ def search(
 
         # set the seed according to the trial number
         seed = trial.number
+        fixed_parameters['seed'] = seed
         os.environ['PYTHONHASHSEED'] = str(seed)
         random.seed(seed)
         np.random.seed(seed)
@@ -312,6 +313,8 @@ def search(
         global_step = tf.Variable(0, trainable=False, dtype=tf.int64)
         _params = {key: value for key, value in fixed_parameters.items()}
         for key, value in hyperparameters.items():
+            if 'learning_rate' in key and 'learning_rate_decay' in hyperparameters.keys():
+                value = getattr(value, 'initial_learning_rate', value)
             _params[key] = value
 
         if fixed_parameters['wae']:
