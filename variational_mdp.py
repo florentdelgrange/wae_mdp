@@ -140,7 +140,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
         self.reward_shape = reward_shape
         self.latent_state_size = latent_state_size
         self.label_shape = label_shape
-        self.atomic_props_dims = np.prod(label_shape) + int(reset_state_label)
+        self.atomic_prop_dims = np.prod(label_shape) + int(reset_state_label)
         self.mixture_components = mixture_components
         self.full_covariance = multivariate_normal_full_covariance
         self.latent_policy_training_phase = latent_policy_training_phase
@@ -219,7 +219,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                     _state = state
                 encoder = encoder_network(_state)
             logits_layer = Dense(
-                units=latent_state_size - self.atomic_props_dims,
+                units=latent_state_size - self.atomic_prop_dims,
                 # allows avoiding exploding logits values and probability errors after applying a sigmoid
                 activation=lambda x: self._encoder_softclip(x),
                 name='encoder_latent_distribution_logits'
@@ -251,7 +251,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
             # Transition network
             # inputs are binary concrete random variables, outputs are locations of logistic distributions
-            next_label = Input(shape=(self.atomic_props_dims,), name='next_label')
+            next_label = Input(shape=(self.atomic_prop_dims,), name='next_label')
             if self.number_of_discrete_actions != -1:
                 if label_transition_network is not None:
                     transition_network_input = Concatenate(name='transition_network_input')(
@@ -259,7 +259,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 else:
                     transition_network_input = latent_state
                 _transition_network = transition_network(transition_network_input)
-                no_latent_state_logits = latent_state_size - self.atomic_props_dims
+                no_latent_state_logits = latent_state_size - self.atomic_prop_dims
                 transition_output_layer = Dense(
                     units=no_latent_state_logits * self.number_of_discrete_actions,
                     activation=None,
@@ -273,7 +273,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 action_transition_output = transition_output_layer
 
                 _action = tf.keras.layers.RepeatVector(
-                    no_latent_state_logits, name='transition_output_repeat_action')(action)
+                    int(no_latent_state_logits), name='transition_output_repeat_action')(action)
                 transition_output_layer = tf.keras.layers.Multiply(name="multiply_action_transition")(
                     [_action, transition_output_layer])
                 transition_output_layer = Lambda(
@@ -290,7 +290,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 _transition_network = transition_network(transition_network_input)
                 action_transition_output = None
                 transition_output_layer = Dense(
-                    units=latent_state_size - self.atomic_props_dims,
+                    units=latent_state_size - self.atomic_prop_dims,
                     activation=None,
                     name='latent_transition_distribution_logits'
                 )(_transition_network)
@@ -304,12 +304,12 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 else:
                     _label_transition_network = _transition_network
                 _label_transition_network = Dense(
-                    units=self.atomic_props_dims * self.number_of_discrete_actions,
+                    units=self.atomic_prop_dims * self.number_of_discrete_actions,
                     activation=None,
                     name="label_transition_network_raw_output_layer"
                 )(_label_transition_network)
                 _label_transition_network = Reshape(
-                    target_shape=(self.atomic_props_dims, self.number_of_discrete_actions),
+                    target_shape=(self.atomic_prop_dims, self.number_of_discrete_actions),
                     name='reshape_label_transition_output'
                 )(_label_transition_network)
 
@@ -324,7 +324,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                     name="action_transition_network")
 
                 _action = tf.keras.layers.RepeatVector(
-                    self.atomic_props_dims,
+                    int(self.atomic_prop_dims),
                     name='label_transition_output_repeat_action')(action)
                 _label_transition_network = tf.keras.layers.Multiply()([_action, _label_transition_network])
                 _label_transition_network = Lambda(
@@ -339,7 +339,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 else:
                     _label_transition_network = _transition_network
                 _label_transition_network = Dense(
-                    units=self.atomic_props_dims,
+                    units=self.atomic_prop_dims,
                     activation=None,
                     name='next_label_transition_logits'
                 )(_label_transition_network)
@@ -365,7 +365,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                     activation=None if self._reward_softclip is None else lambda x: self._reward_softclip(x),
                     name='reward_mean_raw_output')(_reward_network)
                 reward_mean = Reshape(target_shape=(reward_shape + (self.number_of_discrete_actions,)))(reward_mean)
-                _action = tf.keras.layers.RepeatVector(np.prod(reward_shape))(action)
+                _action = tf.keras.layers.RepeatVector(int(np.prod(reward_shape)))(action)
                 _action = Reshape(target_shape=(reward_shape + (self.number_of_discrete_actions,)))(_action)
                 reward_mean = tf.keras.layers.Multiply(name="multiply_action_reward_stack")(
                     [_action, reward_mean])
@@ -935,7 +935,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             if latent_states is None:
                 latent_states = marginal_encoder.sample(batch_size)
             else:
-                latent_states = latent_states[..., self.atomic_props_dims:]
+                latent_states = latent_states[..., self.atomic_prop_dims:]
             latent_states = tf.clip_by_value(latent_states, clip_value_min=1e-7, clip_value_max=1. - 1e-7)
             marginal_entropy_regularizer = tf.reduce_mean(marginal_encoder.log_prob(latent_states))
 
@@ -1582,7 +1582,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
         (state_shape, label_shape, action_shape, reward_shape) = (
             tuple(shape) for shape in
-            [self.state_shape, (self.atomic_props_dims,), self.action_shape, self.reward_shape])
+            [self.state_shape, (self.atomic_prop_dims,), self.action_shape, self.reward_shape])
 
         if signatures is None:
             signatures = dict()
@@ -2092,27 +2092,26 @@ class VariationalMarkovDecisionProcess(tf.Module):
                                              buckets=buckets[value])
                 if local_losses_metrics is not None:
                     tf.summary.scalar('local_reward_loss', local_losses_metrics.local_reward_loss, step=global_step)
-                    if (local_losses_metrics.local_probability_loss_transition_function_estimation is not None and
-                            local_losses_metrics.local_probability_loss_transition_function_estimation <
-                            local_losses_metrics.local_probability_loss):
-                        local_transition_loss = \
-                            local_losses_metrics.local_probability_loss_transition_function_estimation
-                        local_transition_loss_time = local_losses_metrics.time_metrics[
-                            'local_transition_loss_transition_function_estimation']
-                    else:
-                        local_transition_loss = local_losses_metrics.local_probability_loss
-                        local_transition_loss_time = local_losses_metrics.time_metrics['local_transition_loss']
-                    tf.summary.scalar('local_transition_loss', local_transition_loss, step=global_step)
-                    tf.summary.scalar(
-                        'local_losses_computation_time',
-                        local_losses_metrics.time_metrics['local_reward_loss'] + local_transition_loss_time,
-                        step=global_step)
-                    tf.print('Local reward loss: {:.2f}'.format(local_losses_metrics.local_reward_loss))
-                    tf.print('Local transition loss: {:.2f}'.format(local_losses_metrics.local_probability_loss))
-                    tf.print('Local transition loss (empirical transition function): {:.2f}'
-                             ''.format(local_losses_metrics.local_probability_loss_transition_function_estimation))
+                    tf.summary.scalar('local_transition_loss',
+                                      local_losses_metrics.local_transition_loss, step=global_step)
+                    if local_losses_metrics.local_transition_loss_transition_function_estimation is not None:
+                        tf.summary.scalar('local_transition_loss_empirical_transition_function',
+                                          local_losses_metrics.local_transition_loss_transition_function_estimation,
+                                          step=global_step)
+                    for key, value in local_losses_metrics.value_difference.items():
+                        tf.summary.scalar(key, value, step=global_step)
 
             print('eval ELBO: ', metrics['eval_elbo'].result().numpy())
+
+        if local_losses_metrics is not None:
+            tf.print('Local reward loss: {:.2f}'.format(local_losses_metrics.local_reward_loss))
+            tf.print('Local transition loss: {:.2f}'.format(local_losses_metrics.local_transition_loss))
+            tf.print('Local transition loss (empirical transition function): {:.2f}'
+                     ''.format(local_losses_metrics.local_transition_loss_transition_function_estimation))
+
+            for key, value in local_losses_metrics.value_difference.items():
+                tf.print(key, value)
+            local_losses_metrics.print_time_metrics()
 
         if eval_policy_driver is not None or eval_steps > 0:
             self.assign_score(
