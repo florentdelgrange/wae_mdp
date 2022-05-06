@@ -153,6 +153,7 @@ class DQNLearner:
             collect_steps_per_iteration = max(1, collect_steps_per_iteration // num_parallel_environments)
 
         self.env_name = env_name
+        self.env_suite = env_suite
         self.num_iterations = num_iterations
 
         self.initial_collect_steps = initial_collect_steps
@@ -186,7 +187,7 @@ class DQNLearner:
             if debug:
                 img = PIL.Image.fromarray(self.py_env.render())
                 img.show()
-            self.eval_env = tf_py_environment.TFPyEnvironment(self.py_env)
+            # self.eval_env = tf_py_environment.TFPyEnvironment(self.py_env)
         else:
             self.py_env = env_loader.load(env_name)
             self.py_env.reset()
@@ -194,7 +195,7 @@ class DQNLearner:
                 img = PIL.Image.fromarray(self.py_env.render())
                 img.show()
             self.tf_env = tf_py_environment.TFPyEnvironment(self.py_env)
-            self.eval_env = tf_py_environment.TFPyEnvironment(env_suite.load(env_name))
+            # self.eval_env = tf_py_environment.TFPyEnvironment(env_suite.load(env_name))
 
         self.observation_spec = self.tf_env.observation_spec()
         self.action_spec = self.tf_env.action_spec()
@@ -436,9 +437,11 @@ class DQNLearner:
         avg_eval_return = tf_metrics.AverageReturnMetric()
         avg_eval_episode_length = tf_metrics.AverageEpisodeLengthMetric()
         saved_policy = tf.compat.v2.saved_model.load(self.policy_dir)
-        self.eval_env.reset()
+        eval_env = tf_py_environment.TFPyEnvironment(self.env_suite.load(self.env_name))
+        eval_env.reset()
+
         dynamic_episode_driver.DynamicEpisodeDriver(
-            self.eval_env,
+            eval_env,
             saved_policy,
             [avg_eval_return, avg_eval_episode_length],
             num_episodes=self.num_eval_episodes
