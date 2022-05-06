@@ -119,6 +119,6 @@ class EnvironmentLoader:
             try:
                 environment.seed(self.seed + self.n)
                 self.n += 1
-            except NotImplementedError:
+            except (NotImplementedError, AttributeError):
                 print("Environment {} has no seed support.".format(env_name))
         return environment

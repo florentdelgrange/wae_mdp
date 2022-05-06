@@ -264,7 +264,7 @@ class SACLearner:
             self.tf_env = tf_py_environment.TFPyEnvironment(parallel_py_environment.ParallelPyEnvironment(
                 [lambda: env_loader.load(env_name)] * num_parallel_environments))
             self.tf_env.reset()
-            self.py_env = env_suite.load(env_name)
+            self.py_env = env_loader.load(env_name)
             self.py_env.reset()
             if debug:
                 img = PIL.Image.fromarray(self.py_env.render())

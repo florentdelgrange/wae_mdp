@@ -717,7 +717,7 @@ def main(argv):
             save_directory=params['save_dir'],
             parallel_environments=params['parallel_env'] > 1,
             num_parallel_environments=params['parallel_env'],
-            eval_steps=int(1e5) if not params['do_not_eval'] else 0,
+            eval_steps=params['eval_steps'] if not params['do_not_eval'] else 0,
             eval_and_save_model_interval=params['evaluation_interval'],
             policy_evaluation_num_episodes=(
                 0 if not (params['action_discretizer'] or params['latent_policy'])
@@ -899,6 +899,11 @@ if __name__ == '__main__':
         "do_not_eval",
         default=False,
         help="Set this flag to not perform an evaluation of the ELBO (using discrete latent variables) during training."
+    )
+    flags.DEFINE_integer(
+        "eval_steps",
+        default=int(1e5),
+        help="Number of transitions to gather from the replay buffer to evaluate the model loss."
     )
     flags.DEFINE_integer(
         "num_eval_episodes",

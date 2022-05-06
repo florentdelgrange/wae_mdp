@@ -437,12 +437,11 @@ class DQNLearner:
         avg_eval_return = tf_metrics.AverageReturnMetric()
         avg_eval_episode_length = tf_metrics.AverageEpisodeLengthMetric()
         saved_policy = tf.compat.v2.saved_model.load(self.policy_dir)
-        
-        eval_env = tf_py_environment.TFPyEnvironment(env_suite.load(env_name))
+        eval_env = tf_py_environment.TFPyEnvironment(self.env_suite.load(self.env_name))
+        eval_env.reset()
 
-        self.eval_env.reset()
         dynamic_episode_driver.DynamicEpisodeDriver(
-            self.eval_env,
+            eval_env,
             saved_policy,
             [avg_eval_return, avg_eval_episode_length],
             num_episodes=self.num_eval_episodes
