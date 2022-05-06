@@ -1002,6 +1002,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
             next_label: tf.Tensor,
             sample_key: Optional[tf.Tensor] = None,
             sample_probability: Optional[tf.Tensor] = None,
+            *args, **kwargs
     ):
         if self.full_optimization:
             return self._compute_apply_gradients(
@@ -1021,6 +1022,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
             assert_estimated_transition_function_distribution: bool = False,
             replay_buffer_max_frames: Optional[int] = int(1e5),
             reward_scaling: Optional[float] = 1.,
+            *args, **kwargs
     ):
         if self.latent_policy_network is None:
             raise ValueError('This VAE is not built for policy abstraction.')
