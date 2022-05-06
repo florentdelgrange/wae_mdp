@@ -17,6 +17,7 @@ from util.io import dataset_generator
 from variational_mdp import VariationalMarkovDecisionProcess
 from variational_mdp import epsilon
 from verification.local_losses import estimate_local_losses_from_samples
+from verification.model import TransitionFnDecorator
 
 tfd = tfp.distributions
 tfb = tfp.bijectors
@@ -1033,7 +1034,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
 
         return estimate_local_losses_from_samples(
             environment=environment,
-            latent_policy=self.get_latent_policy(),
+            latent_policy=self.get_latent_policy(action_dtype=tf.int64),
             steps=steps,
             latent_state_size=self.latent_state_size,
             number_of_discrete_actions=self.number_of_discrete_actions,
@@ -1047,12 +1048,12 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
                     next_latent_state=tf.cast(next_latent_state, dtype=tf.float32),
                     disable_mixture_distribution=True).mode()),
             labeling_function=labeling_function,
-            latent_transition_function=(
-                lambda latent_state, latent_action:
-                self.discrete_latent_transition(
-                    latent_state=tf.cast(latent_state, tf.float32),
-                    latent_action=tf.math.log(latent_action + epsilon),
-                    log_latent_action=True)),
+            latent_transition_function=lambda state, action: TransitionFnDecorator(
+                next_state_distribution=self.discrete_latent_transition(
+                    latent_state=tf.cast(state, tf.float32),
+                    latent_action=tf.math.log(action + epsilon),
+                    log_latent_action=True),
+                atomic_prop_dims=self.atomic_prop_dims),
             estimate_transition_function_from_samples=estimate_transition_function_from_samples,
             replay_buffer_max_frames=replay_buffer_max_frames,
             reward_scaling=reward_scaling)
