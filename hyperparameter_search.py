@@ -56,11 +56,7 @@ def search(
     environment_suite_name = fixed_parameters['env_suite']
     environment_name = fixed_parameters['environment']
     environment_suite = None
-    try:
-        environment_suite = importlib.import_module('tf_agents.environments.' + environment_suite_name)
-    except BaseException as err:
-        serr = str(err)
-        print("An error occurred when loading the module '" + environment_suite_name + "': " + serr)
+    environment_suite = importlib.import_module('tf_agents.environments.' + environment_suite_name)
 
     def suggest_hyperparameters(trial):
         defaults = {}
@@ -176,6 +172,7 @@ def search(
         specs = get_environment_specs(
             environment_suite=environment_suite,
             environment_name=environment_name,
+            environment_args=fixed_parameters['environment_args'],
             discrete_action_space=not fixed_parameters['action_discretizer'],
             time_stacked_states=time_stacked_states)
         if fixed_parameters['latent_size'] <= 0:
@@ -455,6 +452,7 @@ def search(
         environments = vae_mdp.initialize_environments(
             environment_suite=environment_suite,
             env_name=environment_name,
+            env_args=fixed_parameters['environment_args'],
             parallel_environments=fixed_parameters['parallel_env'] > 1,
             num_parallel_environments=fixed_parameters['parallel_env'],
             collect_steps_per_iteration=hyperparameters['collect_steps_per_iteration'],
@@ -507,6 +505,7 @@ def search(
             return vae_mdp.train_from_policy(
                 policy=policy,
                 environment_suite=environment_suite,
+                env_args=fixed_parameters['environment_args'],
                 env_name=environment_name,
                 labeling_function=reinforcement_learning.labeling_functions[environment_name],
                 training_steps=training_steps,

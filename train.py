@@ -6,6 +6,7 @@ import random
 import sys
 from collections import namedtuple
 import datetime
+from typing import Optional, List
 
 import numpy as np
 import tensorflow as tf
@@ -280,18 +281,22 @@ def get_environment_specs(
         environment_suite,
         environment_name: str,
         discrete_action_space: bool,
-        time_stacked_states: int = 1
+        time_stacked_states: int = 1,
+        environment_args: Optional[List[str]] = None,
 ):
+    if environment_args is None:
+        environment_args = []
+    env_args = [environment_name] + environment_args
     if time_stacked_states > 1:
         environment = tf_py_environment.TFPyEnvironment(
             tf_agents.environments.parallel_py_environment.ParallelPyEnvironment(
                 [lambda: HistoryWrapper(
-                    env=environment_suite.load(environment_name),
+                    env=environment_suite.load(*env_args),
                     history_length=time_stacked_states)]))
     else:
         environment = tf_py_environment.TFPyEnvironment(
             tf_agents.environments.parallel_py_environment.ParallelPyEnvironment(
-                [lambda: environment_suite.load(environment_name)]))
+                [lambda: environment_suite.load(*env_args)]))
 
     if time_stacked_states > 1:
         label_shape = reinforcement_learning.labeling_functions[environment_name](
@@ -415,14 +420,7 @@ def main(argv):
         params['collect_steps_per_iteration'] = params['batch_size'] // 8
 
     environment_name = params['environment']
-    if params['env_suite'] != '':
-        try:
-            environment_suite = importlib.import_module('tf_agents.environments.' + params['env_suite'])
-        except BaseException as err:
-            serr = str(err)
-            print("An error occurred when loading the module '" + params['env_suite'] + "': " + serr)
-    else:
-        environment_suite = None
+    environment_suite = importlib.import_module('tf_agents.environments.' + params['env_suite'])
 
     if params['wae'] and not params['action_discretizer']:
         params['latent_policy'] = True
@@ -690,6 +688,7 @@ def main(argv):
             environment_suite=environment_suite,
             environment_seed=params['seed'],
             env_name=environment_name,
+            env_args=params['environment_args'],
             labeling_function=reinforcement_learning.labeling_functions[environment_name],
             log_interval=params['log_interval'],
             checkpoint_interval=params['checkpoint_interval'],
@@ -976,6 +975,11 @@ if __name__ == '__main__':
         "env_suite",
         default='suite_gym',
         help='Name of the tf_agents environment suite.'
+    )
+    flags.DEFINE_multi_string(
+        'environment_args',
+        default=None,
+        help='additional arguments passed to env_suite'
     )
     flags.DEFINE_string(
         "policy_environment",

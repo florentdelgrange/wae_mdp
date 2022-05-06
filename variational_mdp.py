@@ -2,7 +2,7 @@ import os
 from collections import namedtuple
 import enum
 from enum import Enum
-from typing import Tuple, Optional, Callable, Dict, Iterator, NamedTuple
+from typing import Tuple, Optional, Callable, Dict, Iterator, NamedTuple, List
 import numpy as np
 import psutil
 from absl import logging
@@ -1281,6 +1281,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             self,
             environment_suite,
             env_name: str,
+            env_args: Optional[List[str]] = None,
             parallel_environments: bool = False,
             num_parallel_environments: int = 4,
             collect_steps_per_iteration: int = 8,
@@ -1312,7 +1313,8 @@ class VariationalMarkovDecisionProcess(tf.Module):
         env_loader = EnvironmentLoader(
             environment_suite,
             seed=environment_seed,
-            time_stacked_states=self.state_shape[0] if self.time_stacked_states else 1)
+            time_stacked_states=self.state_shape[0] if self.time_stacked_states else 1,
+            env_args=env_args)
 
         env_wrappers = []
         if environment_perturbation > 0.:
@@ -1607,6 +1609,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             environment_suite,
             env_name: str,
             labeling_function: Callable[[tf.Tensor], tf.Tensor],
+            env_args: Optional[List] = None,
             epsilon_greedy: Optional[float] = 0.,
             epsilon_greedy_decay_rate: Optional[float] = -1.,
             discrete_action_space: bool = False,
@@ -1722,6 +1725,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             environments = self.initialize_environments(
                 environment_suite=environment_suite,
                 env_name=env_name,
+                env_args=env_args,
                 labeling_function=labeling_function,
                 parallel_environments=parallel_environments,
                 num_parallel_environments=num_parallel_environments,

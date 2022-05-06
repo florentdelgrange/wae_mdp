@@ -7,7 +7,7 @@ path = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, path + '/../')
 
 from collections import namedtuple
-from typing import Tuple, Callable, Optional
+from typing import Tuple, Callable, Optional, List
 import threading
 import timeit
 import datetime
@@ -55,6 +55,9 @@ flags.DEFINE_string(
 )
 flags.DEFINE_string(
     'env_suite', help='Environment suite', default='suite_pybullet'
+)
+flags.DEFINE_multi_string(
+    'env_args', default=None, help='Additional arguments to pass to env_suite',
 )
 flags.DEFINE_integer(
     'steps', help='Number of iterations', default=int(1.2e7)
@@ -205,6 +208,7 @@ class SACLearner:
             state_perturbation: float = 0.,
             action_perturbation: float = 0.,
             seed: Optional[int] = None,
+            env_args: Optional[List] = None,
     ):
 
         self.parallelization = parallelization and not prioritized_experience_replay
@@ -248,7 +252,7 @@ class SACLearner:
 
         self.prioritized_experience_replay = prioritized_experience_replay
 
-        env_loader = EnvironmentLoader(env_suite, seed=seed)
+        env_loader = EnvironmentLoader(env_suite, seed=seed, env_args=env_args)
         if state_perturbation > 0. or action_perturbation > 0.:
             _load = env_loader.load
             env_loader.load = lambda env_name: NoisyEnvironment(
@@ -694,6 +698,7 @@ def main(argv):
         state_perturbation=params['state_perturbation'],
         action_perturbation=params['action_perturbation'],
         seed=params['seed'],
+        env_args=params['env_args']
     )
 
     if not os.path.exists(learner.policy_dir):
