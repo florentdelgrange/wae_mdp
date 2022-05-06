@@ -27,7 +27,7 @@ class StateEncoderNetwork(DiscreteDistributionModel):
             hidden_units: Tuple[int, ...],
             activation: Callable[[tf.Tensor], tf.Tensor],
             latent_state_size: int,
-            atomic_props_dims: int,
+            atomic_prop_dims: int,
             time_stacked_states: bool = False,
             time_stacked_lstm_units: int = 128,
             output_softclip: Callable[[Float], Float] = tfb.Identity(),
@@ -35,7 +35,7 @@ class StateEncoderNetwork(DiscreteDistributionModel):
             lstm_output: bool = False,
             deterministic_reset: bool = True,
     ):
-        n_logits = (latent_state_size - atomic_props_dims)
+        n_logits = (latent_state_size - atomic_prop_dims)
         state_encoder_network = tfk.Sequential(name="state_encoder_body")
         self.deterministic_reset = deterministic_reset
 
@@ -61,10 +61,10 @@ class StateEncoderNetwork(DiscreteDistributionModel):
         if lstm_output:
             encoder = tfkl.Reshape(target_shape=(n_logits, hidden_units[-1] // n_logits))(encoder)
             encoder = tfkl.LSTM(units=1, activation=output_softclip, return_sequences=True)(encoder)
-            encoder = tfkl.Reshape(target_shape=(latent_state_size - atomic_props_dims,))(encoder)
+            encoder = tfkl.Reshape(target_shape=(latent_state_size - atomic_prop_dims,))(encoder)
         else:
             encoder = tfkl.Dense(
-                units=latent_state_size - atomic_props_dims,
+                units=latent_state_size - atomic_prop_dims,
                 activation=output_softclip
                 # allows avoiding exploding logits values and probability errors after applying a sigmoid
             )(encoder)
@@ -160,7 +160,7 @@ class DeterministicStateEncoderNetwork(StateEncoderNetwork):
             hidden_units: Tuple[int, ...],
             activation: Callable[[tf.Tensor], tf.Tensor],
             latent_state_size: int,
-            atomic_props_dims: int,
+            atomic_prop_dims: int,
             time_stacked_states: bool = False,
             output_softclip: Callable[[Float], Float] = tfb.Identity(),
             state_encoder_pre_processing_network: Optional[tfk.Model] = None,
@@ -170,7 +170,7 @@ class DeterministicStateEncoderNetwork(StateEncoderNetwork):
             activation=activation,
             hidden_units=hidden_units,
             latent_state_size=latent_state_size,
-            atomic_props_dims=atomic_props_dims,
+            atomic_prop_dims=atomic_prop_dims,
             time_stacked_states=time_stacked_states,
             lstm_output=False,
             output_softclip=output_softclip,
@@ -225,7 +225,7 @@ class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):
             activation: Union[str, Callable[[Float], Float]],
             hidden_units: Tuple[int, ...],
             latent_state_size: int,
-            atomic_props_dims: int,
+            atomic_prop_dims: int,
             temperature: Float,
             time_stacked_states: bool = False,
             time_stacked_lstm_units: int = 128,
@@ -234,7 +234,7 @@ class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):
             deterministic_reset: bool = True,
     ):
         super(AutoRegressiveStateEncoderNetwork, self).__init__(
-            event_shape=(latent_state_size - atomic_props_dims,),
+            event_shape=(latent_state_size - atomic_prop_dims,),
             activation=activation,
             hidden_units=hidden_units,
             conditional_event_shape=state_shape,
@@ -244,7 +244,7 @@ class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):
             time_stacked_lstm_units=time_stacked_lstm_units,
             pre_processing_network=state_encoder_pre_processing_network,
             name='autoregressive_state_encoder')
-        self._atomic_props_dims = atomic_props_dims
+        self._atomic_prop_dims = atomic_prop_dims
         self.deterministic_reset = deterministic_reset
 
     def relaxed_distribution(
@@ -335,7 +335,7 @@ class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):
             *args, **kwargs
     ) -> Float:
         if include_label:
-            latent_state = latent_state[..., self._atomic_props_dims:]
+            latent_state = latent_state[..., self._atomic_prop_dims:]
         if self.pre_process_input:
             state = self._preprocess_fn(state)
         return self._output_softclip(self._made(latent_state, conditional_input=state)[..., 0])
@@ -343,7 +343,7 @@ class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):
     def get_config(self):
         config = super(AutoRegressiveStateEncoderNetwork, self).get_config()
         config.update({
-            "_atomic_props_dims": self._atomic_props_dims,
+            "_atomic_prop_dims": self._atomic_prop_dims,
             "get_logits": self.get_logits,
         })
         return config

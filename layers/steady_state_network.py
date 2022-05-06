@@ -15,7 +15,7 @@ class SteadyStateNetwork(AutoRegressiveBernoulliNetwork):
 
     def __init__(
             self,
-            atomic_props_dims: int,
+            atomic_prop_dims: int,
             latent_state_size: int,
             activation: Callable[[Float], Float],
             hidden_units: Tuple[int, ...],
@@ -27,7 +27,7 @@ class SteadyStateNetwork(AutoRegressiveBernoulliNetwork):
             made_name: Optional[str] = None,
     ):
         super(SteadyStateNetwork, self).__init__(
-            event_shape=(latent_state_size,) if trainable_prior else (atomic_props_dims,),
+            event_shape=(latent_state_size,) if trainable_prior else (atomic_prop_dims,),
             activation=activation,
             hidden_units=hidden_units,
             temperature=temperature,
@@ -40,7 +40,7 @@ class SteadyStateNetwork(AutoRegressiveBernoulliNetwork):
         if self.trainable_prior:
             logits = tf.zeros(shape=(0, ), dtype=self.dtype)
         else:
-            logits = tf.zeros(shape=(latent_state_size - atomic_props_dims,), dtype=self.dtype)
+            logits = tf.zeros(shape=(latent_state_size - atomic_prop_dims,), dtype=self.dtype)
         self.prior_variables = tf.Variable(
             initial_value=logits,
             trainable=False,

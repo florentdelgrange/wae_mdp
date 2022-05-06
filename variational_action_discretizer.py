@@ -122,7 +122,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
             latent_state = Input(shape=(self.latent_state_size,))
             action = Input(shape=self.action_shape)
             next_latent_state = Input(shape=(self.latent_state_size,))
-            next_label = Input(shape=(self.atomic_props_dims,))
+            next_label = Input(shape=(self.atomic_prop_dims,))
             latent_action = Input(shape=(number_of_discrete_actions,)) if not one_output_per_action else None
 
             action_encoder = Concatenate(name="action_encoder_input")(
@@ -158,12 +158,12 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
                     _transition_network = Concatenate()([latent_state, latent_action])
                 _transition_network = transition_network(_transition_network)
                 _next_label_logits = (None if action_label_transition_network is not None else
-                                      Dense(units=self.atomic_props_dims,
+                                      Dense(units=self.atomic_prop_dims,
                                             activation=None,
                                             name='discrete_action_transition_next_label_logits'
                                       )(_transition_network))
                 _next_state_logits = Dense(
-                    units=self.latent_state_size - self.atomic_props_dims,
+                    units=self.latent_state_size - self.atomic_prop_dims,
                     activation=None,
                     name='discrete_action_transition_next_state_logits'
                 )(_transition_network)
@@ -188,14 +188,14 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
                         _transition_network = transition_network
                     _transition_network = _transition_network(transition_network_pre_processing)
                     _next_state_logits = Dense(
-                        units=self.latent_state_size - self.atomic_props_dims,
+                        units=self.latent_state_size - self.atomic_prop_dims,
                         activation=None,
                         name='transition_next_state_logits_action{}'.format(action)
                     )(_transition_network)
                     transition_outputs_next_state.append(_next_state_logits)
                     if action_label_transition_network is None:
                         _next_label_logits = Dense(
-                            units=self.atomic_props_dims,
+                            units=self.atomic_prop_dims,
                             activation=None,
                             name='transition_next_label_logits_action{}'.format(action)
                         )(_transition_network)
@@ -218,7 +218,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
                 _label_transition_network = Concatenate()([latent_state, latent_action])
                 _label_transition_network = action_label_transition_network(_label_transition_network)
                 _label_transition_network = Dense(
-                    units=self.atomic_props_dims,
+                    units=self.atomic_prop_dims,
                     name='next_label_transition_logits')(_label_transition_network)
                 self.action_label_transition_network = Model(
                     inputs=[latent_state, latent_action],
@@ -233,7 +233,7 @@ class VariationalActionDiscretizer(VariationalMarkovDecisionProcess):
                 outputs = []
                 for action in range(self.number_of_discrete_actions):
                     _label_transition_network = Dense(
-                        units=self.atomic_props_dims,
+                        units=self.atomic_prop_dims,
                         name='next_label_transition_logits_action{}'.format(action)
                     )(_label_transition_network)
                     outputs.append(_label_transition_network)

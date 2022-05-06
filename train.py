@@ -902,7 +902,7 @@ if __name__ == '__main__':
     )
     flags.DEFINE_integer(
         "eval_steps",
-        default=int(1e5),
+        default=int(1e4),
         help="Number of transitions to gather from the replay buffer to evaluate the model loss."
     )
     flags.DEFINE_integer(
