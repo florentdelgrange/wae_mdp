@@ -218,7 +218,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 activation=activation,
                 hidden_units=hidden_units,
                 latent_state_size=self.latent_state_size,
-                atomic_props_dims=self.atomic_props_dims,
+                atomic_prop_dims=self.atomic_prop_dims,
                 time_stacked_states=self.time_stacked_states,
                 temperature=self.state_encoder_temperature,
                 time_stacked_lstm_units=self.time_stacked_lstm_units,
@@ -230,7 +230,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 activation=get_activation_fn(state_encoder_network.activation),
                 hidden_units=state_encoder_network.hidden_units,
                 latent_state_size=latent_state_size,
-                atomic_props_dims=self.atomic_props_dims,
+                atomic_prop_dims=self.atomic_prop_dims,
                 time_stacked_states=time_stacked_states,
                 output_softclip=self.softclip,
                 state_encoder_pre_processing_network=base_models.get('state_encoder_pre_processing_network', None))
@@ -240,7 +240,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 activation=get_activation_fn(state_encoder_network.activation),
                 hidden_units=state_encoder_network.hidden_units,
                 latent_state_size=self.latent_state_size,
-                atomic_props_dims=self.atomic_props_dims,
+                atomic_prop_dims=self.atomic_prop_dims,
                 time_stacked_states=self.time_stacked_states,
                 time_stacked_lstm_units=self.time_stacked_lstm_units,
                 state_encoder_pre_processing_network=base_models.get('state_encoder_pre_processing_network', None),
@@ -265,7 +265,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             name='autoregressive_transition_network')
         # stationary distribution over latent states
         self.latent_stationary_network: AutoRegressiveBernoulliNetwork = SteadyStateNetwork(
-            atomic_props_dims=self.atomic_props_dims,
+            atomic_prop_dims=self.atomic_prop_dims,
             latent_state_size=latent_state_size,
             activation=get_activation_fn(transition_network.activation),
             hidden_units=transition_network.hidden_units,
@@ -803,7 +803,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.loss_metrics['binary_encoding_log_probs'](
                 self.binary_encode_state(
                     state=state
-                ).log_prob(tf.round(latent_state)[..., self.atomic_props_dims:]))
+                ).log_prob(tf.round(latent_state)[..., self.atomic_prop_dims:]))
         if self.action_discretizer and not self.policy_based_decoding:
             self.loss_metrics['marginal_action_encoder_entropy'](
                 self.marginal_action_encoder_entropy(latent_state, action))
@@ -1348,7 +1348,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             estimate_transition_function_from_samples=estimate_transition_function_from_samples,
             replay_buffer_max_frames=replay_buffer_max_frames,
             reward_scaling=reward_scaling,
-            atomic_prop_dims=self.atomic_props_dims,
+            atomic_prop_dims=self.atomic_prop_dims,
             estimate_value_difference=estimate_value_difference)
 
     def eval_and_save(
@@ -1429,13 +1429,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             ).numpy()
 
         if local_losses_estimator is not None:
-            # TODO: handle the bug related to the latent state dimensionality
-            try:
-                local_losses_metrics = local_losses_estimator()
-            except ValueError as e:
-                print("The following error occurred while estimating the transition loss:")
-                print(e)
-                local_losses_metrics = None
+            local_losses_metrics = local_losses_estimator()
 
         if train_summary_writer is not None and eval_steps > 0:
             with train_summary_writer.as_default():
@@ -1483,7 +1477,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         if eval_policy_driver is not None:
             self.assign_score(
                 score=score,
-                checkpoint_model=save_directory is not None and log_name is not None,
+                checkpoint_model=save_directory is not None,
                 save_directory=save_directory,
                 model_name='model',
                 training_step=global_step.numpy())
@@ -1533,8 +1527,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self._score(score['eval_policy'])
         score['training_step'] = training_step
         self._last_score = score['eval_policy']
+        print("assigning score:", score['eval_policy'])
 
         if checkpoint_model:
+            print("save model...")
             import os
             if save_best_only and os.path.exists(os.path.join(save_directory, model_name, 'model_infos.json')):
                 with open(os.path.join(save_directory, model_name, 'model_infos.json'), 'r') as f:
@@ -1542,16 +1538,22 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 eval_policy = float(infos.get('eval_policy', -1. * np.inf))
                 local_transition_loss = float(infos.get('local_transition_loss', np.inf))
                 local_reward_loss = float(infos.get('local_reward_loss', np.inf))
+                print("current best model:, eval_policy={:.2f}, local_transitition_loss={:.2f}, local_reward_loss={:.2f}".format(
+                      eval_policy, local_transition_loss, local_reward_loss))
                 if score['eval_policy'] > eval_policy:
+                    print(score['eval_policy'], "better")
                     self.save(save_directory, model_name, score)
                 elif np.abs(eval_policy - score['eval_policy']) < epsilon and (
                         'local_transition_loss' in score.keys() and 'local_reward_loss' in score.keys()):
                     if score['local_transition_loss'] < local_transition_loss:
+                        print("local_transition_loss better:", score['local_transition_loss'])
                         self.save(save_directory, model_name, score)
                     elif np.abs(score['local_transition_loss'] - local_transition_loss) < epsilon and (
                             score['local_reward_loss'] < local_reward_loss):
+                        print("local_reward_loss better:", score['local_reward_loss'])
                         self.save(save_directory, model_name, score)
             else:
+                print("saving model")
                 self.save(save_directory, model_name, score)
 
 
