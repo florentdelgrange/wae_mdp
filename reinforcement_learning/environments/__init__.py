@@ -1,8 +1,10 @@
 from typing import Optional, List
 
+import tensorflow as tf
 from tf_agents.typing.types import Sequence, PyEnvWrapper
 from gym.envs.registration import register
 from tf_agents.environments.wrappers import HistoryWrapper
+from tf_agents.environments import FlattenObservationsWrapper
 
 register(
     id='LunarLanderNoRewardShaping-v2',
@@ -108,6 +110,11 @@ class EnvironmentLoader:
             env_wrappers = list(env_wrappers) + \
                            [lambda env: HistoryWrapper(env=env, history_length=self.time_stacked_states)]
         environment = self.environment_suite.load(*([env_name] + self.env_args), env_wrappers=env_wrappers)
+
+        if len(tf.nest.flatten(environment.observation_spec())) > 1:
+            del environment
+            return self.load(env_name, env_wrappers=list(env_wrappers) + [FlattenObservationsWrapper])
+
         if self.seed is not None:
             try:
                 environment.seed(self.seed + self.n)
