@@ -8,7 +8,7 @@ import psutil
 from absl import logging
 import threading
 
-from gym.wrappers import TimeLimit
+from tf_agents.environments.wrappers import TimeLimit
 from keras.saving.saved_model import utils
 
 from reinforcement_learning.environments.latent_environment import LatentEmbeddingTFEnvironmentWrapper
