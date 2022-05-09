@@ -32,7 +32,7 @@ import variational_action_discretizer
 import wasserstein_mdp
 import reinforcement_learning.environments
 from layers.encoders import EncodingType
-from reinforcement_learning.environments.perturbed_env import PerturbedEnvironment
+from reinforcement_learning.environments import EnvironmentLoader
 from util.nn import get_activation_fn, ModelArchitecture
 
 FLAGS = flags.FLAGS
@@ -286,17 +286,13 @@ def get_environment_specs(
 ):
     if environment_args is None:
         environment_args = []
-    env_args = [environment_name] + environment_args
-    if time_stacked_states > 1:
-        environment = tf_py_environment.TFPyEnvironment(
-            tf_agents.environments.parallel_py_environment.ParallelPyEnvironment(
-                [lambda: HistoryWrapper(
-                    env=environment_suite.load(*env_args),
-                    history_length=time_stacked_states)]))
-    else:
-        environment = tf_py_environment.TFPyEnvironment(
-            tf_agents.environments.parallel_py_environment.ParallelPyEnvironment(
-                [lambda: environment_suite.load(*env_args)]))
+    env_loader = EnvironmentLoader(
+        environment_suite=environment_suite,
+        seed=42,
+        time_stacked_states=time_stacked_states,
+        env_args=environment_args)
+    environment = tf_agents.environments.parallel_py_environment.ParallelPyEnvironment(
+        [lambda: env_loader.load(environment_name)])
 
     if time_stacked_states > 1:
         label_shape = reinforcement_learning.labeling_functions[environment_name](
