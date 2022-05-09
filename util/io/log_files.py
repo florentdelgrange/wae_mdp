@@ -22,7 +22,8 @@ def get_event_dataframe(
         event_name: Optional[str] = None,
         value_dtype: Optional = np.float32,
         smooth: Optional[Collection[str]] = None,
-        smooth_window: Optional[Dict[str, int]] = None
+        smooth_window: Optional[Dict[str, int]] = None,
+        by_file: bool = False,
 ) -> pd.DataFrame:
     if tags_renaming is None:
         tags_renaming = {}
@@ -42,7 +43,7 @@ def get_event_dataframe(
                       "{}".format(log_dir) + (" \\ {}".format(exclude_pattern)
                                               if exclude_pattern is not None else ""))
 
-    for event_file in files:
+    for i, event_file in enumerate(files):
         tagged_events = TaggedEvent(x_axis=[], y_axis=[], tags=[])
 
         for event in summary_iterator(event_file):
@@ -56,12 +57,15 @@ def get_event_dataframe(
                     tagged_events.x_axis.append(event.step)
                     tagged_events.y_axis.append(tensor_util.MakeNdarray(value.tensor))
                     tagged_events.tags.append(tags_renaming.get(value.tag, value.tag))
-
-        data = pd.DataFrame(
-            {'step': np.array(tagged_events.x_axis, dtype=np.int64),
-             'value': (tagged_events.y_axis if value_dtype is None else
-                       np.array(tagged_events.y_axis, dtype=value_dtype)),
-             'tag': tagged_events.tags, })
+        
+        data = {
+            'step': np.array(tagged_events.x_axis, dtype=np.int64),
+            'value': (tagged_events.y_axis if value_dtype is None else
+                      np.array(tagged_events.y_axis, dtype=value_dtype)),
+             'tag': tagged_events.tags, }
+        if by_file:
+            data['file'] = i
+        data = pd.DataFrame(data)
 
         if not data.empty:
             for tag in set(smooth) & (set(tags) if tags is not None else set(smooth)):
