@@ -125,6 +125,34 @@ labeling_functions = {
         observation[..., 1] < 0.,
         observation[..., 2] < 0.
     ], axis=-1),
+    "finger": lambda observation: tf.stack([
+        # touch top
+        observation[..., 4] > 0.,
+        # touch bottom
+        observation[..., 5] > 0.,
+        # target velocity (spin) -- should always stay at this velocity once reached
+        observation[..., -1] <= -15.,
+    ], axis=-1),
+    'cheetah': lambda observation: tf.stack([
+        # low speed -- should always stay above this threshold once overtaken
+        observation[..., 8] > 3.,
+        # high speed -- remaining above this speed is great
+        observation[..., 8] > 7.,
+        # very high speed -- target speed
+        observation[..., 8] > 10.,
+    ], axis=-1),
+    'walker': lambda observation: tf.stack([
+        # stand up -- should eventually remain above the threshold
+        observation[..., 0] >= 1.2,
+        # walk speed threshold
+        observation[..., 16] >= 1.,
+    ], axis=-1),
+    'reacher': lambda observation: tf.stack([
+        # distance to target easy
+        tf.norm(observation[..., 2:4], axis=-1) <= 0.05,
+        # distance to target hard
+        tf.norm(observation[..., 2:4], axis=-1) <= 0.015,
+    ])
 }
 labeling_functions["pacman-v0"] = lambda observation: \
     load_pacman_labeling_fn(labeling_functions)(observation)
