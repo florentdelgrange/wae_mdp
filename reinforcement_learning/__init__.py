@@ -152,7 +152,7 @@ labeling_functions = {
         tf.norm(observation[..., 2:4], axis=-1) <= 0.05,
         # distance to target hard
         tf.norm(observation[..., 2:4], axis=-1) <= 0.015,
-    ])
+    ], axis=-1)
 }
 labeling_functions["pacman-v0"] = lambda observation: \
     load_pacman_labeling_fn(labeling_functions)(observation)
