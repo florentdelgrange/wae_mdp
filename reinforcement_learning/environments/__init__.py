@@ -105,15 +105,27 @@ class EnvironmentLoader:
         self.time_stacked_states = time_stacked_states
         self.env_args = env_args if env_args is not None else []
 
-    def load(self, env_name: str, env_wrappers: Optional[Sequence[PyEnvWrapper]] = ()):
+    def load(self, env_name: str, env_wrappers: Optional[Sequence[PyEnvWrapper]] = (), force_reloading: bool = True):
         if self.time_stacked_states > 1:
             env_wrappers = list(env_wrappers) + \
                            [lambda env: HistoryWrapper(env=env, history_length=self.time_stacked_states)]
-        environment = self.environment_suite.load(*([env_name] + self.env_args), env_wrappers=env_wrappers)
+        try:
+            environment = self.environment_suite.load(*([env_name] + self.env_args), env_wrappers=env_wrappers)
+        except AttributeError as e:
+            if force_reloading:
+                tf.print('AttributeError when trying to load environment {}:'.format(env_name), e)
+                tf.print("Trying to reload the environment")
+                self.load(
+                    env_name,
+                    env_wrappers=[FlattenObservationsWrapper] + list(env_wrappers),
+                    force_reloading=False)
+            else:
+                raise AttributeError(e)
+
 
         if len(tf.nest.flatten(environment.observation_spec())) > 1:
             del environment
-            return self.load(env_name, env_wrappers=list(env_wrappers) + [FlattenObservationsWrapper])
+            return self.load(env_name, env_wrappers=[FlattenObservationsWrapper] + list(env_wrappers))
 
         if self.seed is not None:
             try:
