@@ -8,6 +8,7 @@ import psutil
 from absl import logging
 import threading
 
+from gym.wrappers import TimeLimit
 from keras.saving.saved_model import utils
 
 from reinforcement_learning.environments.latent_environment import LatentEmbeddingTFEnvironmentWrapper
@@ -1297,6 +1298,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             embed_video_policy_evaluation: bool = False,
             video_path: str = 'video',
             environment_perturbation: float = 3. / 4.,
+            time_limit: Optional[int] = None,
             recursive_environment_perturbation: bool = True,
             enforce_no_reward_shaping: bool = False,
             estimate_value_difference: bool = True
@@ -1317,6 +1319,9 @@ class VariationalMarkovDecisionProcess(tf.Module):
             env_args=env_args)
 
         env_wrappers = []
+        if time_limit is not None:
+            env_wrappers.append(
+                lambda env: TimeLimit(env, time_limit))
         if environment_perturbation > 0.:
             env_wrappers.append(
                 lambda env: PerturbedEnvironment(
@@ -1342,7 +1347,9 @@ class VariationalMarkovDecisionProcess(tf.Module):
             if policy_evaluation_env_name is None:
                 policy_evaluation_env_name = env_name
 
-            py_eval_env = env_loader.load(policy_evaluation_env_name)
+            py_eval_env = env_loader.load(
+                policy_evaluation_env_name,
+                env_wrappers=[lambda env: TimeLimit(env, time_limit)] if time_limit is not None else [])
             eval_env = tf_py_environment.TFPyEnvironment(py_eval_env)
 
             if self.time_stacked_states:
@@ -1610,6 +1617,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
             env_name: str,
             labeling_function: Callable[[tf.Tensor], tf.Tensor],
             env_args: Optional[List] = None,
+            env_time_limit: Optional[int] = None,
             epsilon_greedy: Optional[float] = 0.,
             epsilon_greedy_decay_rate: Optional[float] = -1.,
             discrete_action_space: bool = False,
@@ -1726,6 +1734,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 environment_suite=environment_suite,
                 env_name=env_name,
                 env_args=env_args,
+                time_limit=env_time_limit,
                 labeling_function=labeling_function,
                 parallel_environments=parallel_environments,
                 num_parallel_environments=num_parallel_environments,
