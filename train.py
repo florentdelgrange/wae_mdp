@@ -429,7 +429,8 @@ def main(argv):
         environment_suite=environment_suite,
         environment_name=environment_name,
         discrete_action_space=params['latent_policy'] and not params['action_discretizer'],
-        time_stacked_states=params['time_stacked_states'])
+        time_stacked_states=params['time_stacked_states'],
+        environment_args=params['environment_args'],)
 
     state_shape, action_shape, reward_shape, label_shape, time_step_spec, action_spec = \
         specs.state_shape, specs.action_shape, specs.reward_shape, specs.label_shape, \
