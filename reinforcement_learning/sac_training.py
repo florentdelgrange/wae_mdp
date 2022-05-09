@@ -406,7 +406,9 @@ class SACLearner:
             num_steps=2).prefetch(3)
         self.iterator = iter(self.dataset)
 
-        self.policy_dir = os.path.join(save_directory_location, 'saves', env_name, 'sac_policy')
+        env_args = [] if env_args is None else env_args
+        _path = [save_directory_location, 'saves', env_name] + env_args + ['sac_policy']
+        self.policy_dir = os.path.join(*_path)
         if state_perturbation > 0 or action_perturbation > 0:
             self.policy_dir = os.path.join(
                 self.policy_dir,
@@ -416,7 +418,8 @@ class SACLearner:
         self._policy_saver = policy_saver.PolicySaver(self.tf_agent.policy)
         self.score = tf.Variable(-1. * np.inf, trainable=False)
 
-        self.checkpoint_dir = os.path.join(save_directory_location, 'saves', env_name, 'sac_training_checkpoint')
+        _path = [save_directory_location, 'saves', env_name] + env_args + ['sac_training_checkpoint']
+        self.checkpoint_dir = os.path.join(*_path)
         self.train_checkpointer = common.Checkpointer(
             ckpt_dir=self.checkpoint_dir,
             max_to_keep=1,
@@ -429,10 +432,11 @@ class SACLearner:
         )
 
         current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        train_log_dir = os.path.join(
-            save_directory_location, 'logs', 'gradient_tape', env_name, 'sac_agent_training', current_time)
+        _path = [save_directory_location, 'logs', env_name] + env_args + ['sac_training', current_time]
+        train_log_dir = os.path.join(*_path)
         print("logs are written to", train_log_dir)
         self.train_summary_writer = tf.summary.create_file_writer(train_log_dir)
+        _path = [save_directory_location, 'saves', env_name] + env_args
         self.save_directory_location = os.path.join(save_directory_location, 'saves', env_name)
         self.save_exploration_dataset = save_exploration_dataset
 

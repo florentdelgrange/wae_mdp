@@ -689,6 +689,7 @@ def main(argv):
             environment_seed=params['seed'],
             env_name=environment_name,
             env_args=params['environment_args'],
+            env_time_limit=params['environment_time_limit'],
             labeling_function=reinforcement_learning.labeling_functions[environment_name],
             log_interval=params['log_interval'],
             checkpoint_interval=params['checkpoint_interval'],
@@ -1365,6 +1366,11 @@ if __name__ == '__main__':
         'no_reward_shaping',
         help='Whether to remove reward shaping from the input environment or not.',
         default=False
+    )
+    flags.DEFINE_integer(
+        'environment_time_limit',
+        help='If provided, limit the number of steps per episode',
+        default=None
     )
     flags.DEFINE_multi_string(
         'import',

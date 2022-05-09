@@ -1,13 +1,24 @@
 import os
+from typing import Optional, Callable, Union, Collection, Dict
 
 import imageio
 import numpy as np
 from tf_agents.environments.py_environment import PyEnvironment
 from tf_agents.trajectories.time_step import TimeStep
+from tf_agents.typing.types import Bool
+
+from PIL import Image, ImageFont, ImageDraw
 
 
 class VideoEmbeddingObserver:
-    def __init__(self, py_env: PyEnvironment, file_name: str, fps: int = 30, num_episodes: int = 1):
+    def __init__(
+            self,
+            py_env: PyEnvironment,
+            file_name: str,
+            fps: int = 30,
+            num_episodes: int = 1,
+            labeling_function: Optional[Callable[[TimeStep], Union[Collection, Dict[str, Collection]]]] = None
+    ):
         self.py_env = py_env
         self._file_name = file_name
         self.writer = None
@@ -20,11 +31,28 @@ class VideoEmbeddingObserver:
                 and not os.path.exists(os.path.sep.join(file_name.split(os.path.sep)[:-1])):
                 os.makedirs(os.path.sep.join(file_name.split(os.path.sep)[:-1]))
         self.file_name = None
+        self.labeling_fn = labeling_function
 
     def __call__(self, time_step: TimeStep, *args, **kwargs):
         if self.writer is None:
             self.writer = imageio.get_writer('{}.mp4'.format(self._file_name), fps=self.fps)
-        self.writer.append_data(self.py_env.render(mode='rgb_array'))
+        data = self.py_env.render(mode='rgb_array')
+        if self.labeling_fn is not None:
+            label = self.labeling_fn(time_step)
+            if type(label) is dict:
+                label = '\n'.join([str(key)+': '+str(value) for key, value in label.items()])
+            else:
+                label = str(label)
+            img = Image.fromarray(data)
+            draw = ImageDraw.Draw(img)
+            try:
+                font = ImageFont.truetype('Arial', 10)
+            except Exception:
+                font = ImageFont.load_default()
+            draw.text((0, 0), label, font=font)
+            data = np.array(img)
+        if data is not None:
+            self.writer.append_data(data)
         self.cumulative_rewards += time_step.reward
         if time_step.is_last() and self.current_episode < self.num_episodes:
             self.current_episode += 1
