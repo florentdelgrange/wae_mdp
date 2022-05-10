@@ -72,12 +72,14 @@ def value_iteration(
         error_type: error type (absolute or relative)
         epsilon: error between two consecutive iterations
         is_reset_state_test_fn: function testing whether the input state is a reset (or null) state or not.
+                                A reset state is, in this context, a state where the episode terminates.
                                 If provided,
                                 - Rewards obtained from transitions issued from states marked as 'True' are undiscounted
-                                - Rewards obtained by transitioning from/to a state marked as 'True' are null
+                                - Rewards obtained by transitioning from a state marked as 'True' are null
         episodic_return: Whether to estimate the finite-horizon episodic return or infinite horizon return.
                          If True, is_reset_state_fn has to be provided. In that case, values obtained by transitioning
-                         to a reset state will be ignored.
+                         to a reset state will be ignored: this boils down to transitioning to an absorbing state with
+                         zero reward.
         debug: whether to display iteration error and time metrics 
         v_init: (optional) initial values; if not provided, values are initialized with zeros
         transition_matrix: (optional) Transition probabilities in the form of a [S, A, S] tensor, where S is the number
@@ -241,7 +243,7 @@ def compute_next_q_value(
         is_reset_state_test_fn: function testing whether the input state is a reset (or null) state or not.
                                 If provided,
                                 - Rewards obtained from transitions issued from states marked as 'True' are undiscounted
-                                - Rewards obtained by transitioning from/to a state marked as 'True' are null
+                                - Rewards obtained by transitioning from a state marked as 'True' are null
         episodic_return: Whether to estimate the finite-horizon episodic return or infinite horizon return.
                          If True, is_reset_state_fn has to be provided. In that case, values obtained by transitioning
                          to a reset state will be ignored.

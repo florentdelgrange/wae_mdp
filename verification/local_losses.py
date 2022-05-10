@@ -9,7 +9,7 @@ from tf_agents.policies import tf_policy
 from tf_agents.replay_buffers.tf_uniform_replay_buffer import TFUniformReplayBuffer
 from tf_agents.trajectories import trajectory
 from tf_agents.trajectories import time_step as ts
-from tf_agents.typing.types import Float
+from tf_agents.typing.types import Float, Bool
 from tf_agents.utils import common
 import tensorflow_probability.python.distributions as tfd
 
@@ -424,6 +424,7 @@ def compute_values(
         gamma: Float,
         stochastic_state_embedding: Callable[[tf.Tensor], tfd.Distribution],
         v_init: Optional[Float] = None,
+        absorbing_states: Optional[Callable[[tf.Tensor], Bool]] = None,
 ):
     latent_state_space = binary_latent_space(latent_state_size)
 
@@ -440,8 +441,12 @@ def compute_values(
         gamma=gamma,
         policy=PolicyDecorator(latent_policy),
         epsilon=epsilon,
-        is_reset_state_test_fn=is_reset_state_test_fn,
-        episodic_return=tf.equal(tf.reduce_max(p_init), 1.),
+        is_reset_state_test_fn=(
+            is_reset_state_test_fn if absorbing_states is None else
+            lambda latent_state: tf.logical_or(
+                is_reset_state_test_fn(latent_state),
+                absorbing_states(latent_state))),
+        episodic_return=tf.equal(tf.reduce_max(p_init), 1.) or (absorbing_states is not None),
         error_type='absolute',
         v_init=v_init,
         transition_matrix=latent_transition_fn.to_dense(),
