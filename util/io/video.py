@@ -49,7 +49,7 @@ class VideoEmbeddingObserver:
                 font = ImageFont.truetype('Arial', 10)
             except Exception:
                 font = ImageFont.load_default()
-            draw.text((0, 0), label, font=font)
+            draw.text((0, 0), label, font=font, fill=(0, 0, 0))
             data = np.array(img)
         if data is not None:
             self.writer.append_data(data)
