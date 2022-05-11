@@ -264,10 +264,10 @@ def estimate_local_losses_from_samples(
             if memory_used < memory_limit and device == 'CPU':
                 print("[VI] Tensor computation switched to CPU for value iteration.")
             with tf.device('/{}:0'.format(device)):
-                values = compute_values(
+                values = compute_values_from_initial_distribution(
                     latent_state_size=latent_state_size,
                     atomic_prop_dims=atomic_prop_dims,
-                    state=state,
+                    original_state=state,
                     number_of_discrete_actions=number_of_discrete_actions,
                     latent_policy=latent_policy,
                     latent_transition_fn=transition_fn,
@@ -412,10 +412,10 @@ def estimate_local_transition_loss(
 
 
 @tf.function
-def compute_values(
+def compute_values_from_initial_distribution(
         latent_state_size: int,
         atomic_prop_dims: int,
-        state: tf.Tensor,
+        original_state: tf.Tensor,
         number_of_discrete_actions: int,
         latent_policy: Callable[[tf.Tensor], tfd.OneHotCategorical],
         latent_transition_fn: TransitionFunctionCopy,
@@ -429,7 +429,7 @@ def compute_values(
     latent_state_space = binary_latent_space(latent_state_size)
 
     p_init = stochastic_state_embedding(
-        tf.tile(tf.zeros_like(state[:1, ...]), [tf.shape(latent_state_space)[0], 1])
+        tf.tile(tf.zeros_like(original_state[:1, ...]), [tf.shape(latent_state_space)[0], 1])
     ).prob(latent_state_space)
     is_reset_state_test_fn = lambda latent_state: is_reset_state(latent_state, atomic_prop_dims)
 
@@ -455,7 +455,7 @@ def compute_values(
     if tf.equal(tf.reduce_max(p_init), 1.):
         # deterministic reset
         reset_state = stochastic_state_embedding(
-            tf.tile(tf.zeros_like(state[:1, ...]), [tf.shape(latent_state_space)[0], 1])
+            tf.tile(tf.zeros_like(original_state[:1, ...]), [tf.shape(latent_state_space)[0], 1])
         ).sample()
         reset_state = tf.cast(reset_state, tf.float32)
 
