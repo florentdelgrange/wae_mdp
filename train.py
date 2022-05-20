@@ -752,9 +752,9 @@ if __name__ == '__main__':
         default=128,
         help="Batch size.")
     flags.DEFINE_integer(
-        "(VAE-MDP) mixture_components",
+        "mixture_components",
         default=1,
-        help="Number of gaussian mixture components used to model the reconstruction distributions.")
+        help="Number of gaussian mixture components used to model the reconstruction distributions. (VAE-MDP)")
     flags.DEFINE_integer(
         "action_mixture_components",
         default=0,
