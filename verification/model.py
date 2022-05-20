@@ -1,5 +1,6 @@
 from collections import namedtuple
 from typing import Callable, Optional
+import math
 
 import tensorflow as tf
 import tensorflow_probability as tfp
@@ -46,9 +47,8 @@ class TransitionFunction:
             split_label_from_latent_space: bool = False
     ):
         self.num_states = transition_matrix.dense_shape[0]
-        self.latent_state_size = tf.cast(
-            tf.math.log(tf.cast(self.num_states, tf.float32)) / tf.math.log(2.),
-            tf.int32)
+        # using TF operators to compute log2 caused numerical issues on some machines
+        self.latent_state_size = int(math.log2(self.num_states))
         self.num_actions = transition_matrix.dense_shape[1]
         self.transitions = transition_matrix
         self.split_label_from_latent_space = split_label_from_latent_space
@@ -180,9 +180,7 @@ class TransitionFunctionCopy(TransitionFunction):
     ):
         if split_label_from_latent_space and atomic_prop_dims is None:
             raise ValueError("You need provide atomic_prop_dims if split_label_from_latent_space is set.")
-        latent_state_size = tf.cast(
-            tf.math.log(tf.cast(num_states, tf.float32)) / tf.math.log(2.),
-            tf.int32)
+        latent_state_size = int(math.log2(num_states))
         latent_state_space = binary_latent_space(latent_state_size, dtype=tf.float32)
         action_space = tf.one_hot(tf.range(num_actions), depth=tf.cast(num_actions, dtype=tf.int32))
         repeated_action_space = tf.repeat(action_space, repeats=num_states, axis=0)
@@ -244,9 +242,7 @@ class RewardFunctionCopy:
         if split_label_from_latent_space and atomic_prop_dims is None:
             raise ValueError("You need provide atomic_prop_dims if split_label_from_latent_space is set.")
 
-        self.latent_state_size = tf.cast(
-            tf.math.log(tf.cast(num_states, tf.float32)) / tf.math.log(2.),
-            tf.int32)
+        self.latent_state_size = int(math.log2(num_states))
         latent_state_space = binary_latent_space(self.latent_state_size, dtype=tf.float32)
         action_space = tf.one_hot(tf.range(num_actions), depth=tf.cast(num_actions, dtype=tf.int32))
         repeated_action_space = tf.repeat(action_space, repeats=num_states, axis=0)
