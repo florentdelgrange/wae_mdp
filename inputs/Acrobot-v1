@@ -45,10 +45,6 @@ Acrobot-v1
 suite_gym
 --policy_path
 reinforcement_learning/saves/AcrobotRandomInit-v1/dqn_policy
---save_dir
-/data/brussel/102/vsc10293/wae_mdp/saves/02-05-22
---logdir
-/data/brussel/102/vsc10293/wae_mdp/log/02-05-22
 --checkpoint=True
 --evaluation_window_size=0
 --parallel_env
@@ -60,4 +56,3 @@ reinforcement_learning/saves/AcrobotRandomInit-v1/dqn_policy
 200000
 --max_steps
 1000000
---value_difference_evaluation
