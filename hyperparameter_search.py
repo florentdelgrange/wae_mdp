@@ -61,16 +61,18 @@ def search(
     def suggest_hyperparameters(trial):
         defaults = {}
         optimizer = 'Adam'
-        learning_rate = trial.suggest_categorical('learning_rate', [1e-4, 2e-4, 3e-4])
+        learning_rate = trial.suggest_categorical('learning_rate', [1e-4, 2e-4, 3e-4, 1e-3])
         adam_beta_1 = trial.suggest_categorical('beta_1', [0., 0.5, 0.9])
         adam_beta_2 = trial.suggest_categorical('beta_2', [0.9, 0.999])
-        gradient_clipping = trial.suggest_categorical('gradient_clipping', [True, False])
+        # gradient_clipping = trial.suggest_categorical('gradient_clipping', [True, False])
+        gradient_clipping = False
         if gradient_clipping:
             clipnorm = trial.suggest_categorical('clipnorm', [None, 1.])
             clipvalue = trial.suggest_categorical('clipvalue', [None, 0.5, 1., 10.])
         else:
             clipnorm = clipvalue = None
         learning_rate_decay = trial.suggest_categorical('learning_rate_decay', [True, False])
+        learning_rate_decay = False
         if learning_rate_decay:
             power_decay = trial.suggest_categorical("power_decay", [0.5, 1., 1.5, 2.])
             learning_rate = tf.optimizers.schedules.PolynomialDecay(
@@ -90,7 +92,8 @@ def search(
 
         # temperatures
         state_encoder_softclipping = trial.suggest_categorical('softclipping', [True, False])
-        temperature_decay = trial.suggest_categorical('temperature_decay', [True, False])
+        # temperature_decay = trial.suggest_categorical('temperature_decay', [True, False])
+        temperature_decay = False
         encoder_temperature_decay_rate = 1e-6
         prior_temperature_decay_rate = 2e-6
         if fixed_parameters['state_encoder_temperature'] < 0:
@@ -174,10 +177,10 @@ def search(
             environment_name=environment_name,
             environment_args=fixed_parameters['environment_args'],
             discrete_action_space=not fixed_parameters['action_discretizer'],
-            time_stacked_states=time_stacked_states)
+            time_stacked_states=time_stacked_states,)
         if fixed_parameters['latent_size'] <= 0:
             latent_state_size = trial.suggest_int(
-                'latent_state_size', specs.label_shape[0] + 3, max(15, specs.label_shape[0] + 8))
+                'latent_state_size', 9, max(16, specs.label_shape[0] + 8))
         else:
             latent_state_size = fixed_parameters['latent_size']
 
@@ -227,7 +230,7 @@ def search(
         if fixed_parameters['action_discretizer']:
             if fixed_parameters['number_of_discrete_actions'] <= 0:
                 number_of_discrete_actions = trial.suggest_int(
-                    'number_of_discrete_actions', 2, 5)
+                    'number_of_discrete_actions', 2, 16)
             else:
                 number_of_discrete_actions = fixed_parameters['number_of_discrete_actions']
             action_temperature_base = 1. / (number_of_discrete_actions - 1)
