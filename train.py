@@ -752,19 +752,19 @@ if __name__ == '__main__':
         default=128,
         help="Batch size.")
     flags.DEFINE_integer(
-        "mixture_components",
+        "(VAE-MDP) mixture_components",
         default=1,
         help="Number of gaussian mixture components used to model the reconstruction distributions.")
     flags.DEFINE_integer(
         "action_mixture_components",
         default=0,
-        help="Number of gaussian mixture components used to model the action reconstruction distribution (optional). "
+        help="(VAE MDP) Number of gaussian mixture components used to model the action reconstruction distribution (optional). "
              "If not "
              "set, all mixture distributions take the same value obtained via --mixture_components.")
     flags.DEFINE_bool(
         "full_covariance",
         default=False,
-        help="If set, the states and rewards reconstruction distributions will use a full covariance matrix instead of"
+        help="(VAE-MDP) If set, the states and rewards reconstruction distributions will use a full covariance matrix instead of"
              "a diagonal matrix."
     )
     flags.DEFINE_string(
@@ -851,12 +851,12 @@ if __name__ == '__main__':
     flags.DEFINE_float(
         "kl_annealing_scale_factor",
         default=1.,
-        help='Scale factor of the KL terms of the ELBO.'
+        help='Scale factor of the KL terms of the ELBO. (VAE-MDP)'
     )
     flags.DEFINE_float(
         "kl_annealing_growth_rate",
         default=0.,
-        help='Annealing growth rate of the ELBO KL terms scale factor.'
+        help='Annealing growth rate of the ELBO KL terms scale factor. (VAE-MDP)'
     )
     flags.DEFINE_integer(
         "start_annealing_step",
@@ -1235,7 +1235,7 @@ if __name__ == '__main__':
     )
     flags.DEFINE_bool(
         "wae",
-        default=False,
+        default=True,
         help='abstract the environment and distill the input policy via a Wasserstein Autoencoder.'
     ),
     flags.DEFINE_float(
@@ -1376,7 +1376,7 @@ if __name__ == '__main__':
     )
     flags.DEFINE_bool(
         'state_encoder_softclipping',
-        help='Whether to apply softclipping (usually a tanh) on the logits of the encoders',
+        help='Whether to apply softclipping (a tanh) on the logits of the encoders to scale their values in [-1, 1].',
         default=False
     )
 
