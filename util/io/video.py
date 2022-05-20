@@ -17,7 +17,8 @@ class VideoEmbeddingObserver:
             file_name: str,
             fps: int = 30,
             num_episodes: int = 1,
-            labeling_function: Optional[Callable[[TimeStep], Union[Collection, Dict[str, Collection]]]] = None
+            labeling_function: Optional[Callable[[TimeStep], Union[Collection, Dict[str, Collection]]]] = None,
+            font_color: str = 'black',
     ):
         self.py_env = py_env
         self._file_name = file_name
@@ -32,6 +33,7 @@ class VideoEmbeddingObserver:
                 os.makedirs(os.path.sep.join(file_name.split(os.path.sep)[:-1]))
         self.file_name = None
         self.labeling_fn = labeling_function
+        self.font_color = font_color
 
     def __call__(self, time_step: TimeStep, *args, **kwargs):
         if self.writer is None:
@@ -49,7 +51,11 @@ class VideoEmbeddingObserver:
                 font = ImageFont.truetype('Arial', 10)
             except Exception:
                 font = ImageFont.load_default()
-            draw.text((0, 0), label, font=font)
+            if self.font_color == 'black':
+                _fill = (0, 0, 0)
+            else:
+                _fill = (255, 255, 255)
+            draw.text((0, 0), label, font=font, fill=_fill)
             data = np.array(img)
         if data is not None:
             self.writer.append_data(data)

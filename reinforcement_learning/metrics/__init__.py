@@ -15,13 +15,15 @@ class AverageDiscountedReturnMetric(AverageReturnMetric):
             name="AverageDiscountedReturn",
             dtype=tf.float32,
             batch_size=1,
-            buffer_size=10
+            buffer_size=10,
+            reward_scale: float = 1.,
     ):
         super(AverageDiscountedReturnMetric, self).__init__(name=name, dtype=dtype, batch_size=batch_size,
                                                             buffer_size=buffer_size)
         self.gamma = gamma
         self._step_accumulator = common.create_variable(
             initial_value=0, dtype=dtype, shape=(batch_size,), name='StepAccumulator')
+        self.reward_scale = reward_scale
 
     @common.function(autograph=True)
     def call(self, trajectory):
@@ -34,7 +36,8 @@ class AverageDiscountedReturnMetric(AverageReturnMetric):
                      self._step_accumulator))
 
         # Update accumulator with received rewards.
-        self._return_accumulator.assign_add(tf.pow(self.gamma, self._step_accumulator) * trajectory.reward)
+        self._return_accumulator.assign_add(
+            tf.pow(self.gamma, self._step_accumulator) * trajectory.reward * self.reward_scale)
         self._step_accumulator.assign_add(tf.ones_like(self._step_accumulator))
 
         # Add final returns to buffer.

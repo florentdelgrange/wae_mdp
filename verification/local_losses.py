@@ -9,7 +9,7 @@ from tf_agents.policies import tf_policy
 from tf_agents.replay_buffers.tf_uniform_replay_buffer import TFUniformReplayBuffer
 from tf_agents.trajectories import trajectory
 from tf_agents.trajectories import time_step as ts
-from tf_agents.typing.types import Float
+from tf_agents.typing.types import Float, Bool
 from tf_agents.utils import common
 import tensorflow_probability.python.distributions as tfd
 
@@ -264,10 +264,10 @@ def estimate_local_losses_from_samples(
             if memory_used < memory_limit and device == 'CPU':
                 print("[VI] Tensor computation switched to CPU for value iteration.")
             with tf.device('/{}:0'.format(device)):
-                values = compute_values(
+                values = compute_values_from_initial_distribution(
                     latent_state_size=latent_state_size,
                     atomic_prop_dims=atomic_prop_dims,
-                    state=state,
+                    original_state=state,
                     number_of_discrete_actions=number_of_discrete_actions,
                     latent_policy=latent_policy,
                     latent_transition_fn=transition_fn,
@@ -412,10 +412,10 @@ def estimate_local_transition_loss(
 
 
 @tf.function
-def compute_values(
+def compute_values_from_initial_distribution(
         latent_state_size: int,
         atomic_prop_dims: int,
-        state: tf.Tensor,
+        original_state: tf.Tensor,
         number_of_discrete_actions: int,
         latent_policy: Callable[[tf.Tensor], tfd.OneHotCategorical],
         latent_transition_fn: TransitionFunctionCopy,
@@ -424,11 +424,12 @@ def compute_values(
         gamma: Float,
         stochastic_state_embedding: Callable[[tf.Tensor], tfd.Distribution],
         v_init: Optional[Float] = None,
+        absorbing_states: Optional[Callable[[tf.Tensor], Bool]] = None,
 ):
     latent_state_space = binary_latent_space(latent_state_size)
 
     p_init = stochastic_state_embedding(
-        tf.tile(tf.zeros_like(state[:1, ...]), [tf.shape(latent_state_space)[0], 1])
+        tf.tile(tf.zeros_like(original_state[:1, ...]), [tf.shape(latent_state_space)[0], 1])
     ).prob(latent_state_space)
     is_reset_state_test_fn = lambda latent_state: is_reset_state(latent_state, atomic_prop_dims)
 
@@ -440,8 +441,12 @@ def compute_values(
         gamma=gamma,
         policy=PolicyDecorator(latent_policy),
         epsilon=epsilon,
-        is_reset_state_test_fn=is_reset_state_test_fn,
-        episodic_return=tf.equal(tf.reduce_max(p_init), 1.),
+        is_reset_state_test_fn=(
+            is_reset_state_test_fn if absorbing_states is None else
+            lambda latent_state: tf.logical_or(
+                is_reset_state_test_fn(latent_state),
+                absorbing_states(latent_state))),
+        episodic_return=tf.equal(tf.reduce_max(p_init), 1.) or (absorbing_states is not None),
         error_type='absolute',
         v_init=v_init,
         transition_matrix=latent_transition_fn.to_dense(),
@@ -450,7 +455,7 @@ def compute_values(
     if tf.equal(tf.reduce_max(p_init), 1.):
         # deterministic reset
         reset_state = stochastic_state_embedding(
-            tf.tile(tf.zeros_like(state[:1, ...]), [tf.shape(latent_state_space)[0], 1])
+            tf.tile(tf.zeros_like(original_state[:1, ...]), [tf.shape(latent_state_space)[0], 1])
         ).sample()
         reset_state = tf.cast(reset_state, tf.float32)
 

@@ -4,9 +4,15 @@ import math
 
 import tensorflow as tf
 import tensorflow_probability as tfp
-from tensorflow.python.util.deprecation import deprecated
+from tf_agents.drivers.dynamic_step_driver import DynamicStepDriver
+from tf_agents.environments import TFEnvironment
+from tf_agents.replay_buffers import TFUniformReplayBuffer
+from tf_agents.trajectories import trajectory
 from tf_agents.typing.types import Float
+from tf_agents.utils import common
 
+from reinforcement_learning.environments.latent_environment import LatentEmbeddingTFEnvironmentWrapper
+from util.io.dataset_generator import map_rl_trajectory_to_vae_input, ergodic_batched_labeling_function
 from verification import binary_latent_space
 
 tfd = tfp.distributions
@@ -415,3 +421,71 @@ class TransitionFnDecorator:
             latent_state[..., :self.atomic_prop_dims],
             latent_state[..., self.atomic_prop_dims:],
             *args, **kwargs)
+
+def estimate_latent_transition_function_from_samples(
+        environment: TFEnvironment,
+        n_steps,
+        state_embedding_function,
+        action_embedding_function,
+        labeling_function,
+        latent_state_size,
+        number_of_discrete_actions,
+        latent_policy,
+        backup_transition_fn,
+):
+    latent_environment = LatentEmbeddingTFEnvironmentWrapper(
+        tf_env=environment,
+        state_embedding_fn=state_embedding_function,
+        action_embedding_fn=action_embedding_function,
+        labeling_fn=labeling_function,
+        latent_state_size=latent_state_size,
+        number_of_discrete_actions=number_of_discrete_actions,)
+    # set the latent policy over real states
+    policy = latent_environment.wrap_latent_policy(latent_policy)
+    trajectory_spec = trajectory.from_transition(
+        time_step=latent_environment.time_step_spec(),
+        action_step=policy.policy_step_spec,
+        next_time_step=latent_environment.time_step_spec(),
+    )
+    # replay_buffer
+    replay_buffer = TFUniformReplayBuffer(
+        data_spec=trajectory_spec,
+        batch_size=latent_environment.batch_size,
+        max_length=n_steps,
+        # to retrieve all the transitions when single_deterministic_pass is True
+        dataset_window_shift=1,
+        dataset_drop_remainder=True)
+    # initialize driver
+    observers = [replay_buffer.add_batch]
+    driver = DynamicStepDriver(
+        env=latent_environment,
+        policy=policy,
+        num_steps=n_steps,
+        observers=observers)
+    driver.run = common.function(driver.run)
+    driver.run()
+
+    dataset = replay_buffer.as_dataset(
+        num_parallel_calls=tf.data.experimental.AUTOTUNE,
+        num_steps=2,
+        # whether to gather transitions only once or not
+        single_deterministic_pass=True,
+    ).map(
+        map_func=lambda trajectory, _: map_rl_trajectory_to_vae_input(
+            trajectory=trajectory,
+            include_latent_states=True,
+            discrete_action=True,
+            num_discrete_actions=number_of_discrete_actions,
+            labeling_function=ergodic_batched_labeling_function(labeling_function)),
+        num_parallel_calls=tf.data.experimental.AUTOTUNE,
+    ).batch(
+        batch_size=replay_buffer.num_frames(),
+        drop_remainder=False)
+    dataset_iterator = iter(dataset)
+
+    _, label, latent_state, latent_action, _, _, next_label, next_latent_state = next(dataset_iterator)
+
+    return TransitionFrequencyEstimator(
+        latent_state, latent_action, next_latent_state,
+        backup_transition_function=backup_transition_fn,
+        assert_distribution=True, )
