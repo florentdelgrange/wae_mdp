@@ -14,11 +14,10 @@ import tensorflow_probability.python.bijectors as tfb
 import tensorflow_probability.python.distributions as tfd
 
 import tf_agents
-from tf_agents.policies import TFPolicy
-from tf_agents.typing import types
 from tf_agents.typing.types import Float, Int
 from tf_agents.environments import tf_py_environment, tf_environment
 
+import variational_action_discretizer
 from layers.autoregressive_bernoulli import AutoRegressiveBernoulliNetwork
 from layers.latent_policy import LatentPolicyNetwork
 from layers.decoders import RewardNetwork, ActionReconstructionNetwork, StateReconstructionNetwork
@@ -26,7 +25,7 @@ from layers.encoders import StateEncoderNetwork, ActionEncoderNetwork, AutoRegre
     DeterministicStateEncoderNetwork
 from layers.lipschitz_functions import SteadyStateLipschitzFunction, TransitionLossLipschitzFunction
 from layers.steady_state_network import SteadyStateNetwork
-from tf_agents.trajectories import time_step as ts, policy_step
+from util.io import dataset_generator
 from util.nn import get_activation_fn, scan_model, ModelArchitecture, generate_sequential_model
 from variational_mdp import VariationalMarkovDecisionProcess, EvaluationCriterion, debug_gradients, debug, epsilon
 from verification.local_losses import estimate_local_losses_from_samples
@@ -127,12 +126,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             enforce_upper_bound: bool = False,
             squared_wasserstein: bool = False,
             n_critic: int = 5,
-            trainable_prior: bool = False,
+            trainable_prior: bool = True,
             state_encoder_type: EncodingType = EncodingType.AUTOREGRESSIVE,
             policy_based_decoding: bool = False,
             deterministic_state_embedding: bool = True,
             state_encoder_softclipping: bool = False,
-            external_latent_policy: Optional[TFPolicy] = None,
             *args, **kwargs
     ):
         super(WassersteinMarkovDecisionProcess, self).__init__(
@@ -180,7 +178,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 or state_encoder_type is EncodingType.DETERMINISTIC)
         self.include_action_encoder_entropy = not (action_entropy_regularizer_scaling < epsilon)
         self._state_encoder_type = state_encoder_type
-        self.external_latent_policy = external_latent_policy
 
         if self.action_discretizer:
             self.number_of_discrete_actions = number_of_discrete_actions
@@ -276,13 +273,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             temperature=self.state_prior_temperature,
             name='latent_stationary_network')
         # latent policy
-        if self.external_latent_policy is None:
-            self.latent_policy_network = LatentPolicyNetwork(
-                latent_state=latent_state,
-                latent_policy_network=base_models['latent_policy_network'],
-                number_of_discrete_actions=self.number_of_discrete_actions, )
-        else:
-            self.latent_policy_network = None
+        self.latent_policy_network = LatentPolicyNetwork(
+            latent_state=latent_state,
+            latent_policy_network=base_models['latent_policy_network'],
+            number_of_discrete_actions=self.number_of_discrete_actions, )
         # reward function
         self.reward_network = RewardNetwork(
             latent_state=latent_state,
@@ -330,8 +324,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 print("No action encoder")
             self.transition_network.summary()
             self.latent_stationary_network.summary()
-            if self.latent_policy_network is not None:
-                self.latent_policy_network.summary()
+            self.latent_policy_network.summary()
             self.reward_network.summary()
             self.reconstruction_network.summary()
             if self.action_discretizer:
@@ -528,31 +521,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             latent_state: tf.Tensor,
             temperature: Float = 1e-5,
     ) -> tfd.Distribution:
-        if self.external_latent_policy is not None:
-            return self.external_latent_policy.distribution(
-                ts.TimeStep(
-                    observation=latent_state,
-                    reward=0.,
-                    discount=1.,
-                    step_type=ts.StepType.MID
-                )
-            ).action
-        else:
-            return self.latent_policy_network.relaxed_distribution(
-                latent_state=latent_state, temperature=temperature)
+        return self.latent_policy_network.relaxed_distribution(
+            latent_state=latent_state, temperature=temperature)
 
     def discrete_latent_policy(self, latent_state: tf.Tensor):
-        if self.external_latent_policy is not None:
-            return self.external_latent_policy.distribution(
-                ts.TimeStep(
-                    observation=latent_state,
-                    reward=0.,
-                    discount=1.,
-                    step_type=ts.StepType.MID
-                )
-            ).action
-        else:
-            return self.latent_policy_network.discrete_distribution(latent_state=latent_state)
+        return self.latent_policy_network.discrete_distribution(latent_state=latent_state)
 
     def reward_distribution(
             self,
@@ -811,7 +784,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             steady_state_gradient_penalty + transition_loss_gradient_penalty)
         self.loss_metrics['marginal_state_encoder_entropy'](
             self.marginal_state_encoder_entropy(logits=logits, sample_probability=sample_probability))
-        if self._state_encoder_type is not EncodingType.DETERMINISTIC:
+        if self._state_encoder_type is not EncodingType.DETERMINISTIC: 
             self.loss_metrics['state_encoder_entropy'](
                 tfd.Independent(
                     tfd.Bernoulli(logits=logits),
@@ -1184,14 +1157,10 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         variables = self.latent_stationary_network.trainable_variables
         if self.action_discretizer:
             variables += self.action_reconstruction_network.trainable_variables
-        for network in [
-            self.transition_network,
-            self.reward_network,
-            self.reconstruction_network
-        ] + (
-                [] if self.external_latent_policy is not None else
-                [self.latent_policy_network]
-        ):
+        for network in [self.transition_network,
+                        self.latent_policy_network,
+                        self.reward_network,
+                        self.reconstruction_network]:
             variables += network.trainable_variables
         return variables
 
@@ -1227,7 +1196,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         with tf.GradientTape(persistent=True) as tape:
             loss = self.compute_loss(
                 state, label, action, reward, next_state, next_label,
-                sample_key=sample_key, sample_probability=sample_probability, )
+                sample_key=sample_key, sample_probability=sample_probability,)
 
         for optimization_direction, variables in {
             'max': wasserstein_regularizer_variables, 'min': autoencoder_variables
@@ -1569,9 +1538,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 eval_policy = float(infos.get('eval_policy', -1. * np.inf))
                 local_transition_loss = float(infos.get('local_transition_loss', np.inf))
                 local_reward_loss = float(infos.get('local_reward_loss', np.inf))
-                print(
-                    "current best model:, eval_policy={:.2f}, local_transitition_loss={:.2f}, local_reward_loss={:.2f}".format(
-                        eval_policy, local_transition_loss, local_reward_loss))
+                print("current best model:, eval_policy={:.2f}, local_transitition_loss={:.2f}, local_reward_loss={:.2f}".format(
+                      eval_policy, local_transition_loss, local_reward_loss))
                 if score['eval_policy'] > eval_policy:
                     print(score['eval_policy'], "better")
                     self.save(save_directory, model_name, score)
