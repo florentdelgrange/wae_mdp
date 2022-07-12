@@ -1848,7 +1848,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
                 dataset=dataset, dataset_iterator=dataset_iterator, batch_size=batch_size,
                 annealing_period=annealing_period, global_step=global_step,
                 display_progressbar=display_progressbar,
-                start_step=start_step, epoch=0, progressbar=progressbar,
+                progressbar=progressbar,
                 eval_and_save_model_interval=eval_and_save_model_interval,
                 eval_steps=eval_steps,
                 save_directory=save_directory, log_name=log_name, train_summary_writer=train_summary_writer,
@@ -1907,7 +1907,7 @@ class VariationalMarkovDecisionProcess(tf.Module):
 
     def training_step(
             self, dataset, dataset_iterator, batch_size, annealing_period, global_step,
-            display_progressbar, start_step, epoch, progressbar, eval_and_save_model_interval,
+            display_progressbar, progressbar, eval_and_save_model_interval,
             eval_steps, save_directory, log_name, train_summary_writer, log_interval,
             start_annealing_step, additional_metrics: Optional[Dict[str, tf.Tensor]] = None,
             eval_policy_driver: Optional[tf_agents.drivers.dynamic_episode_driver.DynamicEpisodeDriver] = None,
