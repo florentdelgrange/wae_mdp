@@ -6,6 +6,7 @@ import tensorflow.keras as tfk
 import tensorflow.keras.layers as tfkl
 import tensorflow_probability.python.bijectors as tfb
 import tensorflow_probability.python.distributions as tfd
+from tf_agents.networks import Network
 from tf_agents.typing.types import Float
 
 from layers.autoregressive_bernoulli import AutoRegressiveBernoulliNetwork
@@ -17,6 +18,34 @@ class EncodingType(enum.Enum):
     AUTOREGRESSIVE = enum.auto()
     LSTM = enum.auto()
     DETERMINISTIC = enum.auto()
+
+class TFAgentEncodingNetworkWrapper(Network):
+
+    def __init__(
+            self,
+            state_encoder_network: DiscreteDistributionModel,
+            temperature: Float, name: str = 'EncodingNetworkWrapper'
+    ):
+        input_tensor_spec = tf.TensorSpec(state_encoder_network.input_shape)
+
+        super(TFAgentEncodingNetworkWrapper, self).__init__(
+            input_tensor_spec=input_tensor_spec,
+            state_spec=(),
+            name=name)
+
+        self.state_encoder_network = state_encoder_network
+        self.temperature = temperature
+
+    def call(self, state_and_label, step_type=None, network_state=(), training=False):
+        state, label = state_and_label
+        if not training or tf.equal(self.temperature, tf.zeros_like(self.temperature)):
+            return self.state_encoder_network.discrete_distribution(
+                state=state, label=label,
+            ).sample(), network_state
+        else:
+            return self.state_encoder_network.relaxed_distribution(
+                state=state, temperature=self.temperature, label=label,
+            ).sample(), network_state
 
 
 class StateEncoderNetwork(DiscreteDistributionModel):
