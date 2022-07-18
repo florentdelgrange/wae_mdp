@@ -24,9 +24,10 @@ class TFAgentEncodingNetworkWrapper(Network):
     def __init__(
             self,
             state_encoder_network: DiscreteDistributionModel,
+            label_spec: tf.TensorSpec,
             temperature: Float, name: str = 'EncodingNetworkWrapper'
     ):
-        input_tensor_spec = tf.TensorSpec(state_encoder_network.input_shape)
+        input_tensor_spec = [tf.TensorSpec(state_encoder_network.input_shape[1:]), label_spec]
 
         super(TFAgentEncodingNetworkWrapper, self).__init__(
             input_tensor_spec=input_tensor_spec,

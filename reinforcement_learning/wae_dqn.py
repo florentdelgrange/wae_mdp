@@ -1,9 +1,11 @@
 import os
 import random
+from flags import FLAGS
 import sys
 
 import numpy as np
 from tf_agents import specs
+from tf_agents.specs import tensor_spec
 from tf_agents.trajectories import policy_step
 from tf_agents.typing import types
 from tf_agents.typing.types import Int, Float
@@ -12,6 +14,7 @@ from tensorflow_probability import distributions as tfd
 
 import reinforcement_learning
 import wasserstein_mdp
+from layers.encoders import EncodingType
 from reinforcement_learning.agents.wae_agent import WaeDqnAgent
 from reinforcement_learning.environments.latent_environment import LatentEmbeddingTFEnvironmentWrapper
 from reinforcement_learning.environments.perturbed_env import PerturbedEnvironment
@@ -165,9 +168,9 @@ class WaeDqnLearner:
         self.action_spec = self.tf_env.action_spec()
 
         self.q_network = q_network.QNetwork(
-            ts.time_step_spec(self.latent_observation_spec),
+            self.latent_observation_spec,
             self.tf_env.action_spec(),
-            fc_layer_params=network_fc_layer_params)
+            fc_layer_params=network_fc_layer_params.hidden_units)
         policy = q_policy.QPolicy(
             time_step_spec=ts.time_step_spec(self.latent_observation_spec),
             action_spec=self.tf_env.action_spec(),
@@ -198,19 +201,24 @@ class WaeDqnLearner:
                 action_spec=policy.action_spec))
 
         ae_optimizer = tf.keras.optimizers.Adam(learning_rate=autoencoder_learning_rate)
-        wasserstein_optimizer = tf.keras.optimizer.Adam(learning_rate=wasserstein_learning_rate)
-        dqn_optimizer = tf.keras.optimizer.Adam(learning_rate=dqn_learning_rate)
+        wasserstein_optimizer = tf.keras.optimizers.Adam(learning_rate=wasserstein_learning_rate)
+        dqn_optimizer = tf.keras.optimizers.Adam(learning_rate=dqn_learning_rate)
 
         self.global_step = tf.Variable(initial_value=0, trainable=False, dtype=tf.int64, name="global_step")
         self.dqn_step = tf.Variable(initial_value=0, trainable=False, dtype=tf.int64, name="dqn_step")
         self.wae_step = tf.Variable(initial_value=0, trainable=False, dtype=tf.int64, name="wae_step")
 
+        state_shape, reward_shape = (
+            shape if shape != () else (1,) for shape in [
+                self.tf_env.observation_spec().shape,
+                self.tf_env.time_step_spec().reward.shape,])
+
         self.wae_mdp = WassersteinMarkovDecisionProcess(
-            state_shape=self.tf_env.observation_spec().shape,
-            action_shape=self.tf_env.action_spec().shape,
-            reward_shape=self.tf_env.time_step_spec().reward.shape,
+            state_shape=state_shape,
+            action_shape=(self.tf_env.action_spec().maximum + 1,),
+            reward_shape=reward_shape,
             label_shape=labeling_fn(_obs).shape[1:],
-            discretize_action_space=True,
+            discretize_action_space=False,
             state_encoder_network=state_encoder_network,
             state_encoder_temperature=state_encoder_temperature,
             latent_policy_network=None,
@@ -226,12 +234,15 @@ class WaeDqnLearner:
             autoencoder_optimizer=ae_optimizer,
             wasserstein_optimizer=wasserstein_optimizer,
             wasserstein_regularizer_scale_factor=wasserstein_regularizer_scale_factor,
-            reset_state_label=env_perturbation > 0.)
+            reset_state_label=env_perturbation > 0.,
+            state_encoder_type=EncodingType.DETERMINISTIC,
+            deterministic_state_embedding=True)
 
         self.tf_agent = WaeDqnAgent(
             time_step_spec=self.tf_env.time_step_spec(),
             latent_time_step_spec=ts.time_step_spec(self.latent_observation_spec),
             action_spec=self.tf_env.action_spec(),
+            label_spec=tf.TensorSpec(self.wae_mdp.label_shape),
             q_network=self.q_network,
             optimizer=dqn_optimizer,
             epsilon_greedy=epsilon_greedy,
@@ -307,7 +318,7 @@ class WaeDqnLearner:
             self.avg_return = tf_metrics.AverageReturnMetric(batch_size=self.tf_env.batch_size)
             #  self.safety_violations = NumberOfSafetyViolations(self.labeling_function)
 
-            observers = [self.num_episodes, self.env_steps] if not parallelization else []
+            observers = [self.num_episodes, self.env_steps] if not self.parallel_envs else []
             observers += [self.avg_return, self.replay_buffer.add_batch]
             # A driver executes the agent's exploration loop and allows the observers to collect exploration information
             self.driver = dynamic_step_driver.DynamicStepDriver(
@@ -527,7 +538,6 @@ class WaeDqnLearner:
 
 def main(argv):
     del argv
-    from flags import FLAGS
     params = FLAGS.flag_values_dict()
 
     # set seed
@@ -549,7 +559,7 @@ def main(argv):
         return -1
     learner = WaeDqnLearner(
         env_name=params['env_name'],
-        env_suite=params['env_suite'],
+        env_suite=importlib.import_module('tf_agents.environments.' + params['env_suite']),
         labeling_fn=reinforcement_learning.labeling_functions[params['env_name']],
         latent_state_size=params['latent_state_size'],
         num_iterations=params['steps'],
@@ -563,7 +573,7 @@ def main(argv):
         wasserstein_regularizer_scale_factor=WassersteinRegularizerScaleFactor(
             global_gradient_penalty_multiplier=params['gradient_penalty_scale_factor'],
             steady_state_scaling=params['steady_state_regularizer_scale_factor'],
-            local_transition_loss_scaling=params['transition_regularizer_scale_factor'],),
+            local_transition_loss_scaling=params['transition_regularizer_scale_factor'], ),
         gamma=params['gamma'],
         autoencoder_learning_rate=params['auto_encoder_learning_rate'],
         wasserstein_learning_rate=params['wasserstein_learning_rate'],
@@ -588,7 +598,9 @@ def main(argv):
         reward_scale_factor=params['reward_scaling'],
         gradient_clipping=params['policy_gradient_clipping'],
         env_time_limit=params['env_time_limit'],
-        env_perturbation=params['env_perturbation'],)
+        env_perturbation=params['env_perturbation'], )
+
+    learner.train_and_eval()
 
     return 0
 

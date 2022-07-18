@@ -695,13 +695,6 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         # reconstruction loss
         # the reward as well as the state and action reconstruction functions are deterministic
-        mean_decoder_fn = tfd.JointDistributionSequential([
-            self.decode_state(latent_state),
-            self.action_generator(latent_state),
-            self.markov_chain_reward_distribution(latent_state, next_latent_state),
-            self.decode_state(next_latent_state)
-        ]).mean
-
         if not self.policy_based_decoding or self.enforce_upper_bound:
             _state, _action, _reward, _next_state = tfd.JointDistributionSequential([
                 self.decode_state(latent_state),
@@ -715,6 +708,12 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 self.decode_state(next_latent_state)
             ]).sample()
         else:
+            mean_decoder_fn = tfd.JointDistributionSequential([
+                self.decode_state(latent_state),
+                self.action_generator(latent_state),
+                self.markov_chain_reward_distribution(latent_state, next_latent_state),
+                self.decode_state(next_latent_state)
+            ]).mean
             _state, _action, _reward, _next_state = mean_decoder_fn()
 
         reconstruction_loss = (

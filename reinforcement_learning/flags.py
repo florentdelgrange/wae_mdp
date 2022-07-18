@@ -56,7 +56,7 @@ flags.DEFINE_integer(
     help="Period for update of the target networks",
     default=100
 )
-flags.DEFINE_integer(
+flags.DEFINE_float(
     'target_update_scale',
     help='Weights scaling for the target network updates. '
          'Set to 1 to perform hard updates and < 1 for soft updates',

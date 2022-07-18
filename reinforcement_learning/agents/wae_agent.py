@@ -21,6 +21,7 @@ class WaeDqnAgent(dqn_agent.DqnAgent):
             time_step_spec: ts.TimeStep,
             latent_time_step_spec: ts.TimeStep,
             action_spec: types.NestedTensorSpec,
+            label_spec: tf.TensorSpec,
             q_network: network.Network,
             optimizer: types.Optimizer,
             wae_mdp: WassersteinMarkovDecisionProcess,
@@ -50,11 +51,12 @@ class WaeDqnAgent(dqn_agent.DqnAgent):
 
         self._state_embedding = TFAgentEncodingNetworkWrapper(
             wae_mdp.state_encoder_network,
+            label_spec,
             wae_mdp.state_encoder_temperature,
             name='CriticStateEmbedding')
-        self._state_embedding.create_variables(time_step_spec.observation)
+        self._state_embedding.create_variables([time_step_spec.observation, label_spec])
         self._target_state_embedding = common.maybe_copy_target_network_with_checks(
-            self._state_embedding, None, input_spec=time_step_spec.observation,
+            self._state_embedding, None, input_spec=[time_step_spec.observation, label_spec],
             name='TargetStateEmbedding')
         self._labeling_fn = labeling_fn
 
