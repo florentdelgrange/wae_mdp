@@ -1,7 +1,8 @@
-import math
 import os
+import random
 import sys
 
+import numpy as np
 from tf_agents import specs
 from tf_agents.trajectories import policy_step
 from tf_agents.typing import types
@@ -9,6 +10,7 @@ from tf_agents.typing.types import Int, Float
 
 from tensorflow_probability import distributions as tfd
 
+import reinforcement_learning
 import wasserstein_mdp
 from reinforcement_learning.agents.wae_agent import WaeDqnAgent
 from reinforcement_learning.environments.latent_environment import LatentEmbeddingTFEnvironmentWrapper
@@ -32,7 +34,6 @@ except ImportError as ie:
               "meaning prioritized experience replay cannot be used.")
 
 from absl import app
-from absl import flags
 
 import tensorflow as tf
 from tensorflow.python.keras.utils.generic_utils import Progbar
@@ -53,71 +54,6 @@ from tf_agents.policies import policy_saver, categorical_q_policy, boltzmann_pol
 import tf_agents.trajectories.time_step as ts
 from reinforcement_learning.environments import EnvironmentLoader
 
-flags.DEFINE_string(
-    'env_name', help='Name of the environment', default='CartPole-v0'
-)
-flags.DEFINE_string(
-    'env_suite', help='Environment suite', default='suite_gym'
-)
-flags.DEFINE_integer(
-    'steps', help='Number of iterations', default=int(2e5)
-)
-flags.DEFINE_integer(
-    'num_parallel_env', help='Number of parallel environments', default=1
-)
-flags.DEFINE_integer(
-    'seed', help='set seed', default=42
-)
-flags.DEFINE_string(
-    'save_dir', help='Save directory location', default='.'
-)
-flags.DEFINE_multi_integer(
-    'network_layers',
-    help='number of units per MLP layers',
-    default=[100, 50]
-)
-flags.DEFINE_integer(
-    'batch_size',
-    help='batch_size',
-    default=64
-)
-flags.DEFINE_float(
-    'learning_rate',
-    help='learning rate',
-    default=1e-3
-)
-flags.DEFINE_integer(
-    'collect_steps_per_iteration',
-    help='Collect steps per iteration',
-    default=1
-)
-flags.DEFINE_integer(
-    'target_update_period',
-    help="Period for update of the target networks",
-    default=20
-)
-flags.DEFINE_float(
-    'gamma',
-    help='discount_factor',
-    default=0.99
-)
-flags.DEFINE_bool(
-    'prioritized_experience_replay',
-    help="use priority-based replay buffer (with Deepmind's reverb)",
-    default=False
-)
-flags.DEFINE_float(
-    'priority_exponent',
-    help='priority exponent for computing the probabilities of the samples from the prioritized replay buffer',
-    default=0.6
-)
-flags.DEFINE_multi_string(
-    'import',
-    help='list of modules to additionally import',
-    default=[]
-)
-FLAGS = flags.FLAGS
-
 default_architecture = ModelArchitecture(hidden_units=(256, 256), activation='relu')
 
 
@@ -134,12 +70,6 @@ class WaeDqnLearner:
             replay_buffer_capacity: int = int(1e6),
             network_fc_layer_params: ModelArchitecture = default_architecture,
             state_encoder_temperature: Float = 2. / 3,
-            state_encoder_network: ModelArchitecture = default_architecture,
-            transition_network: ModelArchitecture = default_architecture,
-            reward_network: ModelArchitecture = default_architecture,
-            decoder_network: ModelArchitecture = default_architecture,
-            steady_state_lipschitz_network: ModelArchitecture = default_architecture,
-            transition_loss_lipschitz_network: ModelArchitecture = default_architecture,
             wasserstein_regularizer_scale_factor: WassersteinRegularizerScaleFactor = WassersteinRegularizerScaleFactor(
                 global_scaling=20.,
                 global_gradient_penalty_multiplier=10.),
@@ -147,15 +77,14 @@ class WaeDqnLearner:
             autoencoder_learning_rate: float = 3e-4,
             wasserstein_learning_rate: float = 3e-4,
             dqn_learning_rate: float = 3e-4,
-            log_interval: int = 2500,
+            log_interval: int = 200,
             num_eval_episodes: int = 30,
             eval_interval: int = int(1e4),
-            parallelization: bool = True,
             num_parallel_environments: int = 4,
             wae_batch_size: int = 128,
             dqn_batch_size: int = 64,
             n_wae_critic: Int = 5,
-            n_dqn: Int = 5,
+            n_wae_updates: Int = 5,
             save_directory_location: str = '.',
             prioritized_experience_replay: bool = False,
             priority_exponent: float = 0.6,
@@ -170,40 +99,35 @@ class WaeDqnLearner:
             env_time_limit: Optional[Int] = None,
             env_perturbation: Optional[Float] = .75,
     ):
-        self.parallelization = parallelization and not prioritized_experience_replay
+        self.parallel_envs = num_parallel_environments > 1 and not prioritized_experience_replay
 
         if collect_steps_per_iteration is None:
             collect_steps_per_iteration = dqn_batch_size
-        if parallelization:
+        if self.parallel_envs:
             replay_buffer_capacity = replay_buffer_capacity // num_parallel_environments
             collect_steps_per_iteration = max(1, collect_steps_per_iteration // num_parallel_environments)
 
         self.env_name = env_name
         self.env_suite = env_suite
         self.num_iterations = num_iterations
-
         self.initial_collect_steps = initial_collect_steps
         self.collect_steps_per_iteration = collect_steps_per_iteration
         self.replay_buffer_capacity = replay_buffer_capacity
-
         self.gamma = gamma
-
         self.log_interval = log_interval
-
         self.num_eval_episodes = num_eval_episodes
         self.eval_interval = eval_interval
         self.wae_eval_steps = wae_eval_steps
-
-        self.parallelization = parallelization
         self.num_parallel_environments = num_parallel_environments
-
         self.dqn_batch_size = dqn_batch_size
         self.wae_batch_size = wae_batch_size
-
         self.prioritized_experience_replay = prioritized_experience_replay
         self.n_wae_critic = n_wae_critic
-        self.n_dqn = n_dqn
+        self.n_wae_updates = n_wae_updates
         self.labeling_fn = labeling_fn
+
+        state_encoder_network = transition_network = reward_network = decoder_network = \
+            steady_state_lipschitz_network = transition_loss_lipschitz_network = network_fc_layer_params
 
         env_loader = EnvironmentLoader(env_suite, seed=seed)
         env_wrappers = []
@@ -217,7 +141,7 @@ class WaeDqnLearner:
                     perturbation=env_perturbation,
                     recursive_perturbation=True))
 
-        if parallelization:
+        if self.parallel_envs:
             self.tf_env = tf_py_environment.TFPyEnvironment(parallel_py_environment.ParallelPyEnvironment(
                 [lambda: env_loader.load(env_name, env_wrappers)] * num_parallel_environments))
             _obs = self.tf_env.reset().observation
@@ -253,6 +177,7 @@ class WaeDqnLearner:
             """
             Categorical policy wrapper; changes Categorical to OneHotCategorical in tf.float32
             """
+
             def __init__(self, categorical_policy: tf_policy.TFPolicy,
                          time_step_spec: ts.TimeStep,
                          action_spec: types.NestedTensorSpec):
@@ -266,7 +191,11 @@ class WaeDqnLearner:
                 logits = _step.action.logits_parameter()
                 return PolicyStep(tfd.OneHotCategorical(logits=logits, dtype=tf.float32), _step.state, _step.info)
 
-        policy = greedy_policy.GreedyPolicy(OneHotTFPolicyWrapper(policy))
+        policy = greedy_policy.GreedyPolicy(
+            OneHotTFPolicyWrapper(
+                policy,
+                time_step_spec=policy.time_step_spec,
+                action_spec=policy.action_spec))
 
         ae_optimizer = tf.keras.optimizers.Adam(learning_rate=autoencoder_learning_rate)
         wasserstein_optimizer = tf.keras.optimizer.Adam(learning_rate=wasserstein_learning_rate)
@@ -316,7 +245,7 @@ class WaeDqnLearner:
             gradient_clipping=gradient_clipping,
             emit_log_probability=True,
             labeling_fn=labeling_fn if env_perturbation <= 0. else ergodic_batched_labeling_function(labeling_fn),
-            wae_mdp=self.wae_mdp,)
+            wae_mdp=self.wae_mdp, )
 
         self.tf_agent.initialize()
 
@@ -452,7 +381,7 @@ class WaeDqnLearner:
             ('replay_buffer_frames', self.replay_buffer.num_frames()),
             ('training_avg_returns', self.avg_return.result()),
         ]
-        if not self.parallelization:
+        if not self.parallel_envs:
             log_values += [
                 ('num_episodes', self.num_episodes.result()),
                 ('env_steps', self.env_steps.result())
@@ -481,7 +410,7 @@ class WaeDqnLearner:
                    'priority_logistic_max', 'priority_logistic_min', 'dynamic_reward_scaling'
                    ] + self.wae_mdp.loss_metrics.keys()
 
-        if not self.parallelization:
+        if not self.parallel_envs:
             metrics += ['num_episodes', 'env_steps']
 
         dqn_loss = 0.
@@ -499,8 +428,7 @@ class WaeDqnLearner:
 
         print("Start training...")
 
-        for _ in range(self.global_step.numpy(), self.num_iterations):
-            step = self.global_step.numpy()
+        for step in range(self.global_step.numpy(), self.num_iterations):
 
             # Collect a few steps using collect_policy and save to the replay buffer.
             self.driver.run(env.current_time_step())
@@ -518,11 +446,11 @@ class WaeDqnLearner:
                 eval_steps=self.wae_eval_steps,
                 save_directory=self.save_directory_location,
                 log_name='wae_mdp',
-                train_summary_writer=self.train_summary_writer,
-                log_interval=self.log_interval,
+                train_summary_writer=None,
+                log_interval=np.inf,
                 start_annealing_step=0, )
 
-            if step % self.n_dqn == 0:
+            if step % (self.n_wae_updates * self.n_wae_critic) == 0:
                 # Use data from the buffer and update the agent's network.
                 # experience = replay_buffer.gather_all()
                 experience, info = next(self.iterator)
@@ -551,6 +479,10 @@ class WaeDqnLearner:
                 with self.train_summary_writer.as_default():
                     tf.summary.scalar('dqn_loss', dqn_loss, step=step)
                     tf.summary.scalar('training average returns', self.avg_return.result(), step=step)
+                    for key, value in self.wae_mdp.loss_metrics:
+                        tf.summary.scalar(key, value, step=self.wae_step)
+                # reset accumulators after logging
+                self.wae_mdp.reset_metrics()
 
             if step % self.eval_interval == 0:
                 eval_thread = threading.Thread(target=self.eval, args=(step, progressbar), daemon=True, name='eval')
@@ -595,9 +527,17 @@ class WaeDqnLearner:
 
 def main(argv):
     del argv
+    from flags import FLAGS
     params = FLAGS.flag_values_dict()
-    print(params)
+
+    # set seed
+    seed = params['seed']
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
     tf.random.set_seed(params['seed'])
+
     try:
         import importlib
         env_suite = importlib.import_module('tf_agents.environments.' + params['env_suite'])
@@ -609,21 +549,47 @@ def main(argv):
         return -1
     learner = WaeDqnLearner(
         env_name=params['env_name'],
-        env_suite=env_suite,
+        env_suite=params['env_suite'],
+        labeling_fn=reinforcement_learning.labeling_functions[params['env_name']],
+        latent_state_size=params['latent_state_size'],
         num_iterations=params['steps'],
-        num_parallel_environments=params['num_parallel_env'],
-        save_directory_location=params['save_dir'],
-        learning_rate=params['learning_rate'],
-        network_fc_layer_params=params['network_layers'],
-        batch_size=params['batch_size'],
-        parallelization=params['num_parallel_env'] > 1,
-        target_update_period=params['target_update_period'],
-        gamma=params['gamma'],
+        initial_collect_steps=params['initial_collect_steps'],
         collect_steps_per_iteration=params['collect_steps_per_iteration'],
+        replay_buffer_capacity=params['replay_buffer_size'],
+        network_fc_layer_params=ModelArchitecture(
+            hidden_units=params['network_layers'],
+            activation=params['activation']),
+        state_encoder_temperature=params['state_encoder_temperature'],
+        wasserstein_regularizer_scale_factor=WassersteinRegularizerScaleFactor(
+            global_gradient_penalty_multiplier=params['gradient_penalty_scale_factor'],
+            steady_state_scaling=params['steady_state_regularizer_scale_factor'],
+            local_transition_loss_scaling=params['transition_regularizer_scale_factor'],),
+        gamma=params['gamma'],
+        autoencoder_learning_rate=params['auto_encoder_learning_rate'],
+        wasserstein_learning_rate=params['wasserstein_learning_rate'],
+        dqn_learning_rate=params['policy_learning_rate'],
+        log_interval=params['log_interval'],
+        num_eval_episodes=params['n_eval_episodes'],
+        eval_interval=params['n_eval_interval'],
+        num_parallel_environments=params['n_parallel_envs'],
+        wae_batch_size=params['wae_batch_size'],
+        dqn_batch_size=params['policy_batch_size'],
+        n_wae_critic=params['n_wae_critic'],
+        n_wae_updates=params['n_wae_updates'],
+        save_directory_location=params['save_dir'],
         prioritized_experience_replay=params['prioritized_experience_replay'],
         priority_exponent=params['priority_exponent'],
-        seed=params['seed'])
-    learner.train_and_eval()
+        wae_eval_steps=params['wae_eval_steps'],
+        seed=params['seed'],
+        epsilon_greedy=params['epsilon_greedy'],
+        boltzmann_temperature=params['boltzmann_temperature'],
+        target_update_period=params['target_update_period'],
+        target_update_tau=params['target_update_scale'],
+        reward_scale_factor=params['reward_scaling'],
+        gradient_clipping=params['policy_gradient_clipping'],
+        env_time_limit=params['env_time_limit'],
+        env_perturbation=params['env_perturbation'],)
+
     return 0
 
 
