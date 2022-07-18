@@ -86,9 +86,9 @@ class WaeDqnAgent(dqn_agent.DqnAgent):
                 training=True)
         tf.debugging.check_numerics(loss_info.loss, 'Loss is inf or nan')
         variables_to_train = self._q_network.trainable_weights + \
-                             self._state_embedding.trainable_weights  # new
+                             self._state_embedding.trainable_weights  # changes here
         non_trainable_weights = self._q_network.non_trainable_weights + \
-                                self._state_embedding.non_trainable_weights  # new
+                                self._state_embedding.non_trainable_weights  # changes here
         assert list(variables_to_train), "No variables in the agent's q_network."
         grads = tape.gradient(loss_info.loss, variables_to_train)
         grads_and_vars = list(zip(grads, variables_to_train))
@@ -118,7 +118,7 @@ class WaeDqnAgent(dqn_agent.DqnAgent):
             network_observation, _ = self._observation_and_action_constraint_splitter(
                 network_observation)
 
-        # new
+        # changes here
         embedded_observation, _ = self._state_embedding(
             [network_observation, self._labeling_fn(network_observation)],
             training=training)
@@ -144,7 +144,7 @@ class WaeDqnAgent(dqn_agent.DqnAgent):
             network_observation, _ = self._observation_and_action_constraint_splitter(
                 network_observation)
 
-        # new
+        # changes here
         embedded_observation, _ = self._target_state_embedding(
             [network_observation, self._labeling_fn(network_observation)],
             training=False)
