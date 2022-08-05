@@ -19,35 +19,6 @@ class EncodingType(enum.Enum):
     LSTM = enum.auto()
     DETERMINISTIC = enum.auto()
 
-class TFAgentEncodingNetworkWrapper(Network):
-
-    def __init__(
-            self,
-            state_encoder_network: DiscreteDistributionModel,
-            label_spec: tf.TensorSpec,
-            temperature: Float, name: str = 'EncodingNetworkWrapper'
-    ):
-        input_tensor_spec = [tf.TensorSpec(state_encoder_network.input_shape[1:]), label_spec]
-
-        super(TFAgentEncodingNetworkWrapper, self).__init__(
-            input_tensor_spec=input_tensor_spec,
-            state_spec=(),
-            name=name)
-
-        self.state_encoder_network = state_encoder_network
-        self.temperature = temperature
-
-    def call(self, state_and_label, step_type=None, network_state=(), training=False):
-        state, label = state_and_label
-        if not training or tf.equal(self.temperature, tf.zeros_like(self.temperature)):
-            return self.state_encoder_network.discrete_distribution(
-                state=state, label=label,
-            ).sample(), network_state
-        else:
-            return self.state_encoder_network.relaxed_distribution(
-                state=state, temperature=self.temperature, label=label,
-            ).sample(), network_state
-
 
 class StateEncoderNetwork(DiscreteDistributionModel):
 
@@ -64,7 +35,13 @@ class StateEncoderNetwork(DiscreteDistributionModel):
             state_encoder_pre_processing_network: Optional[tfk.Model] = None,
             lstm_output: bool = False,
             deterministic_reset: bool = True,
+            *args, **kwargs
     ):
+        # for copying the network
+        self._saved_kwargs = {key: value for key, value in list(locals().items())}
+        self._saved_kwargs['encoder_type'] = type(self)
+        self._saved_kwargs.pop('self')
+
         n_logits = (latent_state_size - atomic_prop_dims)
         state_encoder_network = tfk.Sequential(name="state_encoder_body")
         self.deterministic_reset = deterministic_reset
@@ -182,6 +159,53 @@ class StateEncoderNetwork(DiscreteDistributionModel):
         return config
 
 
+class TFAgentEncodingNetworkWrapper(Network):
+
+    def __init__(
+            self,
+            label_spec: tf.TensorSpec,
+            temperature: Float,
+            state_encoder_network: Optional[StateEncoderNetwork] = None,
+            name: str = 'EncodingNetworkWrapper',
+            **kwargs,
+    ):
+        if len(kwargs) > 0:
+            input_tensor_spec = [tf.TensorSpec(kwargs['state'].shape[1:]), label_spec]
+        elif state_encoder_network is not None:
+            input_tensor_spec = [tf.TensorSpec(state_encoder_network.input_shape[1:]), label_spec]
+        else:
+            raise ValueError(
+                "either a state_encoder_network or the kwargs required to initialize it should be provided")
+
+        super(TFAgentEncodingNetworkWrapper, self).__init__(
+            input_tensor_spec=input_tensor_spec,
+            state_spec=(),
+            name=name)
+
+        # if kwargs are provided, construct a state encoder based on those kwargs and ignore the input state_encoder
+        if len(kwargs) > 0:
+            self.state_encoder_network = kwargs.get('encoder_type', StateEncoderNetwork)(**kwargs)
+        else:
+            self.state_encoder_network = state_encoder_network
+
+        self.temperature = temperature
+
+    def call(self, state_and_label, step_type=None, network_state=(), training=False):
+        state, label = state_and_label
+        if not training or tf.equal(self.temperature, tf.zeros_like(self.temperature)):
+            return self.state_encoder_network.discrete_distribution(
+                state=state, label=label,
+            ).sample(), network_state
+        else:
+            return self.state_encoder_network.relaxed_distribution(
+                state=state, temperature=self.temperature, label=label,
+            ).sample(), network_state
+
+    def copy(self, **kwargs):
+        return super(TFAgentEncodingNetworkWrapper, self).copy(
+            **dict(self.state_encoder_network._saved_kwargs, **kwargs))
+
+
 class DeterministicStateEncoderNetwork(StateEncoderNetwork):
 
     def __init__(
@@ -194,7 +218,11 @@ class DeterministicStateEncoderNetwork(StateEncoderNetwork):
             time_stacked_states: bool = False,
             output_softclip: Callable[[Float], Float] = tfb.Identity(),
             state_encoder_pre_processing_network: Optional[tfk.Model] = None,
+            *args, **kwargs
     ):
+        _saved_kwargs = {key: value for key, value in list(locals().items())}
+        _saved_kwargs['encoder_type'] = type(self)
+        _saved_kwargs.pop('self')
         super().__init__(
             state=state,
             activation=activation,
@@ -205,6 +233,7 @@ class DeterministicStateEncoderNetwork(StateEncoderNetwork):
             lstm_output=False,
             output_softclip=output_softclip,
             state_encoder_pre_processing_network=state_encoder_pre_processing_network)
+        self._saved_kwargs = _saved_kwargs
 
     def _deterministic_distribution(
         self,

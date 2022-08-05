@@ -50,9 +50,9 @@ class WaeDqnAgent(dqn_agent.DqnAgent):
                          gradient_clipping, debug_summaries, summarize_grads_and_vars, train_step_counter, name)
 
         self._state_embedding = TFAgentEncodingNetworkWrapper(
-            wae_mdp.state_encoder_network,
             label_spec,
             wae_mdp.state_encoder_temperature,
+            state_encoder_network=wae_mdp.state_encoder_network,
             name='CriticStateEmbedding')
         self._state_embedding.create_variables([time_step_spec.observation, label_spec])
         self._target_state_embedding = common.maybe_copy_target_network_with_checks(
