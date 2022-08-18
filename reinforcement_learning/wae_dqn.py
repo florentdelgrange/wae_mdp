@@ -6,15 +6,15 @@ import sys
 import numpy as np
 from tf_agents import specs
 from tf_agents.specs import tensor_spec
-from tf_agents.trajectories import policy_step
+from tf_agents.trajectories import policy_step, trajectory
 from tf_agents.typing import types
 from tf_agents.typing.types import Int, Float
-
-from tensorflow_probability import distributions as tfd
 
 import reinforcement_learning
 import wasserstein_mdp
 from layers.encoders import EncodingType
+from policies.latent_policy import LatentPolicyOverRealStateSpace
+from policies.one_hot_categorical import OneHotTFPolicyWrapper
 from reinforcement_learning.agents.wae_agent import WaeDqnAgent
 from reinforcement_learning.environments.latent_environment import LatentEmbeddingTFEnvironmentWrapper
 from reinforcement_learning.environments.perturbed_env import PerturbedEnvironment
@@ -129,14 +129,17 @@ class WaeDqnLearner:
         self.n_wae_updates = n_wae_updates
         self.labeling_fn = labeling_fn
 
+        # set the wae network components to the same architecture
         state_encoder_network = transition_network = reward_network = decoder_network = \
             steady_state_lipschitz_network = transition_loss_lipschitz_network = network_fc_layer_params
 
+        # set up the environment loader
         env_loader = EnvironmentLoader(env_suite, seed=seed)
         env_wrappers = []
         if env_time_limit is not None:
             env_wrappers.append(
                 lambda env: TimeLimit(env, env_time_limit))
+        # recursive perturbation trick to enforce ergodicity
         if env_perturbation > 0.:
             env_wrappers.append(
                 lambda env: PerturbedEnvironment(
@@ -144,6 +147,7 @@ class WaeDqnLearner:
                     perturbation=env_perturbation,
                     recursive_perturbation=True))
 
+        # load the environment
         if self.parallel_envs:
             self.tf_env = tf_py_environment.TFPyEnvironment(parallel_py_environment.ParallelPyEnvironment(
                 [lambda: env_loader.load(env_name, env_wrappers)] * num_parallel_environments))
@@ -168,51 +172,38 @@ class WaeDqnLearner:
         self.action_spec = self.tf_env.action_spec()
 
         self.q_network = q_network.QNetwork(
+            # Q-network inputs are latent states
             self.latent_observation_spec,
             self.tf_env.action_spec(),
             fc_layer_params=network_fc_layer_params.hidden_units)
+        # Q-policy is a Categorical distribution policy with logits inferred based on the Q-network
         policy = q_policy.QPolicy(
             time_step_spec=ts.time_step_spec(self.latent_observation_spec),
             action_spec=self.tf_env.action_spec(),
             q_network=self.q_network, )
 
-        class OneHotTFPolicyWrapper(tf_policy.TFPolicy):
-            """
-            Categorical policy wrapper; changes Categorical to OneHotCategorical in tf.float32
-            """
-
-            def __init__(self, categorical_policy: tf_policy.TFPolicy,
-                         time_step_spec: ts.TimeStep,
-                         action_spec: types.NestedTensorSpec):
-                super().__init__(time_step_spec, action_spec)
-                self._policy = categorical_policy
-
-            def _distribution(
-                    self, time_step: ts.TimeStep, policy_state: types.NestedTensorSpec
-            ) -> policy_step.PolicyStep:
-                _step = self._policy.distribution(time_step, policy_state)
-                logits = _step.action.logits_parameter()
-                return PolicyStep(tfd.OneHotCategorical(logits=logits, dtype=tf.float32), _step.state, _step.info)
-
-        policy = greedy_policy.GreedyPolicy(
+        # policy that can be fed as input of the WAE-MDP
+        wae_policy = greedy_policy.GreedyPolicy(
             OneHotTFPolicyWrapper(
                 policy,
                 time_step_spec=policy.time_step_spec,
                 action_spec=policy.action_spec))
 
-        ae_optimizer = tf.keras.optimizers.Adam(learning_rate=autoencoder_learning_rate)
-        wasserstein_optimizer = tf.keras.optimizers.Adam(learning_rate=wasserstein_learning_rate)
+        # WAE-MDP optimizers
+        wae_mdp_minimizer = tf.keras.optimizers.Adam(learning_rate=autoencoder_learning_rate)
+        wae_mdp_maximizer = tf.keras.optimizers.Adam(learning_rate=wasserstein_learning_rate)
+        # DQN optimizer
         dqn_optimizer = tf.keras.optimizers.Adam(learning_rate=dqn_learning_rate)
 
         self.global_step = tf.Variable(initial_value=0, trainable=False, dtype=tf.int64, name="global_step")
         self.dqn_step = tf.Variable(initial_value=0, trainable=False, dtype=tf.int64, name="dqn_step")
         self.wae_step = tf.Variable(initial_value=0, trainable=False, dtype=tf.int64, name="wae_step")
 
+        # initialize WAE-MDP
         state_shape, reward_shape = (
             shape if shape != () else (1,) for shape in [
                 self.tf_env.observation_spec().shape,
                 self.tf_env.time_step_spec().reward.shape,])
-
         self.wae_mdp = WassersteinMarkovDecisionProcess(
             state_shape=state_shape,
             action_shape=(self.tf_env.action_spec().maximum + 1,),
@@ -230,14 +221,15 @@ class WaeDqnLearner:
             steady_state_lipschitz_network=steady_state_lipschitz_network,
             transition_loss_lipschitz_network=transition_loss_lipschitz_network,
             n_critic=n_wae_critic,
-            external_latent_policy=policy,
-            autoencoder_optimizer=ae_optimizer,
-            wasserstein_optimizer=wasserstein_optimizer,
+            external_latent_policy=wae_policy,
+            autoencoder_optimizer=wae_mdp_minimizer,
+            wasserstein_optimizer=wae_mdp_maximizer,
             wasserstein_regularizer_scale_factor=wasserstein_regularizer_scale_factor,
             reset_state_label=env_perturbation > 0.,
             state_encoder_type=EncodingType.DETERMINISTIC,
             deterministic_state_embedding=True)
 
+        # initialize WAE-DQN Agent
         self.tf_agent = WaeDqnAgent(
             time_step_spec=self.tf_env.time_step_spec(),
             latent_time_step_spec=ts.time_step_spec(self.latent_observation_spec),
@@ -257,13 +249,30 @@ class WaeDqnLearner:
             emit_log_probability=True,
             labeling_fn=labeling_fn if env_perturbation <= 0. else ergodic_batched_labeling_function(labeling_fn),
             wae_mdp=self.wae_mdp, )
-
         self.tf_agent.initialize()
 
-        # define the policy from the learning agent
-        self.collect_policy = self.tf_agent.collect_policy
+        # The collect policy first embeds the original observation to the latent space,
+        # then execute the action based on the tf_agent collect policy
+        self.collect_policy = LatentPolicyOverRealStateSpace(
+            time_step_spec=self.tf_env.time_step_spec(),
+            labeling_function=labeling_fn,
+            latent_policy=self.tf_agent.collect_policy,
+            # change to wae_mdp.state_embedding_function to run the agent policy based on the discrete observation
+            # state_embedding_function=lambda _state, _label: self.wae_mdp.relaxed_state_encoding(
+            #     _state, label=_label, temperature=self.wae_mdp.state_encoder_temperature,
+            # ).sample()
+            state_embedding_function=lambda _state, _label: self.wae_mdp.state_embedding_function(
+                state=_state,
+                label=_label,
+                dtype=tf.float32)
+        )
 
+        # Experience Replay
         self.max_priority = tf.Variable(0., trainable=False, name='max_priority', dtype=tf.float64)
+        trajectory_spec = trajectory.from_transition(
+            time_step=self.tf_env.time_step_spec(),
+            action_step=self.collect_policy.policy_step_spec,
+            next_time_step=self.tf_env.time_step_spec())
         if self.prioritized_experience_replay:
             checkpoint_path = os.path.join(save_directory_location, 'saves', env_name, 'reverb')
             reverb_checkpointer = reverb.checkpointers.DefaultCheckpointer(checkpoint_path)
@@ -279,7 +288,7 @@ class WaeDqnLearner:
             reverb_server = reverb.Server([table], checkpointer=reverb_checkpointer)
 
             self.replay_buffer = reverb_replay_buffer.ReverbReplayBuffer(
-                data_spec=self.tf_agent.collect_data_spec,
+                data_spec=trajectory_spec,
                 sequence_length=2,
                 table_name=table_name,
                 local_server=reverb_server)
@@ -309,14 +318,13 @@ class WaeDqnLearner:
 
         else:
             self.replay_buffer = tf_uniform_replay_buffer.TFUniformReplayBuffer(
-                data_spec=self.tf_agent.collect_data_spec,
+                data_spec=trajectory_spec,
                 batch_size=self.tf_env.batch_size,
                 max_length=replay_buffer_capacity)
 
             self.num_episodes = tf_metrics.NumberOfEpisodes()
             self.env_steps = tf_metrics.EnvironmentSteps()
             self.avg_return = tf_metrics.AverageReturnMetric(batch_size=self.tf_env.batch_size)
-            #  self.safety_violations = NumberOfSafetyViolations(self.labeling_function)
 
             observers = [self.num_episodes, self.env_steps] if not self.parallel_envs else []
             observers += [self.avg_return, self.replay_buffer.add_batch]
@@ -329,13 +337,14 @@ class WaeDqnLearner:
                 observers=[self.replay_buffer.add_batch],
                 num_steps=initial_collect_steps)
 
-        # Dataset generates trajectories with shape [Bx2x...]
+        # Dataset for WAE-DQN
         self.dataset = self.replay_buffer.as_dataset(
             num_parallel_calls=num_parallel_environments,
             sample_batch_size=self.dqn_batch_size,
             num_steps=2).prefetch(3)
         self.iterator = iter(self.dataset)
 
+        # Dataset for WAE-MDP
         def dataset_generator(generator_fn):
             return self.replay_buffer.as_dataset(
                 num_parallel_calls=tf.data.experimental.AUTOTUNE,
@@ -351,14 +360,15 @@ class WaeDqnLearner:
                 trajectory=trajectory,
                 labeling_function=ergodic_batched_labeling_function(labeling_fn),
                 discrete_action=True,
-                num_discrete_actions=self.tf_env.action_spec().shape[0], ))
+                num_discrete_actions=self.tf_env.action_spec().maximum + 1, ))
         self.wae_iterator = iter(
             self.wae_dataset.batch(
                 batch_size=self.wae_batch_size,
                 drop_remainder=True
             ).prefetch(tf.data.experimental.AUTOTUNE))
 
-        self.checkpoint_dir = os.path.join(save_directory_location, 'saves', env_name, 'dqn_training_checkpoint')
+        # checkpointing
+        self.checkpoint_dir = os.path.join(save_directory_location, 'saves', env_name, 'wae_dqn_training_checkpoint')
         self.train_checkpointer = common.Checkpointer(
             ckpt_dir=self.checkpoint_dir,
             max_to_keep=1,
@@ -372,15 +382,15 @@ class WaeDqnLearner:
         self.policy_dir = os.path.join(save_directory_location, 'saves', env_name, 'dqn_policy')
         self.policy_saver = policy_saver.PolicySaver(self.tf_agent.policy)
 
+        # logs
         current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         train_log_dir = os.path.join(
-            save_directory_location, 'logs', 'gradient_tape', env_name, 'dqn_agent_training', current_time)
+            save_directory_location, 'logs', 'gradient_tape', env_name, 'wae_dqn_agent_training', current_time)
         self.train_summary_writer = tf.summary.create_file_writer(train_log_dir)
         self.save_directory_location = os.path.join(save_directory_location, 'saves', env_name)
 
         if os.path.exists(self.checkpoint_dir):
             self.train_checkpointer.initialize_or_restore()
-            self.global_step = tf.compat.v1.train.get_global_step()
             print("Checkpoint loaded! global_step={:d}; dqn_step={:d}; wae_step={:d}".format(
                 self.global_step.numpy(), self.dqn_step.numpy(), self.wae_step.numpy()))
         if not os.path.exists(self.policy_dir):
@@ -419,7 +429,7 @@ class WaeDqnLearner:
                    "state_distortion", 'action_rate', 'action_distortion', 'mean_state_bits_used', 'wis_exponent',
                    'priority_logistic_smoothness', 'priority_logistic_mean',
                    'priority_logistic_max', 'priority_logistic_min', 'dynamic_reward_scaling'
-                   ] + self.wae_mdp.loss_metrics.keys()
+                   ] + list(self.wae_mdp.loss_metrics.keys())
 
         if not self.parallel_envs:
             metrics += ['num_episodes', 'env_steps']
@@ -446,16 +456,16 @@ class WaeDqnLearner:
 
             # WAE update
             wae_mdp_loss = self.wae_mdp.training_step(
-                dataset=self.wae_dataset,
+                dataset=None,
                 dataset_iterator=self.wae_iterator,
                 batch_size=self.wae_batch_size,
                 annealing_period=1,
                 global_step=self.wae_step,
                 display_progressbar=False,
                 progressbar=None,
-                eval_and_save_model_interval=self.eval_interval,
+                eval_and_save_model_interval=np.inf,
                 eval_steps=self.wae_eval_steps,
-                save_directory=self.save_directory_location,
+                save_directory=None,
                 log_name='wae_mdp',
                 train_summary_writer=None,
                 log_interval=np.inf,
@@ -490,12 +500,13 @@ class WaeDqnLearner:
                 with self.train_summary_writer.as_default():
                     tf.summary.scalar('dqn_loss', dqn_loss, step=step)
                     tf.summary.scalar('training average returns', self.avg_return.result(), step=step)
-                    for key, value in self.wae_mdp.loss_metrics:
-                        tf.summary.scalar(key, value, step=self.wae_step)
+                    for key, value in self.wae_mdp.loss_metrics.items():
+                        tf.summary.scalar(key, value.result(), step=self.wae_step)
                 # reset accumulators after logging
                 self.wae_mdp.reset_metrics()
 
             if step % self.eval_interval == 0:
+                self.wae_mdp.save(self.save_directory_location, 'model')
                 eval_thread = threading.Thread(target=self.eval, args=(step, progressbar), daemon=True, name='eval')
                 eval_thread.start()
 

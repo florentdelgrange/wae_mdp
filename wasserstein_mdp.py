@@ -123,7 +123,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             time_stacked_lstm_units: int = 128,
             reward_bounds: Optional[Tuple[float, float]] = None,
             latent_stationary_network: Optional[tfk.Model] = None,
-            action_entropy_regularizer_scaling: float = 1.,
+            action_entropy_regularizer_scaling: float = 0.,
             enforce_upper_bound: bool = False,
             squared_wasserstein: bool = False,
             n_critic: int = 5,

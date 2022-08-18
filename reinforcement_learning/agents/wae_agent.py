@@ -1,7 +1,8 @@
 from typing import Optional, Text, Callable, cast
 
 import tensorflow as tf
-from tensorflow.python.framework.indexed_slices import tensor_spec
+from tf_agents.specs import tensor_spec
+from tf_agents.agents import data_converter
 
 from tf_agents.agents.dqn import dqn_agent
 from tf_agents.trajectories import time_step as ts
@@ -49,6 +50,7 @@ class WaeDqnAgent(dqn_agent.DqnAgent):
                          target_update_tau, target_update_period, td_errors_loss_fn, gamma, reward_scale_factor,
                          gradient_clipping, debug_summaries, summarize_grads_and_vars, train_step_counter, name)
 
+        self._fix_time_step_spec(time_step_spec, action_spec, q_network, gamma, n_step_update)
         self._state_embedding = TFAgentEncodingNetworkWrapper(
             label_spec,
             wae_mdp.state_encoder_temperature,
@@ -59,6 +61,35 @@ class WaeDqnAgent(dqn_agent.DqnAgent):
             self._state_embedding, None, input_spec=[time_step_spec.observation, label_spec],
             name='TargetStateEmbedding')
         self._labeling_fn = labeling_fn
+
+    def _fix_time_step_spec(self, time_step_spec, action_spec, q_network, gamma, n_step_update):
+        # fix diverse time_step_spec issues occurring when repeatedly encoding input observations
+        if not isinstance(time_step_spec, ts.TimeStep):
+            raise TypeError(
+                "The `time_step_spec` must be an instance of `TimeStep`, but is `{}`.".format(type(time_step_spec)))
+        time_step_spec = tensor_spec.from_spec(time_step_spec)
+        self._time_step_spec = time_step_spec
+
+        # Data context for data collected directly from the collect policy.
+        self._collect_data_context = data_converter.DataContext(
+            time_step_spec=self._time_step_spec,
+            action_spec=self._action_spec,
+            info_spec=self._collect_policy.info_spec)
+        self._data_context = data_converter.DataContext(
+            time_step_spec=time_step_spec,
+            action_spec=action_spec,
+            info_spec=self._collect_policy.info_spec)
+        if q_network.state_spec:
+            # AsNStepTransition does not support emitting [B, T, ...] tensors,
+            # which we need for DQN-RNN.
+            self._as_transition = data_converter.AsTransition(
+                self.data_context, squeeze_time_dim=False)
+        else:
+            # This reduces the n-step return and removes the extra time dimension,
+            # allowing the rest of the computations to be independent of the
+            # n-step parameter.
+            self._as_transition = data_converter.AsNStepTransition(
+                self.data_context, gamma=gamma, n=n_step_update)
 
     def _initialize(self):
         super(WaeDqnAgent, self)._initialize()
@@ -152,13 +183,16 @@ class WaeDqnAgent(dqn_agent.DqnAgent):
             training=False)
 
         next_target_q_values, _ = self._target_q_network(
-            network_observation, step_type=next_time_steps.step_type)
+            embedded_observation, step_type=next_time_steps.step_type)
         batch_size = (
                 next_target_q_values.shape[0] or tf.shape(next_target_q_values)[0])
         dummy_state = self._policy.get_initial_state(batch_size)
         # Find the greedy actions using our greedy policy. This ensures that action
         # constraints are respected and helps centralize the greedy logic.
-        best_next_actions = self._policy.action(next_time_steps, dummy_state).action
+        best_next_actions = self._policy.action(
+            next_time_steps._replace(observation=embedded_observation),
+            dummy_state
+        ).action
 
         # Handle action_spec.shape=(), and shape=(1,) by using the multi_dim_actions
         # param. Note: assumes len(tf.nest.flatten(action_spec)) == 1.

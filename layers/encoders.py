@@ -192,14 +192,17 @@ class TFAgentEncodingNetworkWrapper(Network):
 
     def call(self, state_and_label, step_type=None, network_state=(), training=False):
         state, label = state_and_label
-        if not training or tf.equal(self.temperature, tf.zeros_like(self.temperature)):
-            return self.state_encoder_network.discrete_distribution(
-                state=state, label=label,
-            ).sample(), network_state
-        else:
-            return self.state_encoder_network.relaxed_distribution(
-                state=state, temperature=self.temperature, label=label,
-            ).sample(), network_state
+        #  return tf.cond(
+        #      training,
+        #      false_fn=lambda: (self.state_encoder_network.discrete_distribution(
+        #          state=state, label=label,
+        #      ).sample(), network_state),
+        #      true_fn=lambda: (self.state_encoder_network.relaxed_distribution(
+        #          state=state, temperature=self.temperature, label=label,
+        #      ).sample(), network_state))
+        return self.state_encoder_network.relaxed_distribution(
+                 state=state, temperature=self.temperature, label=label,
+             ).sample(), network_state
 
     def copy(self, **kwargs):
         return super(TFAgentEncodingNetworkWrapper, self).copy(
