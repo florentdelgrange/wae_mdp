@@ -1,10 +1,13 @@
-from typing import Callable
+from typing import Callable, Optional
 
 import tensorflow as tf
 from tf_agents.policies import tf_policy
-from tf_agents.typing import types
 import tensorflow_probability as tfp
 from tf_agents.trajectories.policy_step import PolicyStep
+import tf_agents.trajectories.time_step as ts
+
+from tf_agents.trajectories import policy_step
+from tf_agents.typing import types
 from util.io import dataset_generator
 
 tfd = tfp.distributions
@@ -27,10 +30,24 @@ class LatentPolicyOverRealStateSpace(tf_policy.TFPolicy):
         self.state_embedding_function = state_embedding_function
         self.labeling_function = dataset_generator.ergodic_batched_labeling_function(labeling_function)
 
-    def _distribution(self, time_step, policy_state):
+    def _distribution(self, time_step: ts.TimeStep, policy_state: types.NestedTensor):
         latent_state = self.state_embedding_function(
             time_step.observation, self.labeling_function(time_step.observation))
         return self.wrapped_policy._distribution(time_step._replace(observation=latent_state), policy_state)
+
+    def _action(
+            self,
+            time_step: ts.TimeStep,
+            policy_state: types.NestedTensor,
+            seed: Optional[types.Seed] = None
+    ) -> policy_step.PolicyStep:
+        latent_state = self.state_embedding_function(
+            time_step.observation, self.labeling_function(time_step.observation))
+        return self.wrapped_policy._action(
+            time_step=time_step._replace(observation=latent_state),
+            policy_state=policy_state,
+            seed=seed)
+
 
 
 class LatentPolicyOverRealStateAndActionSpaces(tf_policy.TFPolicy):
