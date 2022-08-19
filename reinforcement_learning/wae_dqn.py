@@ -1,7 +1,11 @@
 import os
-import random
-from flags import FLAGS
 import sys
+
+path = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, path + '/../')
+
+
+import random
 
 import numpy as np
 from tf_agents import specs
@@ -9,35 +13,6 @@ from tf_agents.specs import tensor_spec
 from tf_agents.trajectories import policy_step, trajectory
 from tf_agents.typing import types
 from tf_agents.typing.types import Int, Float
-
-import reinforcement_learning
-import wasserstein_mdp
-from layers.encoders import EncodingType
-from policies.latent_policy import LatentPolicyOverRealStateSpace
-from policies.one_hot_categorical import OneHotTFPolicyWrapper
-from reinforcement_learning.agents.wae_agent import WaeDqnAgent
-from reinforcement_learning.environments.latent_environment import LatentEmbeddingTFEnvironmentWrapper
-from reinforcement_learning.environments.perturbed_env import PerturbedEnvironment
-from util.io.dataset_generator import map_rl_trajectory_to_vae_input, ergodic_batched_labeling_function
-from util.nn import ModelArchitecture
-from wasserstein_mdp import WassersteinMarkovDecisionProcess, WassersteinRegularizerScaleFactor
-
-path = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, path + '/../')
-
-from typing import Tuple, Callable, Optional, List
-import functools
-import threading
-import datetime
-
-try:
-    import reverb
-except ImportError as ie:
-    print(ie, "Reverb is not installed on your system, "
-              "meaning prioritized experience replay cannot be used.")
-
-from absl import app
-
 import tensorflow as tf
 from tensorflow.python.keras.utils.generic_utils import Progbar
 
@@ -56,6 +31,32 @@ from tf_agents.policies import policy_saver, categorical_q_policy, boltzmann_pol
     greedy_policy, tf_policy
 import tf_agents.trajectories.time_step as ts
 from reinforcement_learning.environments import EnvironmentLoader
+
+import reinforcement_learning
+import wasserstein_mdp
+from layers.encoders import EncodingType
+from policies.latent_policy import LatentPolicyOverRealStateSpace
+from policies.one_hot_categorical import OneHotTFPolicyWrapper
+from reinforcement_learning.agents.wae_agent import WaeDqnAgent
+from reinforcement_learning.environments.latent_environment import LatentEmbeddingTFEnvironmentWrapper
+from reinforcement_learning.environments.perturbed_env import PerturbedEnvironment
+from util.io.dataset_generator import map_rl_trajectory_to_vae_input, ergodic_batched_labeling_function
+from util.nn import ModelArchitecture
+from wasserstein_mdp import WassersteinMarkovDecisionProcess, WassersteinRegularizerScaleFactor
+from flags import FLAGS
+
+from typing import Tuple, Callable, Optional, List
+import functools
+import threading
+import datetime
+
+try:
+    import reverb
+except ImportError as ie:
+    print(ie, "Reverb is not installed on your system, "
+              "meaning prioritized experience replay cannot be used.")
+
+from absl import app
 
 default_architecture = ModelArchitecture(hidden_units=(256, 256), activation='relu')
 
