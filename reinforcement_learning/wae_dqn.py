@@ -1,6 +1,8 @@
 import os
 import sys
 
+from policies.saved_policy import SavedTFPolicy
+
 path = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, path + '/../')
 
@@ -182,7 +184,6 @@ class WaeDqnLearner:
             time_step_spec=ts.time_step_spec(self.latent_observation_spec),
             action_spec=self.tf_env.action_spec(),
             q_network=self.q_network, )
-        self._q_policy = policy
 
         # policy that can be fed as input of the WAE-MDP
         wae_policy = greedy_policy.GreedyPolicy(
@@ -383,7 +384,7 @@ class WaeDqnLearner:
             wae_step=self.wae_step,
         )
         self.policy_dir = os.path.join(save_directory_location, 'saves', env_name, 'wae_dqn_policy')
-        self.policy_saver = policy_saver.PolicySaver(self._q_policy)
+        self.policy_saver = policy_saver.PolicySaver(self.tf_agent.policy)
 
         # logs
         current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -513,7 +514,7 @@ class WaeDqnLearner:
                 self.wae_mdp.save(self.save_directory_location, 'model')
                 eval_thread = threading.Thread(
                     target=self.eval,
-                    args=(self.dqn_step, progressbar),
+                    args=(self.dqn_step.numpy(), progressbar),
                     daemon=True,
                     name='eval')
                 eval_thread.start()
@@ -523,20 +524,19 @@ class WaeDqnLearner:
     def eval(self, step: int = 0, progressbar: Optional = None):
         avg_eval_return = tf_metrics.AverageReturnMetric()
         avg_eval_episode_length = tf_metrics.AverageEpisodeLengthMetric()
-        saved_policy = tf.compat.v2.saved_model.load(self.policy_dir)
+        saved_policy = SavedTFPolicy(self.policy_dir)
         wae_mdp = wasserstein_mdp.load(model_path=os.path.join(self.save_directory_location, 'model'))
-        wae_mdp.external_latent_policy = greedy_policy.GreedyPolicy(
-            OneHotTFPolicyWrapper(
+        wae_mdp.external_latent_policy = OneHotTFPolicyWrapper(
                 saved_policy,
-                time_step_spec=self._q_policy.time_step_spec,
-                action_spec=self._q_policy.action_spec))
+                time_step_spec=saved_policy.time_step_spec,
+                action_spec=saved_policy.action_spec)
         eval_env = wae_mdp.wrap_tf_environment(
             tf_env=tf_py_environment.TFPyEnvironment(
                 EnvironmentLoader(self.env_suite).load(self.env_name)),
             labeling_function=self.labeling_fn)
         latent_policy = eval_env.wrap_latent_policy(
             saved_policy,
-            observation_dtype=self._q_policy.time_step_spec.observation.dtype)
+            observation_dtype=saved_policy.time_step_spec.observation.dtype)
         
         eval_env.reset()
 
@@ -560,8 +560,29 @@ class WaeDqnLearner:
         with self.train_summary_writer.as_default():
             tf.summary.scalar('Average returns', avg_eval_return.result(), step=step)
             tf.summary.scalar('Average episode length', avg_eval_episode_length.result(), step=step)
+
+        if wae_mdp.assign_score(
+            score={'eval_policy': avg_eval_return.result()},
+            model_name='best_model',
+            checkpoint_model=True,
+            training_step=step,
+            save_directory=self.save_directory_location,
+        ):
+            policy_saver.PolicySaver(saved_policy).save(
+                os.path.join(self.save_directory_location, 'best_model', 'policy'))
+
         del wae_mdp
         del saved_policy
+
+def load(model_path: str):
+    wae_mdp = wasserstein_mdp.load(model_path)
+    if os.path.exists(os.path.join(model_path, 'policy')):
+        saved_policy = SavedTFPolicy(os.path.join(model_path, 'policy'))
+        wae_mdp.external_latent_policy = OneHotTFPolicyWrapper(
+            saved_policy,
+            time_step_spec=saved_policy.time_step_spec,
+            action_spec=saved_policy.action_spec)
+    return wae_mdp
 
 
 def main(argv):

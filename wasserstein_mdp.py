@@ -1536,11 +1536,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         # save model variables through checkpointing
         optimizer = self.detach_optimizer()
         priority_handler = self.priority_handler
+        external_policy = self.external_latent_policy
         self.priority_handler = None
         checkpoint = tf.train.Checkpoint(model=self)
         checkpoint.save(os.path.join(save_path, 'ckpt'))
         self.attach_optimizer(optimizer)
         self.priority_handler = priority_handler
+        self.external_latent_policy = external_policy
 
         # dump model infos
         with open(os.path.join(save_path, 'model_infos.json'), 'w') as file:
@@ -1556,7 +1558,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             model_name: str,
             training_step: int,
             save_best_only: bool = True,
-    ):
+    ) -> bool:
         self._score(score['eval_policy'])
         score['training_step'] = training_step
         self._last_score = score['eval_policy']
@@ -1586,10 +1588,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                             score['local_reward_loss'] < local_reward_loss):
                         print("local_reward_loss better:", score['local_reward_loss'])
                         self.save(save_directory, model_name, score)
+                    else:
+                        return False
             else:
                 print("saving model")
                 self.save(save_directory, model_name, score)
 
+        return True
 
 def load(model_path: str):
     with open(os.path.join(model_path, 'model_infos.json'), 'r') as f:
