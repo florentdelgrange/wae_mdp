@@ -780,14 +780,17 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             lipschitz_function=lambda _x: self.transition_loss_lipschitz_network(x[:-1] + [_x]))
 
         logits = self.state_encoder_network.get_logits(state, latent_state)
-        entropy_regularizer = self.entropy_regularizer(
-            state=state,
-            latent_state=latent_state,
-            logits=logits,
-            action=action if not self.policy_based_decoding else None,
-            include_state_entropy=self.include_state_encoder_entropy,
-            include_action_entropy=self.include_action_encoder_entropy,
-            sample_probability=sample_probability, )
+        if not self.include_state_encoder_entropy and not self.include_action_encoder_entropy:
+            entropy_regularizer = 0.
+        else:
+            entropy_regularizer = self.entropy_regularizer(
+                state=state,
+                latent_state=latent_state,
+                logits=logits,
+                action=action if not self.policy_based_decoding else None,
+                include_state_entropy=self.include_state_encoder_entropy,
+                include_action_entropy=self.include_action_encoder_entropy,
+                sample_probability=sample_probability, )
 
         # priority support
         if self.priority_handler is not None and sample_key is not None:
