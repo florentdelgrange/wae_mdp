@@ -12,7 +12,7 @@ flags.DEFINE_string(
 flags.DEFINE_integer(
     'n_parallel_envs',
     help='Number of parallel environments',
-    default=4
+    default=8
 )
 flags.DEFINE_integer(
     'env_time_limit',
@@ -133,7 +133,7 @@ flags.DEFINE_integer(
 flags.DEFINE_integer(
     'n_wae_updates',
     help='number of WAE-MDP updates before performing a policy update',
-    default=5,
+    default=1,
 )
 flags.DEFINE_integer(
     'latent_state_size',
