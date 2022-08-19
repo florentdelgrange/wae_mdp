@@ -276,7 +276,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             temperature=self.state_prior_temperature,
             name='latent_stationary_network')
         # latent policy
-        if self.external_latent_policy is None:
+        if self.external_latent_policy is None and self.latent_policy_network is not None:
             self.latent_policy_network = LatentPolicyNetwork(
                 latent_state=latent_state,
                 latent_policy_network=base_models['latent_policy_network'],
