@@ -113,8 +113,9 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             encoder_temperature_decay_rate: float = 0.,
             prior_temperature_decay_rate: float = 0.,
             reset_state_label: bool = True,
-            minimizer: Optional = None,
-            maximizer: Optional = None,
+            minimizer: Optional[tf.optimizers.Optimizer] = None,
+            maximizer: Optional[tf.optimizers.Optimizer] = None,
+            encoder_optimizer: Optional[tf.optimizers.Optimizer] = None,
             entropy_regularizer_scale_factor: float = 0.,
             entropy_regularizer_decay_rate: float = 0.,
             entropy_regularizer_scale_factor_min_value: float = 0.,
@@ -168,6 +169,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         self.mixture_components = None
         self._minimizer = minimizer
         self._maximizer = maximizer
+        self._encoder_optimizer = encoder_optimizer
         self.action_discretizer = discretize_action_space
         self.policy_based_decoding = policy_based_decoding
         self.action_entropy_regularizer_scaling = action_entropy_regularizer_scaling
@@ -404,24 +406,33 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
     def attach_optimizer(
             self,
-            optimizers: Optional[Union[Tuple, List]] = None,
-            minimizer: Optional = None,
-            maximizer: Optional = None
+            optimizers: Optional[Union[Tuple[tf.optimizers.Optimizer, ...], List[tf.optimizers.Optimizer]]] = None,
+            minimizer: Optional[tf.optimizers.Optimizer] = None,
+            maximizer: Optional[tf.optimizers.Optimizer] = None,
+            encoder_optimizer: Optional[tf.optimizers.Optimizer] = None,
     ):
         assert optimizers is not None or (
                 minimizer is not None and maximizer is not None)
         if optimizers is not None:
-            assert len(optimizers) == 2
-            minimizer, maximizer = optimizers
+            assert 2 <= len(optimizers) <= 3
+            minimizer, maximizer = optimizers[:2]
+            if len(optimizers) == 3 and encoder_optimizer is None:
+                encoder_optimizer = optimizers[-1]
         self._minimizer = minimizer
         self._maximizer = maximizer
+        self._encoder_optimizer = encoder_optimizer
 
     def detach_optimizer(self):
         minimizer = self._minimizer
         maximizer = self._maximizer
+        encoder_optimizer = self._encoder_optimizer
+        optimizers = [minimizer, maximizer]
         self._minimizer = None
         self._maximizer = None
-        return minimizer, maximizer
+        self._encoder_optimizer = None
+        if encoder_optimizer is not None:
+            optimizers.append(encoder_optimizer)
+        return tuple(optimizers)
 
     def binary_encode_state(self, state: Float, label: Optional[Float] = None) -> tfd.Distribution:
         return self.state_encoder_network.discrete_distribution(
@@ -1204,16 +1215,20 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
     def _compute_apply_gradients(
             self, state, label, action, reward, next_state, next_label,
-            autoencoder_variables=None, wasserstein_regularizer_variables=None,
             sample_key=None, sample_probability=None,
-            additional_transition_batch=None,
             step: Int = None,
+            encoder_update: bool = True,
+            decoder_update: bool = True,
+            regularizer_update: bool = True,
             *args, **kwargs
     ):
-        if autoencoder_variables is None and wasserstein_regularizer_variables is None:
-            raise ValueError("Must pass autoencoder and/or wasserstein regularizer variables")
         if step is None:
             step = self.n_critic
+
+        encoder_variables = self.inference_variables if encoder_update else []
+        decoder_variables = self.generator_variables if decoder_update else []
+        autoencoder_variables = encoder_variables + decoder_variables
+        wasserstein_regularizer_variables = self.wasserstein_variables if regularizer_update else []
 
         def numerical_error(x, list_of_tensors=False):
             detected = False
@@ -1230,20 +1245,24 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             loss = self.compute_loss(
                 state, label, action, reward, next_state, next_label,
                 sample_key=sample_key, sample_probability=sample_probability, )
-
+            loss['min_encoder'] = loss['min']
         for optimization_direction, variables in {
-            'max': wasserstein_regularizer_variables, 'min': autoencoder_variables
+            'max': wasserstein_regularizer_variables,
+            'min': autoencoder_variables if self._encoder_optimizer is None else decoder_variables,
+            'min_encoder': None if self._encoder_optimizer is None else encoder_variables,
         }.items():
             if (
                     variables is not None and
                     (not debug or not numerical_error(loss[optimization_direction])) and
                     (optimization_direction == 'max' or
-                     (step % self.n_critic == 0 and optimization_direction == 'min'))
+                        (step % self.n_critic == 0 and
+                         optimization_direction in ['min', 'min_encoder']))
             ):
                 gradients = tape.gradient(loss[optimization_direction], variables)
                 optimizer = {
                     'max': self._maximizer,
                     'min': self._minimizer,
+                    'min_encoder': self._encoder_optimizer,
                 }[optimization_direction]
 
                 if not numerical_error(gradients, list_of_tensors=True):
@@ -1281,8 +1300,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     ):
         return self._compute_apply_gradients(
             state, label, action, reward, next_state, next_label,
-            autoencoder_variables=self.inference_variables + self.generator_variables,
-            wasserstein_regularizer_variables=self.wasserstein_variables,
+            encoder_update=True, decoder_update=True, regularizer_update=True,
             sample_key=sample_key, sample_probability=sample_probability,
             additional_transition_batch=additional_transition_batch,
             step=step)
@@ -1301,8 +1319,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     ):
         return self._compute_apply_gradients(
             state, label, action, reward, next_state, next_label,
-            autoencoder_variables=self.generator_variables,
-            wasserstein_regularizer_variables=self.wasserstein_variables,
+            encoder_update=True, decoder_update=False, regularizer_update=True,
             sample_key=sample_key, sample_probability=sample_probability)
 
     @tf.function
@@ -1319,8 +1336,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     ):
         return self._compute_apply_gradients(
             state, label, action, reward, next_state, next_label,
-            autoencoder_variables=self.generator_variables,
-            wasserstein_regularizer_variables=self.wasserstein_variables,
+            encoder_update=False, decoder_update=True, regularizer_update=True,
             sample_key=sample_key, sample_probability=sample_probability)
 
     def mean_latent_bits_used(self, inputs, eps=1e-3, deterministic=True):

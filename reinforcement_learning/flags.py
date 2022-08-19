@@ -112,6 +112,11 @@ flags.DEFINE_float(
     help='(Optional) norm length to clip gradients',
     default=None
 )
+flags.DEFINE_bool(
+    'log_grads_and_vars',
+    help="Whether to log gradients per variable",
+    default=False,
+)
 # =========================================================
 # WAE-MDP Flags
 # =========================================================
@@ -163,14 +168,20 @@ flags.DEFINE_float(
     default=10.,
 )
 flags.DEFINE_float(
-    'auto_encoder_learning_rate',
-    help='Learning rate for the WAE-MDP autoencoder part (for the min operation)',
+    'wae_minimizer_learning_rate',
+    help='Learning rate for the Wasserstein Autoencoder part (for the min operation)',
     default=3e-4
 )
 flags.DEFINE_float(
-    'wasserstein_learning_rate',
+    'wae_maximizer_learning_rate',
     help='Learning rate for the WAE-MDP regularizers (for the max operation)',
     default=3e-4
+)
+flags.DEFINE_float(
+    required=False,
+    name='encoder_learning_rate',
+    default=None,
+    help='If provided, use a separate optimizer for the encoder built with the input learning rate'
 )
 flags.DEFINE_integer(
     'wae_eval_steps',
