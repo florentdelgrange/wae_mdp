@@ -116,19 +116,25 @@ class LatentEmbeddingTFEnvironmentWrapper(TFEnvironment):
     def render(self):
         return self._wrapped_env.render()
 
-    def wrap_latent_policy(self, latent_policy: TFPolicy):
+    def wrap_latent_policy(self, latent_policy: TFPolicy, observation_dtype: Optional[tf.dtypes.DType]):
 
         class LatentPolicyWrapper(TFPolicy):
 
             _latent_policy = latent_policy
+            _observation_dtype = tf.int32 if observation_dtype is None else observation_dtype
 
             def _distribution(
                     self,
                     time_step: ts.TimeStep,
                     policy_state: types.NestedTensorSpec
             ) -> policy_step.PolicyStep:
-                return self._latent_policy._distribution(
-                    time_step=time_step._replace(observation=time_step.observation['latent_state']),
+                distr = getattr(
+                    self._latent_policy,
+                    '_distribution',
+                    self._latent_policy.distribution)
+                observation = tf.cast(time_step.observation['latent_state'], self._observation_dtype)
+                return distr(
+                    time_step=time_step._replace(observation=observation),
                     policy_state=policy_state)
 
         return LatentPolicyWrapper(

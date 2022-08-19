@@ -182,6 +182,7 @@ class WaeDqnLearner:
             time_step_spec=ts.time_step_spec(self.latent_observation_spec),
             action_spec=self.tf_env.action_spec(),
             q_network=self.q_network, )
+        self._q_policy = policy
 
         # policy that can be fed as input of the WAE-MDP
         wae_policy = greedy_policy.GreedyPolicy(
@@ -381,8 +382,8 @@ class WaeDqnLearner:
             dqn_step=self.dqn_step,
             wae_step=self.wae_step,
         )
-        self.policy_dir = os.path.join(save_directory_location, 'saves', env_name, 'dqn_policy')
-        self.policy_saver = policy_saver.PolicySaver(self.tf_agent.policy)
+        self.policy_dir = os.path.join(save_directory_location, 'saves', env_name, 'wae_dqn_policy')
+        self.policy_saver = policy_saver.PolicySaver(self._q_policy)
 
         # logs
         current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -440,6 +441,7 @@ class WaeDqnLearner:
 
         if display_progressbar:
             progressbar = Progbar(target=self.num_iterations, interval=display_interval, stateful_metrics=metrics)
+            progressbar.update(self.global_step.numpy())
         else:
             progressbar = None
 
@@ -523,12 +525,19 @@ class WaeDqnLearner:
         avg_eval_episode_length = tf_metrics.AverageEpisodeLengthMetric()
         saved_policy = tf.compat.v2.saved_model.load(self.policy_dir)
         wae_mdp = wasserstein_mdp.load(model_path=os.path.join(self.save_directory_location, 'model'))
+        wae_mdp.external_latent_policy = greedy_policy.GreedyPolicy(
+            OneHotTFPolicyWrapper(
+                saved_policy,
+                time_step_spec=self._q_policy.time_step_spec,
+                action_spec=self._q_policy.action_spec))
         eval_env = wae_mdp.wrap_tf_environment(
             tf_env=tf_py_environment.TFPyEnvironment(
                 EnvironmentLoader(self.env_suite).load(self.env_name)),
             labeling_function=self.labeling_fn)
-        latent_policy = eval_env.wrap_latent_policy(saved_policy)
-
+        latent_policy = eval_env.wrap_latent_policy(
+            saved_policy,
+            observation_dtype=self._q_policy.time_step_spec.observation.dtype)
+        
         eval_env.reset()
 
         dynamic_episode_driver.DynamicEpisodeDriver(
