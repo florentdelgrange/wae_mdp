@@ -49,12 +49,12 @@ flags.DEFINE_integer(
 flags.DEFINE_integer(
     'initial_collect_steps',
     help="Number of collect steps to perform in the environment before performing an update",
-    default=int(1e4)
+    default=int(1e3)
 )
 flags.DEFINE_integer(
     'target_update_period',
     help="Period for update of the target networks",
-    default=100
+    default=20
 )
 flags.DEFINE_float(
     'target_update_scale',
@@ -150,12 +150,12 @@ flags.DEFINE_float(
 flags.DEFINE_float(
     'transition_regularizer_scale_factor',
     help='Scale factor for the WAE-MDP transition regularizer',
-    default=20.
+    default=60.
 )
 flags.DEFINE_float(
     'steady_state_regularizer_scale_factor',
     help='Scale factor for the WAE-MDP steady-state regularizer',
-    default=20.
+    default=60.
 )
 flags.DEFINE_float(
     'gradient_penalty_scale_factor',
@@ -197,7 +197,7 @@ flags.DEFINE_string(
 )
 flags.DEFINE_integer(
     'log_interval',
-    help='Number of steps before logging',
+    help='Number of global steps before logging',
     default=200
 )
 FLAGS = flags.FLAGS
