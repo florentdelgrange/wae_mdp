@@ -223,11 +223,12 @@ class WaeDqnLearner:
             n_critic=n_wae_critic,
             external_latent_policy=wae_policy,
             autoencoder_optimizer=wae_mdp_minimizer,
-            wasserstein_optimizer=wae_mdp_maximizer,
+            wasserstein_regularizer_optimizer=wae_mdp_maximizer,
             wasserstein_regularizer_scale_factor=wasserstein_regularizer_scale_factor,
             reset_state_label=env_perturbation > 0.,
             state_encoder_type=EncodingType.DETERMINISTIC,
-            deterministic_state_embedding=True)
+            deterministic_state_embedding=True,
+            trainable_prior=False)
 
         # initialize WAE-DQN Agent
         self.tf_agent = WaeDqnAgent(
@@ -449,7 +450,7 @@ class WaeDqnLearner:
 
         print("Start training...")
 
-        for step in range(self.global_step.numpy(), self.num_iterations):
+        for _ in range(self.global_step.numpy(), self.num_iterations):
 
             # Collect a few steps using collect_policy and save to the replay buffer.
             self.driver.run(env.current_time_step())
@@ -471,9 +472,9 @@ class WaeDqnLearner:
                 log_interval=np.inf,
                 start_annealing_step=0, )
 
-            if step % (self.n_wae_updates * self.n_wae_critic) == 0:
+            if self.global_step.numpy() % (self.n_wae_updates * self.n_wae_critic) == 0:
+
                 # Use data from the buffer and update the agent's network.
-                # experience = replay_buffer.gather_all()
                 experience, info = next(self.iterator)
                 if self.prioritized_experience_replay:
                     is_weights = tf.cast(
@@ -490,25 +491,27 @@ class WaeDqnLearner:
                     loss_info = self.tf_agent.train(experience)
                     dqn_loss = loss_info.loss
 
-                self.update_progress_bar(progressbar, wae_mdp_loss=wae_mdp_loss, dqn_loss=dqn_loss)
+            self.update_progress_bar(progressbar, wae_mdp_loss=wae_mdp_loss, dqn_loss=dqn_loss)
 
-            if step % self.log_interval == 0:
-                self.train_checkpointer.save(self.global_step)
-                if self.prioritized_experience_replay:
-                    self.replay_buffer.py_client.checkpoint()
-                self.policy_saver.save(self.policy_dir)
+            if self.global_step.numpy() % self.log_interval == 0:
                 with self.train_summary_writer.as_default():
-                    tf.summary.scalar('dqn_loss', dqn_loss, step=step)
-                    tf.summary.scalar('training average returns', self.avg_return.result(), step=step)
+                    tf.summary.scalar('dqn_loss', dqn_loss, step=self.dqn_step)
+                    tf.summary.scalar('training average returns', self.avg_return.result(), step=self.dqn_step)
                     for key, value in self.wae_mdp.loss_metrics.items():
                         tf.summary.scalar(key, value.result(), step=self.wae_step)
                 # reset accumulators after logging
                 self.wae_mdp.reset_metrics()
 
-            if step % self.eval_interval == 0:
+            if self.global_step.numpy() % self.eval_interval == 0 and self.global_step.numpy() != 0:
+                self.train_checkpointer.save(self.global_step)
+                if self.prioritized_experience_replay:
+                    self.replay_buffer.py_client.checkpoint()
+                self.policy_saver.save(self.policy_dir)
                 self.wae_mdp.save(self.save_directory_location, 'model')
-                eval_thread = threading.Thread(target=self.eval, args=(step, progressbar), daemon=True, name='eval')
-                eval_thread.start()
+                # eval_thread = threading.Thread(target=self.eval, args=(step, progressbar), daemon=True, name='eval')
+                # eval_thread.start()
+
+            self.global_step.assign_add(1)
 
     def eval(self, step: int = 0, progressbar: Optional = None):
         avg_eval_return = tf_metrics.AverageReturnMetric()
@@ -561,13 +564,13 @@ def main(argv):
 
     try:
         import importlib
-        env_suite = importlib.import_module('tf_agents.environments.' + params['env_suite'])
         for module in params['import']:
             importlib.import_module(module)
     except BaseException as err:
         serr = str(err)
         print("Error to load module: " + serr)
         return -1
+
     learner = WaeDqnLearner(
         env_name=params['env_name'],
         env_suite=importlib.import_module('tf_agents.environments.' + params['env_suite']),
