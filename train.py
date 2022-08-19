@@ -578,10 +578,7 @@ def main(argv):
                 'beta_2': params['adam_beta_2']}
                if params['optimizer'] == 'Adam'
                else dict()))
-        print("autoencoder optimizer", autoencoder_optimizer,
-              autoencoder_optimizer.beta_1, autoencoder_optimizer.beta_2,
-              autoencoder_optimizer.learning_rate,
-              autoencoder_optimizer.clipnorm, autoencoder_optimizer.clipvalue)
+
         if params['wasserstein_optimizer'] is None:
             wasserstein_optimizer = autoencoder_optimizer
         else:

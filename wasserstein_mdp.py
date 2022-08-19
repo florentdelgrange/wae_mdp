@@ -113,8 +113,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             encoder_temperature_decay_rate: float = 0.,
             prior_temperature_decay_rate: float = 0.,
             reset_state_label: bool = True,
-            autoencoder_optimizer: Optional = None,
-            wasserstein_regularizer_optimizer: Optional = None,
+            minimizer: Optional = None,
+            maximizer: Optional = None,
             entropy_regularizer_scale_factor: float = 0.,
             entropy_regularizer_decay_rate: float = 0.,
             entropy_regularizer_scale_factor_min_value: float = 0.,
@@ -166,8 +166,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         self.wasserstein_regularizer_scale_factor = wasserstein_regularizer_scale_factor
         self.mixture_components = None
-        self._autoencoder_optimizer = autoencoder_optimizer
-        self._wasserstein_regularizer_optimizer = wasserstein_regularizer_optimizer
+        self._minimizer = minimizer
+        self._maximizer = maximizer
         self.action_discretizer = discretize_action_space
         self.policy_based_decoding = policy_based_decoding
         self.action_entropy_regularizer_scaling = action_entropy_regularizer_scaling
@@ -405,23 +405,23 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     def attach_optimizer(
             self,
             optimizers: Optional[Union[Tuple, List]] = None,
-            autoencoder_optimizer: Optional = None,
-            wasserstein_regularizer_optimizer: Optional = None
+            minimizer: Optional = None,
+            maximizer: Optional = None
     ):
         assert optimizers is not None or (
-                autoencoder_optimizer is not None and wasserstein_regularizer_optimizer is not None)
+                minimizer is not None and maximizer is not None)
         if optimizers is not None:
             assert len(optimizers) == 2
-            autoencoder_optimizer, wasserstein_regularizer_optimizer = optimizers
-        self._autoencoder_optimizer = autoencoder_optimizer
-        self._wasserstein_regularizer_optimizer = wasserstein_regularizer_optimizer
+            minimizer, maximizer = optimizers
+        self._minimizer = minimizer
+        self._maximizer = maximizer
 
     def detach_optimizer(self):
-        autoencoder_optimizer = self._autoencoder_optimizer
-        wasserstein_regularizer_optimizer = self._wasserstein_regularizer_optimizer
-        self._autoencoder_optimizer = None
-        self._wasserstein_regularizer_optimizer = None
-        return autoencoder_optimizer, wasserstein_regularizer_optimizer
+        minimizer = self._minimizer
+        maximizer = self._maximizer
+        self._minimizer = None
+        self._maximizer = None
+        return minimizer, maximizer
 
     def binary_encode_state(self, state: Float, label: Optional[Float] = None) -> tfd.Distribution:
         return self.state_encoder_network.discrete_distribution(
@@ -1242,8 +1242,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             ):
                 gradients = tape.gradient(loss[optimization_direction], variables)
                 optimizer = {
-                    'max': self._wasserstein_regularizer_optimizer,
-                    'min': self._autoencoder_optimizer,
+                    'max': self._maximizer,
+                    'min': self._minimizer,
                 }[optimization_direction]
 
                 if not numerical_error(gradients, list_of_tensors=True):
