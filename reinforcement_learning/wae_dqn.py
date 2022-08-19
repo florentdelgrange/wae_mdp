@@ -259,7 +259,7 @@ class WaeDqnLearner:
             time_step_spec=self.tf_env.time_step_spec(),
             labeling_function=labeling_fn,
             latent_policy=self.tf_agent.collect_policy,
-            # change to wae_mdp.state_embedding_function to run the agent policy based on the discrete observation
+            # change to the following to explore based on the relaxed states instead of discrete ones
             # state_embedding_function=lambda _state, _label: self.wae_mdp.relaxed_state_encoding(
             #     _state, label=_label, temperature=self.wae_mdp.state_encoder_temperature,
             # ).sample()
@@ -509,8 +509,12 @@ class WaeDqnLearner:
                     self.replay_buffer.py_client.checkpoint()
                 self.policy_saver.save(self.policy_dir)
                 self.wae_mdp.save(self.save_directory_location, 'model')
-                # eval_thread = threading.Thread(target=self.eval, args=(step, progressbar), daemon=True, name='eval')
-                # eval_thread.start()
+                eval_thread = threading.Thread(
+                    target=self.eval,
+                    args=(self.dqn_step, progressbar),
+                    daemon=True,
+                    name='eval')
+                eval_thread.start()
 
             self.global_step.assign_add(1)
 
