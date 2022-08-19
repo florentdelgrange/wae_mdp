@@ -55,6 +55,7 @@ def value_iteration(
         v_init: Optional[Float] = None,
         transition_matrix: Optional[tf.Tensor] = None,
         reward_matrix: Optional[tf.Tensor] = None,
+        policy_probs: Optional[tf.Tensor] = None,
 ) -> Dict[str, Float]:
     """
     Iteratively compute the value of (i.e., the expected return obtained from running an input policy from) each state up
@@ -104,7 +105,8 @@ def value_iteration(
     else:
         not_reset_states = 1. - tf.cast(is_reset_state_test_fn(state_space), tf.float32)
     action_space = tf.one_hot(indices=tf.range(num_actions), depth=tf.cast(num_actions, tf.int32), dtype=tf.float32)
-    policy_probs = policy(state_space).probs_parameter()
+    if policy_probs is None:
+        policy_probs = policy(state_space).probs_parameter()
 
     def _q_s(state: Float, values: tf.Tensor):
         _state = tf.reduce_sum(tf.cast(state, tf.int32) * 2 ** tf.range(tf.shape(state)[0]), axis=-1)
