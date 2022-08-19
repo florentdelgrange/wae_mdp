@@ -1,8 +1,6 @@
 import os
 import sys
 
-from policies.saved_policy import SavedTFPolicy
-
 path = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, path + '/../')
 
@@ -44,6 +42,7 @@ from reinforcement_learning.environments.latent_environment import LatentEmbeddi
 from reinforcement_learning.environments.perturbed_env import PerturbedEnvironment
 from util.io.dataset_generator import map_rl_trajectory_to_vae_input, ergodic_batched_labeling_function
 from util.nn import ModelArchitecture
+from policies.saved_policy import SavedTFPolicy
 from wasserstein_mdp import WassersteinMarkovDecisionProcess, WassersteinRegularizerScaleFactor
 from flags import FLAGS
 
@@ -383,7 +382,7 @@ class WaeDqnLearner:
             dqn_step=self.dqn_step,
             wae_step=self.wae_step,
         )
-        self.policy_dir = os.path.join(save_directory_location, 'saves', env_name, 'wae_dqn_policy')
+        self.policy_dir = os.path.join(save_directory_location, 'saves', env_name, 'wae_dqn', 'policy')
         self.policy_saver = policy_saver.PolicySaver(self.tf_agent.policy)
 
         # logs
@@ -391,7 +390,7 @@ class WaeDqnLearner:
         train_log_dir = os.path.join(
             save_directory_location, 'logs', 'gradient_tape', env_name, 'wae_dqn_agent_training', current_time)
         self.train_summary_writer = tf.summary.create_file_writer(train_log_dir)
-        self.save_directory_location = os.path.join(save_directory_location, 'saves', env_name)
+        self.save_directory_location = os.path.join(save_directory_location, 'saves', env_name, 'wae_dqn')
 
         if os.path.exists(self.checkpoint_dir):
             self.train_checkpointer.initialize_or_restore()
@@ -443,6 +442,7 @@ class WaeDqnLearner:
         if display_progressbar:
             progressbar = Progbar(target=self.num_iterations, interval=display_interval, stateful_metrics=metrics)
             progressbar.update(self.global_step.numpy())
+            print('\n')
         else:
             progressbar = None
 
@@ -515,9 +515,10 @@ class WaeDqnLearner:
                 eval_thread = threading.Thread(
                     target=self.eval,
                     args=(self.dqn_step.numpy(), progressbar),
-                    daemon=True,
+                    daemon=False,
                     name='eval')
                 eval_thread.start()
+                #  self.eval(self.dqn_step.numpy(), progressbar)
 
             self.global_step.assign_add(1)
 
@@ -532,6 +533,9 @@ class WaeDqnLearner:
                 action_spec=saved_policy.action_spec)
         eval_env = wae_mdp.wrap_tf_environment(
             tf_env=tf_py_environment.TFPyEnvironment(
+            :q
+            :q
+            :q
                 EnvironmentLoader(self.env_suite).load(self.env_name)),
             labeling_function=self.labeling_fn)
         latent_policy = eval_env.wrap_latent_policy(
@@ -562,7 +566,7 @@ class WaeDqnLearner:
             tf.summary.scalar('Average episode length', avg_eval_episode_length.result(), step=step)
 
         if wae_mdp.assign_score(
-            score={'eval_policy': avg_eval_return.result()},
+            score={'eval_policy': avg_eval_return.result().numpy()},
             model_name='best_model',
             checkpoint_model=True,
             training_step=step,
