@@ -30,6 +30,7 @@ class WaeDqnAgent(dqn_agent.DqnAgent):
             observation_and_action_constraint_splitter: Optional[types.Splitter] = None,
             epsilon_greedy: Optional[types.FloatOrReturningFloat] = 0.1,
             n_step_update: int = 1,
+            encoder_optimizer: Optional[types.Optimizer] = None,
             boltzmann_temperature: Optional[types.FloatOrReturningFloat] = None,
             emit_log_probability: bool = False,
             target_q_network: Optional[network.Network] = None,
@@ -61,6 +62,7 @@ class WaeDqnAgent(dqn_agent.DqnAgent):
             self._state_embedding, None, input_spec=[time_step_spec.observation, label_spec],
             name='TargetStateEmbedding')
         self._labeling_fn = labeling_fn
+        self._encoder_optimizer = encoder_optimizer
 
     def _fix_time_step_spec(self, time_step_spec, action_spec, q_network, gamma, n_step_update):
         # fix diverse time_step_spec issues occurring when repeatedly encoding input observations
@@ -109,7 +111,7 @@ class WaeDqnAgent(dqn_agent.DqnAgent):
 
     def _train(self, experience, weights):
         # copy pasta from DQN TFAgent
-        with tf.GradientTape() as tape:
+        with tf.GradientTape(persistent=self._encoder_optimizer is not None) as tape:
             loss_info = self._loss(
                 experience,
                 td_errors_loss_fn=self._td_errors_loss_fn,
@@ -118,25 +120,37 @@ class WaeDqnAgent(dqn_agent.DqnAgent):
                 weights=weights,
                 training=True)
         tf.debugging.check_numerics(loss_info.loss, 'Loss is inf or nan')
-        variables_to_train = self._q_network.trainable_weights + \
-                             self._state_embedding.trainable_weights  # changes here
-        non_trainable_weights = self._q_network.non_trainable_weights + \
-                                self._state_embedding.non_trainable_weights  # changes here
-        assert list(variables_to_train), "No variables in the agent's q_network."
-        grads = tape.gradient(loss_info.loss, variables_to_train)
-        grads_and_vars = list(zip(grads, variables_to_train))
-        if self._gradient_clipping is not None:
-            grads_and_vars = eager_utils.clip_gradient_norms(
-                grads_and_vars, self._gradient_clipping)
+        # changes from here
+        variables_to_train = self._q_network.trainable_weights
+        encoder_variables_to_train = self._state_embedding.trainable_weights
+        non_trainable_weights = self._q_network.non_trainable_weights
+        encoder_non_trainable_weights = self._state_embedding.non_trainable_weights
 
-        if self._summarize_grads_and_vars:
-            grads_and_vars_with_non_trainable = (
-                    grads_and_vars + [(None, v) for v in non_trainable_weights])
-            eager_utils.add_variables_summaries(grads_and_vars_with_non_trainable,
-                                                self.train_step_counter)
-            eager_utils.add_gradients_summaries(grads_and_vars,
-                                                self.train_step_counter)
-        self._optimizer.apply_gradients(grads_and_vars)
+        if self._encoder_optimizer is None:
+            variables_to_train += encoder_variables_to_train
+            non_trainable_weights += encoder_non_trainable_weights
+
+        assert list(variables_to_train), "No variables in the agent's q_network."
+        for optimizer, _variables_to_train, _non_trainable_weights in [
+            (self._optimizer, variables_to_train, non_trainable_weights),
+            (self._encoder_optimizer, encoder_variables_to_train, encoder_non_trainable_weights)
+        ]:
+            if optimizer is not None:
+                grads = tape.gradient(loss_info.loss, _variables_to_train)
+                grads_and_vars = list(zip(grads, _variables_to_train))
+                if self._gradient_clipping is not None:
+                    grads_and_vars = eager_utils.clip_gradient_norms(
+                        grads_and_vars, self._gradient_clipping)
+
+                if self._summarize_grads_and_vars:
+                    grads_and_vars_with_non_trainable = (
+                            grads_and_vars + [(None, v) for v in _non_trainable_weights])
+                    eager_utils.add_variables_summaries(grads_and_vars_with_non_trainable,
+                                                        self.train_step_counter)
+                    eager_utils.add_gradients_summaries(grads_and_vars,
+                                                        self.train_step_counter)
+                optimizer.apply_gradients(grads_and_vars)
+
         self.train_step_counter.assign_add(1)
 
         self._update_target()

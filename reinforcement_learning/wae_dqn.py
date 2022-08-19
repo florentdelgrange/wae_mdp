@@ -79,8 +79,9 @@ class WaeDqnLearner:
                 global_scaling=20.,
                 global_gradient_penalty_multiplier=10.),
             gamma: float = 0.99,
-            autoencoder_learning_rate: float = 3e-4,
-            wasserstein_learning_rate: float = 3e-4,
+            minimizer_learning_rate: float = 3e-4,
+            maximizer_learning_rate: float = 3e-4,
+            encoder_learning_rate: Optional[float] = None,
             dqn_learning_rate: float = 3e-4,
             log_interval: int = 200,
             num_eval_episodes: int = 30,
@@ -103,6 +104,7 @@ class WaeDqnLearner:
             gradient_clipping: Optional[types.Float] = None,
             env_time_limit: Optional[Int] = None,
             env_perturbation: Optional[Float] = .75,
+            summarize_grads_and_vars: bool = False,
     ):
         self.parallel_envs = num_parallel_environments > 1 and not prioritized_experience_replay
 
@@ -192,8 +194,12 @@ class WaeDqnLearner:
                 action_spec=policy.action_spec))
 
         # WAE-MDP optimizers
-        wae_mdp_minimizer = tf.keras.optimizers.Adam(learning_rate=autoencoder_learning_rate)
-        wae_mdp_maximizer = tf.keras.optimizers.Adam(learning_rate=wasserstein_learning_rate)
+        wae_mdp_minimizer = tf.keras.optimizers.Adam(learning_rate=minimizer_learning_rate)
+        wae_mdp_maximizer = tf.keras.optimizers.Adam(learning_rate=maximizer_learning_rate)
+        if encoder_learning_rate is not None:
+            encoder_optimizer = tf.keras.optimizers.Adam(learning_rate=encoder_learning_rate)
+        else:
+            encoder_optimizer = None
         # DQN optimizer
         dqn_optimizer = tf.keras.optimizers.Adam(learning_rate=dqn_learning_rate)
 
@@ -224,8 +230,9 @@ class WaeDqnLearner:
             transition_loss_lipschitz_network=transition_loss_lipschitz_network,
             n_critic=n_wae_critic,
             external_latent_policy=wae_policy,
-            autoencoder_optimizer=wae_mdp_minimizer,
-            wasserstein_regularizer_optimizer=wae_mdp_maximizer,
+            minimizer=wae_mdp_minimizer,
+            maximizer=wae_mdp_maximizer,
+            encoder_optimizer=encoder_optimizer,
             wasserstein_regularizer_scale_factor=wasserstein_regularizer_scale_factor,
             reset_state_label=env_perturbation > 0.,
             state_encoder_type=EncodingType.DETERMINISTIC,
@@ -240,6 +247,7 @@ class WaeDqnLearner:
             label_spec=tf.TensorSpec(self.wae_mdp.label_shape),
             q_network=self.q_network,
             optimizer=dqn_optimizer,
+            encoder_optimizer=encoder_optimizer,
             epsilon_greedy=epsilon_greedy,
             boltzmann_temperature=boltzmann_temperature,
             td_errors_loss_fn=common.element_wise_squared_loss,
@@ -250,6 +258,7 @@ class WaeDqnLearner:
             reward_scale_factor=reward_scale_factor,
             gradient_clipping=gradient_clipping,
             emit_log_probability=True,
+            summarize_grads_and_vars=summarize_grads_and_vars,
             labeling_fn=labeling_fn if env_perturbation <= 0. else ergodic_batched_labeling_function(labeling_fn),
             wae_mdp=self.wae_mdp, )
         self.tf_agent.initialize()
@@ -628,8 +637,9 @@ def main(argv):
             steady_state_scaling=params['steady_state_regularizer_scale_factor'],
             local_transition_loss_scaling=params['transition_regularizer_scale_factor'], ),
         gamma=params['gamma'],
-        autoencoder_learning_rate=params['auto_encoder_learning_rate'],
-        wasserstein_learning_rate=params['wasserstein_learning_rate'],
+        minimizer_learning_rate=params['wae_minimizer_learning_rate'],
+        maximizer_learning_rate=params['wae_maximizer_learning_rate'],
+        encoder_learning_rate=params['encoder_learning_rate'],
         dqn_learning_rate=params['policy_learning_rate'],
         log_interval=params['log_interval'],
         num_eval_episodes=params['n_eval_episodes'],
