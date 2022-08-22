@@ -1,4 +1,4 @@
-from typing import Optional, Callable, Union, Tuple
+from typing import Optional, Callable, Union, Tuple, List
 import enum
 
 import tensorflow as tf
@@ -20,11 +20,16 @@ class EncodingType(enum.Enum):
     DETERMINISTIC = enum.auto()
 
 
+def _get_elem(l: List, i: int):
+    return l[min(i, len(l) - 1)]
+
+PreprocessingNetwork = Union[Tuple[Union[tfk.Model, tfkl.Layer], ...], Union[tfk.Model, tfkl.Layer]]
+
 class StateEncoderNetwork(DiscreteDistributionModel):
 
     def __init__(
             self,
-            state: tfkl.Input,
+            state: Union[tfkl.Input, Tuple[tfkl.Input, ...]],
             hidden_units: Tuple[int, ...],
             activation: Callable[[tf.Tensor], tf.Tensor],
             latent_state_size: int,
@@ -32,10 +37,9 @@ class StateEncoderNetwork(DiscreteDistributionModel):
             time_stacked_states: bool = False,
             time_stacked_lstm_units: int = 128,
             output_softclip: Callable[[Float], Float] = tfb.Identity(),
-            state_encoder_pre_processing_network: Optional[tfk.Model] = None,
+            pre_proc_net: Optional[PreprocessingNetwork] = None,
             lstm_output: bool = False,
             deterministic_reset: bool = True,
-            *args, **kwargs
     ):
         # for copying the network
         self._saved_kwargs = {key: value for key, value in list(locals().items())}
@@ -43,30 +47,44 @@ class StateEncoderNetwork(DiscreteDistributionModel):
         self._saved_kwargs.pop('self')
 
         n_logits = (latent_state_size - atomic_prop_dims)
-        state_encoder_network = tfk.Sequential(name="state_encoder_body")
         self.deterministic_reset = deterministic_reset
 
-        for i, units in enumerate(hidden_units):
-            if i == len(hidden_units) - 1:
-                units = units // n_logits * n_logits
-            state_encoder_network.add(tfkl.Dense(units, activation))
+        last_layer_units = hidden_units[-1] // n_logits * n_logits
+        hidden_units = hidden_units[:-1]
+        state = tf.nest.flatten(state)
+        self.no_inputs = len(state)
 
-        if time_stacked_states:
-            if state_encoder_pre_processing_network is not None:
-                encoder = tfkl.TimeDistributed(state_encoder_pre_processing_network)(state)
+        if pre_proc_net is not None:
+            pre_proc_net = tf.nest.flatten(pre_proc_net)
+            assert len(pre_proc_net) == self.no_inputs or len(pre_proc_net) == 1, \
+                "the number of pre-processing networks should be one or have the same size as the number of inputs"
+
+        encoders = []
+        for i, _input in enumerate(state):
+            state_encoder_network = tfk.Sequential(name=f"state_encoder_body_for_input_{i:d}")
+            for units in hidden_units:
+                state_encoder_network.add(tfkl.Dense(units, activation))
+
+            if time_stacked_states:
+                if pre_proc_net is not None:
+                    encoder = tfkl.TimeDistributed(_get_elem(pre_proc_net, i))(_input)
+                else:
+                    encoder = _input
+                encoder = tfkl.LSTM(units=time_stacked_lstm_units)(encoder)
+                encoders.append(state_encoder_network(encoder))
             else:
-                encoder = state
-            encoder = tfkl.LSTM(units=time_stacked_lstm_units)(encoder)
-            encoder = state_encoder_network(encoder)
-        else:
-            if state_encoder_pre_processing_network is not None:
-                _state = state_encoder_pre_processing_network(state)
-            else:
-                _state = state
-            encoder = state_encoder_network(_state)
+                if pre_proc_net is not None:
+                    _state = _get_elem(pre_proc_net, i)(_input)
+                else:
+                    _state = _input
+                _state = tfkl.Flatten()(_state)
+                encoders.append(state_encoder_network(_state))
+
+        encoder = tfkl.Concatenate()(encoders)
+        encoder = tfkl.Dense(units=last_layer_units, activation=activation)(encoder)
 
         if lstm_output:
-            encoder = tfkl.Reshape(target_shape=(n_logits, hidden_units[-1] // n_logits))(encoder)
+            encoder = tfkl.Reshape(target_shape=(n_logits, last_layer_units // n_logits))(encoder)
             encoder = tfkl.LSTM(units=1, activation=output_softclip, return_sequences=True)(encoder)
             encoder = tfkl.Reshape(target_shape=(latent_state_size - atomic_prop_dims,))(encoder)
         else:
@@ -77,7 +95,7 @@ class StateEncoderNetwork(DiscreteDistributionModel):
             )(encoder)
 
         super(StateEncoderNetwork, self).__init__(
-            inputs=state,
+            inputs=state[0] if self.no_inputs == 1 else state,
             outputs=encoder,
             name='state_encoder')
 
@@ -152,7 +170,7 @@ class StateEncoderNetwork(DiscreteDistributionModel):
         return self(state)
 
     def get_config(self):
-        config = super(AutoRegressiveStateEncoderNetwork, self).get_config()
+        config = super(StateEncoderNetwork, self).get_config()
         config.update({
             "get_logits": self.get_logits,
         })
@@ -192,14 +210,6 @@ class TFAgentEncodingNetworkWrapper(Network):
 
     def call(self, state_and_label, step_type=None, network_state=(), training=False):
         state, label = state_and_label
-        #  return tf.cond(
-        #      training,
-        #      false_fn=lambda: (self.state_encoder_network.discrete_distribution(
-        #          state=state, label=label,
-        #      ).sample(), network_state),
-        #      true_fn=lambda: (self.state_encoder_network.relaxed_distribution(
-        #          state=state, temperature=self.temperature, label=label,
-        #      ).sample(), network_state))
         return self.state_encoder_network.relaxed_distribution(
                  state=state, temperature=self.temperature, label=label,
              ).sample(), network_state

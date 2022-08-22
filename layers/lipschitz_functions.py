@@ -1,5 +1,6 @@
-from typing import Optional
+from typing import Optional, Tuple, Union
 
+import tensorflow as tf
 from tensorflow import keras as tfk
 import tensorflow.keras.layers as tfkl
 
@@ -30,18 +31,39 @@ class SteadyStateLipschitzFunction(tfk.Model):
 class TransitionLossLipschitzFunction(tfk.Model):
     def __init__(
             self,
-            state: tfkl.Input,
+            state: Union[tfkl.Input, Tuple[tfkl.Input, ...]],
             action: tfkl.Input,
             latent_state: tfkl.Input,
             next_latent_state: tfkl.Input,
             transition_loss_lipschitz_network: tfk.Model,
             latent_action: Optional[tfkl.Input] = None,
+            flatten_units: int = 64,
     ):
+        try:
+            no_inputs = len(state)
+        except TypeError:
+            no_inputs = 1
+
+        if no_inputs > 1:
+            components = []
+            for state_component in state:
+                x = tfkl.Flatten()(state_component)
+                x = tfkl.Dense(
+                    units=flatten_units,
+                    activation='sigmoid'
+                )(x)
+                components.append(x)
+            _state = tfkl.Concatenate()(components)
+        else:
+            _state = state
+
         inputs = [state, action, latent_state]
+
         if latent_action is not None:
             inputs.append(latent_action)
         inputs.append(next_latent_state)
-        _transition_loss_lipschitz_network = tfkl.Concatenate()(inputs)
+        # combine multiple state-components into _state
+        _transition_loss_lipschitz_network = tfkl.Concatenate()([_state] + inputs[1:])
         _transition_loss_lipschitz_network = transition_loss_lipschitz_network(_transition_loss_lipschitz_network)
         _transition_loss_lipschitz_network = tfkl.Dense(
             units=1,

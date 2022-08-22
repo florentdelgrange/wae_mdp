@@ -14,64 +14,98 @@ class StateReconstructionNetwork(DistributionModel):
 
     def __init__(
             self,
-            next_latent_state: tfkl.Input,
+            latent_state: tfkl.Input,
             decoder_network: tfk.Model,
-            state_shape: Union[Tuple[int, ...], tf.TensorShape],
+            state_shape: Union[Tuple[int, ...], tf.TensorShape, Tuple[Tuple[int, ...]], Tuple[tf.TensorShape, ...]],
             time_stacked_states: bool = False,
-            state_decoder_pre_processing_network: Optional[tfk.Model] = None,
+            post_processing_net: Optional[Union[tfk.Model, tfkl.Layer]] = None,
             time_stacked_lstm_units: Optional[int] = None,
+            flatten_output: bool = False
     ):
-        decoder = decoder_network(next_latent_state)
-        if time_stacked_states:
-            time_dimension = state_shape[0]
-            _state_shape = state_shape[1:]
-
-            if decoder.shape[-1] % time_dimension != 0:
-                decoder = tfkl.Dense(
-                    units=decoder.shape[-1] + time_dimension - decoder.shape[-1] % time_dimension
-                )(decoder)
-
-            decoder = tfkl.Reshape(
-                target_shape=(time_dimension, decoder.shape[-1] // time_dimension)
-            )(decoder)
-            decoder = tfkl.LSTM(
-                units=time_stacked_lstm_units, return_sequences=True
-            )(decoder)
-
-            if state_decoder_pre_processing_network is not None:
-                decoder = tfkl.TimeDistributed(state_decoder_pre_processing_network)(decoder)
-
+        if decoder_network.inputs is None:
+            x = latent_state
         else:
-            if state_decoder_pre_processing_network is not None:
-                decoder = state_decoder_pre_processing_network(decoder)
-            _state_shape = state_shape
+            decoder_net_input_shape = decoder_network.inputs[0].shape[1:]
+            x = tfkl.Dense(
+                units=np.prod(decoder_net_input_shape),
+                activation=tf.nn.sigmoid,
+            )(latent_state)
+            x = tfkl.Reshape(target_shape=decoder_net_input_shape)(x)
 
-        decoder_output = tfk.models.Sequential([
-            tfkl.Dense(
-                units=np.prod(_state_shape),
-                activation=None,
-                name='state_decoder_raw_output'),
-            tfkl.Reshape(
-                target_shape=_state_shape,
-                name='state_decoder_raw_output_reshape')],
-            name="state_decoder")
+        decoder = decoder_network(x)
 
-        if time_stacked_states:
-            decoder_output = tfkl.TimeDistributed(decoder_output)(decoder)
-        else:
-            decoder_output = decoder_output(decoder)
+        try:
+            # output with multiple components
+            self.n_dim = len(state_shape[0])
+            if flatten_output:
+                # enforce flattening the output
+                state_shape = [np.sum([np.prod(shape_i) for shape_i in state_shape])]
+                self.n_dim = 1
+        except TypeError:
+            self.n_dim = 1
+            state_shape = [state_shape]
+
+        outputs = []
+        for i, _state_shape in enumerate(state_shape):
+            if time_stacked_states and time_stacked_lstm_units is not None:
+                decoder_output = tfkl.Flatten(decoder)
+                time_dimension = _state_shape[0]
+                _state_shape = _state_shape[1:]
+
+                if decoder_output.shape[-1] % time_dimension != 0:
+                    decoder_output = tfkl.Dense(
+                        units=decoder_output.shape[-1] + time_dimension - decoder_output.shape[-1] % time_dimension
+                    )(decoder_output)
+
+                decoder_output = tfkl.Reshape(
+                    target_shape=(time_dimension, decoder_output.shape[-1] // time_dimension)
+                )(decoder_output)
+                decoder_output = tfkl.LSTM(
+                    units=time_stacked_lstm_units, return_sequences=True
+                )(decoder_output)
+            else:
+                decoder_output = decoder
+
+            if np.prod(decoder_output.shape[1:]) % np.prod(_state_shape) != 0:
+                if len(decoder_output.shape[1:]) > 1:
+                    decoder_output = tfkl.Flatten()(decoder_output)
+                decoder_output = tfkl.Dense(
+                    units=np.prod(_state_shape),
+                    activation=None,
+                    name='state_decoder_raw_output_{:d}'.format(i)
+                )(decoder_output)
+            if not flatten_output and decoder_output.shape[1:] != _state_shape:
+                decoder_output = tfkl.Reshape(
+                    target_shape=_state_shape,
+                    name='state_{:d}_decoder_raw_output_reshape'.format(i))
+
+            if time_stacked_states:
+                decoder_output = tfkl.TimeDistributed(decoder_output)(decoder)
+            else:
+                decoder_output = decoder_output(decoder)
+
+            outputs.append(decoder_output)
+
+        outputs = post_processing_net(outputs)
 
         super(StateReconstructionNetwork, self).__init__(
-            inputs=next_latent_state,
-            outputs=decoder_output,
+            inputs=latent_state,
+            outputs=outputs,
             name='state_reconstruction_network')
         self.time_stacked_states = time_stacked_states
 
     def distribution(self, latent_state: Float) -> tfd.Distribution:
-        if self.time_stacked_states:
-            return tfd.Independent(tfd.Deterministic(loc=self(latent_state)))
+        outputs = self(latent_state)
+        distributions = []
+        for output in outputs:
+            if self.time_stacked_states:
+                distributions.append(tfd.Independent(tfd.Deterministic(loc=output)))
+            else:
+                distributions.append(tfd.Deterministic(loc=output))
+        if self.n_dim == 1:
+            return distributions[0]
         else:
-            return tfd.Deterministic(loc=self(latent_state))
+            return tfd.JointDistributionSequential(distributions)
 
     def get_config(self):
         config = super(StateReconstructionNetwork, self).get_config()

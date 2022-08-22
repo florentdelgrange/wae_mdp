@@ -661,7 +661,16 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             sample_probability: Optional[Float] = None,
             *args, **kwargs
     ):
-        batch_size = tf.shape(state)[0]
+        # handle state space with multiple components
+        def flatten(_x):
+            return tf.concat(
+                [tf.reshape(_component, [tf.shape(_component)[0], -1]) for _component in tf.nest.flatten(_x)],
+                axis=-1)
+
+        flat_state = flatten(state)
+        flat_next_state = flatten(next_state)
+
+        batch_size = tf.shape(flat_state)[0]
         # encoder sampling
         latent_state = self.relaxed_state_encoding(
             state,
@@ -727,11 +736,14 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             ]).mean
             _state, _action, _reward, _next_state = mean_decoder_fn()
 
+        _flat_state = flatten(_state)
+        _flat_next_state = flatten(_next_state)
+
         reconstruction_loss = (
-                self.norm(state - _state, axis=1) +
+                self.norm(flat_state - _flat_state, axis=1) +
                 self.norm(action - _action, axis=1) +
                 self.norm(reward - _reward, axis=1) +
-                self.norm(next_state - _next_state, axis=1)
+                self.norm(flat_next_state - _flat_next_state, axis=1)
         )
         if self.squared_wasserstein or self.policy_based_decoding:
             reconstruction_loss = tf.square(reconstruction_loss)
@@ -746,8 +758,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     self.decode_action(latent_state, latent_action),
                     self.reward_distribution(latent_state, latent_action, next_latent_state),
                 ]).sample()
-            y = tf.concat([_state, random_action, random_reward, _next_state], axis=-1)
-            mean = tf.concat([_state, _action, _reward, _next_state], axis=-1)
+            y = tf.concat([_flat_state, random_action, random_reward, _flat_next_state], axis=-1)
+            mean = tf.concat([_flat_state, _action, _reward, _flat_next_state], axis=-1)
             marginal_variance = (self.norm(y - mean, axis=1) ** 2. +
                                  self.norm(mean - tf.reduce_mean(mean), axis=1) ** 2)
 
@@ -814,8 +826,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         # loss metrics
         self.loss_metrics['reconstruction_loss'](reconstruction_loss)
-        self.loss_metrics['state_mse'](state, _state)
-        self.loss_metrics['state_mse'](next_state, _next_state)
+        self.loss_metrics['state_mse'](flat_state, _flat_state)
+        self.loss_metrics['state_mse'](flat_next_state, _flat_next_state)
         self.loss_metrics['action_mse'](action, random_action)
         self.loss_metrics['reward_mse'](reward, random_reward)
         self.loss_metrics['transition_loss'](transition_loss_regularizer)
@@ -1001,7 +1013,16 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             additional_transition_batch: Optional[Tuple[Float, ...]] = None,
             *args, **kwargs
     ):
-        batch_size = tf.shape(state)[0]
+        # handle state space with multiple components
+        def flatten(_x):
+            return tf.concat(
+                [tf.reshape(_component, [tf.shape(_component)[0], -1]) for _component in tf.nest.flatten(_x)],
+                axis=-1)
+
+        flat_state = flatten(state)
+        flat_next_state = flatten(next_state)
+
+        batch_size = tf.shape(flat_state)[0]
         # sampling
         # encoders
         latent_state = self.binary_encode_state(state, label).sample()
@@ -1028,7 +1049,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
 
         # reconstruction loss
         # the reward as well as the state and action reconstruction functions are deterministic
-        _action, _reward, _next_state = tfd.JointDistributionSequential([
+        _state, _action, _reward, _next_state = tfd.JointDistributionSequential([
+            self.decode_state(latent_state),
             self.decode_action(
                 latent_state,
                 latent_action) if not self.policy_based_decoding else
@@ -1041,10 +1063,14 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             self.decode_state(next_latent_state)
         ]).sample()
 
+        _flat_state = flatten(_state)
+        _flat_next_state = flatten(_next_state)
+
         reconstruction_loss = (
+                tf.norm(flat_state - _flat_state, ord=2, axis=1) +
                 tf.norm(action - _action, ord=2, axis=1) +
                 tf.norm(reward - _reward, ord=2, axis=1) +
-                tf.norm(next_state - _next_state, ord=2, axis=1))
+                tf.norm(flat_next_state - _flat_next_state, ord=2, axis=1))
         if self.policy_based_decoding or self.squared_wasserstein:
             reconstruction_loss = tf.square(reconstruction_loss)
 
@@ -1054,8 +1080,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 self.decode_action(latent_state, latent_action),
                 self.reward_distribution(latent_state, latent_action, next_latent_state),
             ]).sample()
-            y = tf.concat([random_action, random_reward, _next_state], axis=-1)
-            mean = tf.concat([_action, _reward, _next_state], axis=-1)
+            y = tf.concat([_flat_state, random_action, random_reward, _flat_next_state], axis=-1)
+            mean = tf.concat([_flat_state, _action, _reward, _flat_next_state], axis=-1)
             marginal_variance = tf.reduce_sum((y - mean) ** 2. + (mean - tf.reduce_mean(mean)) ** 2., axis=-1)
         else:
             marginal_variance = 0.
