@@ -360,7 +360,7 @@ def search(
                 state_encoder_pre_processing_network=(
                     get_architecture(hyperparameters, 'state_encoder_pre_processing')
                     if hyperparameters['state_encoder_pre_processing_network'] else None),
-                state_decoder_post_processing_net=(
+                state_decoder_post_processing_network=(
                     get_architecture(hyperparameters, 'state_decoder_pre_processing')
                     if hyperparameters['state_decoder_pre_processing_network'] else None),
                 latent_state_size=hyperparameters['latent_state_size'],

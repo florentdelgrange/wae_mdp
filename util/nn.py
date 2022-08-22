@@ -288,3 +288,16 @@ class Deconvolutional(tfkl.Layer):
 
     def call(self, inputs, *args, **kwargs):
         return _pass_in_layers(self._layers, inputs)
+
+
+def _get_elem(
+        list_of_models: Union[List[Optional[tfk.Model]], Optional[tfk.Model]],
+        i: int,
+        default=tfk.Sequential([tfkl.Lambda(tf.identity)])
+):
+    list_of_models = tf.nest.flatten(list_of_models)
+    model = list_of_models[min(i, len(list_of_models) - 1)]
+    if model is None:
+        return default
+    else:
+        return model

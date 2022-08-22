@@ -622,7 +622,7 @@ def main(argv):
             number_of_discrete_actions=params['number_of_discrete_actions'],
             state_encoder_pre_processing_network=(get_architecture(params, 'state_encoder_pre_processing')
                                                   if params['state_encoder_pre_processing_network'] else None),
-            state_decoder_post_processing_net=(get_architecture(params, 'state_decoder_pre_processing')
+            state_decoder_post_processing_network=(get_architecture(params, 'state_decoder_pre_processing')
                                                   if params['state_decoder_pre_processing_network'] else None),
             time_stacked_states=params['time_stacked_states'] > 1,
             state_encoder_temperature=state_encoder_temperature,

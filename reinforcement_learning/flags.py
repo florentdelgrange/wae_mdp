@@ -117,6 +117,26 @@ flags.DEFINE_bool(
     help="Whether to log gradients per variable",
     default=False,
 )
+flags.DEFINE_multi_integer(
+    'filters',
+    help='Number of convolution filters. Only used when the observation space has two dimensions',
+    default=[32, 64, 32],
+)
+flags.DEFINE_multi_integer(
+    'kernel_size',
+    help='Kernel size of convolution layers. Only used when the observation space has two dimensions.',
+    default=[8, 4, 3]
+)
+flags.DEFINE_multi_integer(
+    'strides',
+    help='Convolution layers strides. Only used when the observation space has two dimensions.',
+    default=[4, 2, 1]
+)
+flags.DEFINE_multi_string(
+    'padding',
+    help='Convolution layers padding. Only used when the observation space has two dimensions.',
+    default=["valid", "valid", "valid"]
+)
 # =========================================================
 # WAE-MDP Flags
 # =========================================================

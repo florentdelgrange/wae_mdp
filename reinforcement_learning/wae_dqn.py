@@ -1,6 +1,8 @@
 import os
 import sys
 
+from tf_agents.networks.encoding_network import EncodingNetwork
+
 path = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, path + '/../')
 
@@ -41,7 +43,7 @@ from reinforcement_learning.agents.wae_agent import WaeDqnAgent
 from reinforcement_learning.environments.latent_environment import LatentEmbeddingTFEnvironmentWrapper
 from reinforcement_learning.environments.perturbed_env import PerturbedEnvironment
 from util.io.dataset_generator import map_rl_trajectory_to_vae_input, ergodic_batched_labeling_function
-from util.nn import ModelArchitecture
+from util.nn import ModelArchitecture, get_activation_fn
 from policies.saved_policy import SavedTFPolicy
 from wasserstein_mdp import WassersteinMarkovDecisionProcess, WassersteinRegularizerScaleFactor
 from flags import FLAGS
@@ -59,8 +61,15 @@ except ImportError as ie:
 
 from absl import app
 
-default_architecture = ModelArchitecture(hidden_units=(256, 256), activation='relu')
-
+default_fc_architecture = ModelArchitecture(hidden_units=(256, 256), activation='relu')
+default_cnn_architecture = ModelArchitecture(
+    activation='relu',
+    raw_last=False,
+    filters=(32, 64, 32),
+    kernel_size=(8, 4, 3),
+    strides=(4, 2, 1),
+    padding=("valid", "valid", "valid"),
+)
 
 class WaeDqnLearner:
     def __init__(
@@ -73,7 +82,8 @@ class WaeDqnLearner:
             initial_collect_steps: int = int(1e4),
             collect_steps_per_iteration: int = 1,
             replay_buffer_capacity: int = int(1e6),
-            network_fc_layer_params: ModelArchitecture = default_architecture,
+            network_fc_layer_params: ModelArchitecture = default_fc_architecture,
+            network_conv_layer_params: ModelArchitecture = default_cnn_architecture,
             state_encoder_temperature: Float = 2. / 3,
             wasserstein_regularizer_scale_factor: WassersteinRegularizerScaleFactor = WassersteinRegularizerScaleFactor(
                 global_scaling=20.,
@@ -212,6 +222,15 @@ class WaeDqnLearner:
             shape if shape != () else (1,) for shape in [
                 self.tf_env.observation_spec().shape,
                 self.tf_env.time_step_spec().reward.shape,])
+
+        state_pre_proc_nets = [
+            network_conv_layer_params
+            if len(_state_spec.shape) >= 2 else None
+            for _state_spec in tf.nest.flatten(self.tf_env.observation_spec())
+        ]
+        if len(state_pre_proc_nets) == 1:
+            state_pre_proc_nets = state_pre_proc_nets[0]
+
         self.wae_mdp = WassersteinMarkovDecisionProcess(
             state_shape=state_shape,
             action_shape=(self.tf_env.action_spec().maximum + 1,),
@@ -237,7 +256,8 @@ class WaeDqnLearner:
             reset_state_label=env_perturbation > 0.,
             state_encoder_type=EncodingType.DETERMINISTIC,
             deterministic_state_embedding=True,
-            trainable_prior=False)
+            trainable_prior=False,
+            state_encoder_pre_processing_network=state_pre_proc_nets,)
 
         # initialize WAE-DQN Agent
         self.tf_agent = WaeDqnAgent(
@@ -548,7 +568,7 @@ class WaeDqnLearner:
         latent_policy = eval_env.wrap_latent_policy(
             saved_policy,
             observation_dtype=saved_policy.time_step_spec.observation.dtype)
-        
+
         eval_env.reset()
 
         dynamic_episode_driver.DynamicEpisodeDriver(

@@ -1,4 +1,4 @@
-from typing import Optional, Callable, Union, Tuple, List
+from typing import Optional, Callable, Union, Tuple
 import enum
 
 import tensorflow as tf
@@ -11,6 +11,7 @@ from tf_agents.typing.types import Float
 
 from layers.autoregressive_bernoulli import AutoRegressiveBernoulliNetwork
 from layers.base_models import DiscreteDistributionModel
+from util.nn import _get_elem
 
 
 class EncodingType(enum.Enum):
@@ -18,10 +19,6 @@ class EncodingType(enum.Enum):
     AUTOREGRESSIVE = enum.auto()
     LSTM = enum.auto()
     DETERMINISTIC = enum.auto()
-
-
-def _get_elem(l: List, i: int):
-    return l[min(i, len(l) - 1)]
 
 
 PreprocessingNetwork = Union[Tuple[Union[tfk.Model, tfkl.Layer], ...], Union[tfk.Model, tfkl.Layer]]

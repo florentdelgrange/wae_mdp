@@ -43,13 +43,13 @@ class StateReconstructionNetwork(DistributionModel):
         for i, _state_shape in enumerate(state_shape):
             _decoder = _get_elem(post_processing_net, i)
             if _decoder.inputs is None:
-                x = latent_state
+                x = decoder
             else:
                 post_process_is = _decoder.inputs[0].shape[1:]
                 x = tfkl.Dense(
                     units=np.prod(post_process_is),
                     activation=tf.nn.sigmoid,
-                )(latent_state)
+                )(decoder)
                 x = tfkl.Reshape(target_shape=post_process_is)(x)
             _decoder = _decoder(x)
 
@@ -72,7 +72,7 @@ class StateReconstructionNetwork(DistributionModel):
             else:
                 decoder_output = _decoder
 
-            if np.prod(decoder_output.shape[1:]) % np.prod(_state_shape) != 0:
+            if np.prod(decoder_output.shape[1:]) != np.prod(_state_shape):
                 if len(decoder_output.shape[1:]) > 1:
                     decoder_output = tfkl.Flatten()(decoder_output)
                 decoder_output = tfkl.Dense(

@@ -5,7 +5,7 @@ from collections import namedtuple
 
 import numpy as np
 import tensorflow as tf
-from typing import Tuple, Optional, Callable, NamedTuple, List, Union, Dict
+from typing import Tuple, Optional, Callable, NamedTuple, List, Union, Dict, Collection
 import tensorflow.keras as tfk
 import tensorflow.keras.layers as tfkl
 from tensorflow.keras.utils import Progbar
@@ -14,6 +14,7 @@ import tensorflow_probability.python.bijectors as tfb
 import tensorflow_probability.python.distributions as tfd
 
 import tf_agents
+from tf_agents.networks.encoding_network import EncodingNetwork
 from tf_agents.policies import TFPolicy
 from tf_agents.typing import types
 from tf_agents.typing.types import Float, Int
@@ -27,7 +28,7 @@ from layers.encoders import StateEncoderNetwork, ActionEncoderNetwork, AutoRegre
 from layers.lipschitz_functions import SteadyStateLipschitzFunction, TransitionLossLipschitzFunction
 from layers.steady_state_network import SteadyStateNetwork
 from tf_agents.trajectories import time_step as ts, policy_step
-from util.nn import get_activation_fn, scan_model, ModelArchitecture, generate_sequential_model
+from util.nn import get_activation_fn, ModelArchitecture, generate_sequential_model, get_model
 from variational_mdp import VariationalMarkovDecisionProcess, EvaluationCriterion, debug_gradients, debug, epsilon
 from verification.local_losses import estimate_local_losses_from_samples
 
@@ -85,7 +86,7 @@ class BaseModelArchitecture(tf.Module):
 class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
     def __init__(
             self,
-            state_shape: Tuple[int, ...],
+            state_shape: Union[Collection[Tuple[int, ...]], Tuple[int, ...]],
             action_shape: Tuple[int, ...],
             reward_shape: Tuple[int, ...],
             label_shape: Tuple[int, ...],
@@ -102,7 +103,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             number_of_discrete_actions: Optional[int] = None,
             action_encoder_network: Optional[ModelArchitecture] = None,
             state_encoder_pre_processing_network: Optional[ModelArchitecture] = None,
-            state_decoder_post_processing_net: Optional[ModelArchitecture] = None,
+            state_decoder_post_processing_network: Optional[ModelArchitecture] = None,
             time_stacked_states: bool = False,
             state_encoder_temperature: float = 2. / 3,
             state_prior_temperature: float = 1. / 2,
@@ -208,13 +209,51 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         else:
             self.softclip = tfb.Identity()
 
-        state = tfkl.Input(shape=state_shape, name="state")
+        try:
+            len(state_shape[0])
+            state = []
+            for i, shape in enumerate(state_shape):
+                state.append(tfkl.Input(shape=shape, name=f"state_{i:d}"))
+            n_state_components = len(state)
+        except TypeError:
+            state = tfkl.Input(shape=state_shape, name="state")
+            n_state_components = 1
         action = tfkl.Input(shape=action_shape, name="action")
         latent_state = tfkl.Input(shape=(self.latent_state_size,), name="latent_state")
         latent_action = tfkl.Input(shape=(self.number_of_discrete_actions,), name="latent_action")
         next_latent_state = tfkl.Input(shape=(self.latent_state_size,), name='next_latent_state')
 
         # state encoder network
+        # pre-processing
+        if state_encoder_pre_processing_network is not None:
+            state_pre_proc_nets = []
+            if type(state_encoder_pre_processing_network) is ModelArchitecture:
+                state_encoder_pre_processing_network = [state_encoder_pre_processing_network]
+            for i, net in enumerate(state_encoder_pre_processing_network):
+                _state_shape = state_shape if n_state_components == 1 else state_shape[i]
+                if net is not None and net.is_cnn:
+                    state_pre_proc_nets.append(
+                        EncodingNetwork(
+                            input_tensor_spec=tf.TensorSpec(shape=_state_shape, name=f'state_{i:d}'),
+                            activation_fn=get_activation_fn(net.activation),
+                            fc_layer_params=net.hidden_units if len(net.hidden_units) > 0 else None,
+                            conv_layer_params=(
+                                net.filters,
+                                net.kernel_size,
+                                net.strides)))
+                elif net is not None:
+                    state_pre_proc_nets.append(
+                        EncodingNetwork(
+                            input_tensor_spec=tf.TensorSpec(shape=_state_shape, name=f'state_{i:d}'),
+                            activation_fn=get_activation_fn(net.activation),
+                            fc_layer_params=net.hidden_units,))
+                else:
+                    state_pre_proc_nets.append(None)
+            if n_state_components == 1:
+                state_pre_proc_nets = state_pre_proc_nets[0]
+        else:
+            state_pre_proc_nets = None
+
         if state_encoder_type is EncodingType.AUTOREGRESSIVE:
             hidden_units, activation = (state_encoder_network.hidden_units,
                                         get_activation_fn(state_encoder_network.activation))
@@ -227,7 +266,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 time_stacked_states=self.time_stacked_states,
                 temperature=self.state_encoder_temperature,
                 time_stacked_lstm_units=self.time_stacked_lstm_units,
-                pre_proc_net=base_models.get('state_encoder_pre_processing_network', None),
+                pre_proc_net=state_pre_proc_nets,
                 output_softclip=self.softclip)
         elif state_encoder_type is EncodingType.DETERMINISTIC:
             self.state_encoder_network = DeterministicStateEncoderNetwork(
@@ -238,7 +277,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 atomic_prop_dims=self.atomic_prop_dims,
                 time_stacked_states=time_stacked_states,
                 output_softclip=self.softclip,
-                pre_proc_net=base_models.get('state_encoder_pre_processing_network', None))
+                pre_proc_net=state_pre_proc_nets)
         else:
             self.state_encoder_network = StateEncoderNetwork(
                 state=state,
@@ -248,7 +287,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 atomic_prop_dims=self.atomic_prop_dims,
                 time_stacked_states=self.time_stacked_states,
                 time_stacked_lstm_units=self.time_stacked_lstm_units,
-                pre_proc_net=base_models.get('state_encoder_pre_processing_network', None),
+                pre_proc_net=state_pre_proc_nets,
                 output_softclip=self.softclip,
                 lstm_output=state_encoder_type is EncodingType.LSTM)
         # action encoder network
@@ -293,13 +332,33 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             reward_network=base_models['reward_network'],
             reward_shape=self.reward_shape)
         # state reconstruction function
+        # post-processing
+        if state_decoder_post_processing_network is not None or state_pre_proc_nets is not None:
+            state_post_proc_nets = []
+            nets = state_decoder_post_processing_network
+            if nets is None:
+                nets = state_encoder_pre_processing_network
+            for i, net in enumerate(nets):
+                _state_shape = state_shape if n_state_components == 1 else state_shape[i]
+                if net is not None:
+                    state_post_proc_nets.append(
+                        get_model(
+                            model_arch=net._replace(hidden_units=None) if net.is_cnn else net,
+                            invert=state_decoder_post_processing_network is None,
+                            input_dim=_state_shape if state_decoder_post_processing_network is None else None,
+                            as_model=True))
+                else:
+                    state_post_proc_nets.append(None)
+            if n_state_components == 1:
+                state_post_proc_nets = state_post_proc_nets[0]
+
         self.reconstruction_network = StateReconstructionNetwork(
             latent_state=next_latent_state,
             decoder_network=base_models['decoder_network'],
             state_shape=self.state_shape,
             time_stacked_states=self.time_stacked_states,
-            post_processing_net=base_models.get('state_decoder_pre_processing_network', None),
-            time_stacked_lstm_units=self.time_stacked_lstm_units)
+            time_stacked_lstm_units=self.time_stacked_lstm_units,
+            post_processing_net=state_pre_proc_nets)
         # action reconstruction function
         if self.action_discretizer and not self.policy_based_decoding:
             self.action_reconstruction_network = ActionReconstructionNetwork(
@@ -353,7 +412,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             transition_loss_lipschitz_network=transition_loss_lipschitz_network,
             action_encoder_network=action_encoder_network,
             state_encoder_pre_processing_network=state_encoder_pre_processing_network,
-            state_decoder_pre_processing_network=state_decoder_post_processing_net)
+            state_decoder_pre_processing_network=state_decoder_post_processing_network)
 
         self.loss_metrics = {
             'reconstruction_loss': Mean(name='reconstruction_loss'),
@@ -1224,13 +1283,13 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
         if self.action_discretizer:
             variables += self.action_reconstruction_network.trainable_variables
         for network in [
-            self.transition_network,
-            self.reward_network,
-            self.reconstruction_network
-        ] + (
-                [] if self.external_latent_policy is not None else
-                [self.latent_policy_network]
-        ):
+                           self.transition_network,
+                           self.reward_network,
+                           self.reconstruction_network
+                       ] + (
+                               [] if self.external_latent_policy is not None else
+                               [self.latent_policy_network]
+                       ):
             variables += network.trainable_variables
         return variables
 
@@ -1281,8 +1340,8 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                     variables is not None and
                     (not debug or not numerical_error(loss[optimization_direction])) and
                     (optimization_direction == 'max' or
-                        (step % self.n_critic == 0 and
-                         optimization_direction in ['min', 'min_encoder']))
+                     (step % self.n_critic == 0 and
+                      optimization_direction in ['min', 'min_encoder']))
             ):
                 gradients = tape.gradient(loss[optimization_direction], variables)
                 optimizer = {
@@ -1637,6 +1696,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 self.save(save_directory, model_name, score)
 
         return True
+
 
 def load(model_path: str):
     with open(os.path.join(model_path, 'model_infos.json'), 'r') as f:
