@@ -102,7 +102,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             number_of_discrete_actions: Optional[int] = None,
             action_encoder_network: Optional[ModelArchitecture] = None,
             state_encoder_pre_processing_network: Optional[ModelArchitecture] = None,
-            state_decoder_pre_processing_network: Optional[ModelArchitecture] = None,
+            state_decoder_post_processing_net: Optional[ModelArchitecture] = None,
             time_stacked_states: bool = False,
             state_encoder_temperature: float = 2. / 3,
             state_prior_temperature: float = 1. / 2,
@@ -294,11 +294,11 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             reward_shape=self.reward_shape)
         # state reconstruction function
         self.reconstruction_network = StateReconstructionNetwork(
-            next_latent_state=next_latent_state,
+            latent_state=next_latent_state,
             decoder_network=base_models['decoder_network'],
             state_shape=self.state_shape,
             time_stacked_states=self.time_stacked_states,
-            state_decoder_pre_processing_network=base_models.get('state_decoder_pre_processing_network', None),
+            post_processing_net=base_models.get('state_decoder_pre_processing_network', None),
             time_stacked_lstm_units=self.time_stacked_lstm_units)
         # action reconstruction function
         if self.action_discretizer and not self.policy_based_decoding:
@@ -353,7 +353,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
             transition_loss_lipschitz_network=transition_loss_lipschitz_network,
             action_encoder_network=action_encoder_network,
             state_encoder_pre_processing_network=state_encoder_pre_processing_network,
-            state_decoder_pre_processing_network=state_decoder_pre_processing_network)
+            state_decoder_pre_processing_network=state_decoder_post_processing_net)
 
         self.loss_metrics = {
             'reconstruction_loss': Mean(name='reconstruction_loss'),
