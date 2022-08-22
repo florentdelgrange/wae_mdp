@@ -501,7 +501,8 @@ class WaeDqnLearner:
                     if tf.reduce_max(priorities) > self.max_priority:
                         self.max_priority.assign(tf.reduce_max(priorities))
                 else:
-                    loss_info = self.tf_agent.train(experience)
+                    with self.train_summary_writer.as_default():
+                        loss_info = self.tf_agent.train(experience)
                     dqn_loss = loss_info.loss
 
             self.update_progress_bar(progressbar, wae_mdp_loss=wae_mdp_loss, dqn_loss=dqn_loss)
@@ -542,9 +543,6 @@ class WaeDqnLearner:
                 action_spec=saved_policy.action_spec)
         eval_env = wae_mdp.wrap_tf_environment(
             tf_env=tf_py_environment.TFPyEnvironment(
-            :q
-            :q
-            :q
                 EnvironmentLoader(self.env_suite).load(self.env_name)),
             labeling_function=self.labeling_fn)
         latent_policy = eval_env.wrap_latent_policy(
@@ -661,7 +659,8 @@ def main(argv):
         reward_scale_factor=params['reward_scaling'],
         gradient_clipping=params['policy_gradient_clipping'],
         env_time_limit=params['env_time_limit'],
-        env_perturbation=params['env_perturbation'], )
+        env_perturbation=params['env_perturbation'],
+        summarize_grads_and_vars=params['log_grads_and_vars'],)
 
     learner.train_and_eval()
 

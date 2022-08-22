@@ -139,4 +139,6 @@ class LatentEmbeddingTFEnvironmentWrapper(TFEnvironment):
 
         return LatentPolicyWrapper(
             time_step_spec=self.time_step_spec(),
-            action_spec=self.action_spec())
+            action_spec=self.action_spec(),
+            policy_state_spec=getattr(latent_policy, 'policy_state_spec', ()),
+            info_spec=getattr(latent_policy, 'info_spec', ()))
