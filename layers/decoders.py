@@ -8,6 +8,7 @@ import tensorflow_probability.python.distributions as tfd
 from tf_agents.typing.types import Float
 
 from layers.base_models import DistributionModel
+from util.nn import _get_elem
 
 
 class StateReconstructionNetwork(DistributionModel):
@@ -18,21 +19,12 @@ class StateReconstructionNetwork(DistributionModel):
             decoder_network: tfk.Model,
             state_shape: Union[Tuple[int, ...], tf.TensorShape, Tuple[Tuple[int, ...]], Tuple[tf.TensorShape, ...]],
             time_stacked_states: bool = False,
-            post_processing_net: Optional[Union[tfk.Model, tfkl.Layer]] = None,
+            post_processing_net: Optional[Tuple[Union[tfk.Model, tfkl.Layer], ...]] = None,
             time_stacked_lstm_units: Optional[int] = None,
             flatten_output: bool = False
     ):
-        if decoder_network.inputs is None:
-            x = latent_state
-        else:
-            decoder_net_input_shape = decoder_network.inputs[0].shape[1:]
-            x = tfkl.Dense(
-                units=np.prod(decoder_net_input_shape),
-                activation=tf.nn.sigmoid,
-            )(latent_state)
-            x = tfkl.Reshape(target_shape=decoder_net_input_shape)(x)
 
-        decoder = decoder_network(x)
+        decoder = decoder_network(latent_state)
 
         try:
             # output with multiple components
@@ -45,10 +37,24 @@ class StateReconstructionNetwork(DistributionModel):
             self.n_dim = 1
             state_shape = [state_shape]
 
+        post_processing_net = tf.nest.flatten(post_processing_net)
+
         outputs = []
         for i, _state_shape in enumerate(state_shape):
+            _decoder = _get_elem(post_processing_net, i)
+            if _decoder.inputs is None:
+                x = latent_state
+            else:
+                post_process_is = _decoder.inputs[0].shape[1:]
+                x = tfkl.Dense(
+                    units=np.prod(post_process_is),
+                    activation=tf.nn.sigmoid,
+                )(latent_state)
+                x = tfkl.Reshape(target_shape=post_process_is)(x)
+            _decoder = _decoder(x)
+
             if time_stacked_states and time_stacked_lstm_units is not None:
-                decoder_output = tfkl.Flatten(decoder)
+                decoder_output = tfkl.Flatten(_decoder)
                 time_dimension = _state_shape[0]
                 _state_shape = _state_shape[1:]
 
@@ -64,7 +70,7 @@ class StateReconstructionNetwork(DistributionModel):
                     units=time_stacked_lstm_units, return_sequences=True
                 )(decoder_output)
             else:
-                decoder_output = decoder
+                decoder_output = _decoder
 
             if np.prod(decoder_output.shape[1:]) % np.prod(_state_shape) != 0:
                 if len(decoder_output.shape[1:]) > 1:
@@ -80,13 +86,11 @@ class StateReconstructionNetwork(DistributionModel):
                     name='state_{:d}_decoder_raw_output_reshape'.format(i))
 
             if time_stacked_states:
-                decoder_output = tfkl.TimeDistributed(decoder_output)(decoder)
+                decoder_output = tfkl.TimeDistributed(decoder_output)(_decoder)
             else:
-                decoder_output = decoder_output(decoder)
+                decoder_output = decoder_output(_decoder)
 
             outputs.append(decoder_output)
-
-        outputs = post_processing_net(outputs)
 
         super(StateReconstructionNetwork, self).__init__(
             inputs=latent_state,
