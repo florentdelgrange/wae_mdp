@@ -649,6 +649,12 @@ def main(argv):
         network_fc_layer_params=ModelArchitecture(
             hidden_units=params['network_layers'],
             activation=params['activation']),
+        network_conv_layer_params=ModelArchitecture(
+            filters=params['filters'],
+            kernel_size=params['kernel_size'],
+            strides=params['strides'],
+            padding=params['padding'],
+            activation=params['activation']),
         state_encoder_temperature=params['state_encoder_temperature'],
         wasserstein_regularizer_scale_factor=WassersteinRegularizerScaleFactor(
             global_gradient_penalty_multiplier=params['gradient_penalty_scale_factor'],
