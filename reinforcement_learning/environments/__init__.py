@@ -98,12 +98,14 @@ class EnvironmentLoader:
             seed=None,
             time_stacked_states=1,
             env_args: Optional[List[str]] = None,
+            flatten: bool = False,
     ):
         self.n = 0
         self.environment_suite = environment_suite
         self.seed = seed
         self.time_stacked_states = time_stacked_states
         self.env_args = env_args if env_args is not None else []
+        self._flatten = flatten
 
     def load(self, env_name: str, env_wrappers: Optional[Sequence[PyEnvWrapper]] = ()):
         if self.time_stacked_states > 1:
@@ -111,7 +113,7 @@ class EnvironmentLoader:
                            [lambda env: HistoryWrapper(env=env, history_length=self.time_stacked_states)]
         environment = self.environment_suite.load(*([env_name] + self.env_args), env_wrappers=env_wrappers)
 
-        if len(tf.nest.flatten(environment.observation_spec())) > 1:
+        if self._flatten and len(tf.nest.flatten(environment.observation_spec())) > 1:
             del environment
             return self.load(env_name, env_wrappers=[FlattenObservationsWrapper] + list(env_wrappers))
 
