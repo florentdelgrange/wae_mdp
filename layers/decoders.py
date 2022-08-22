@@ -54,7 +54,7 @@ class StateReconstructionNetwork(DistributionModel):
             _decoder = _decoder(x)
 
             if time_stacked_states and time_stacked_lstm_units is not None:
-                decoder_output = tfkl.Flatten(_decoder)
+                decoder_output = tfkl.Flatten()(_decoder)
                 time_dimension = _state_shape[0]
                 _state_shape = _state_shape[1:]
 
@@ -83,12 +83,11 @@ class StateReconstructionNetwork(DistributionModel):
             if not flatten_output and decoder_output.shape[1:] != _state_shape:
                 decoder_output = tfkl.Reshape(
                     target_shape=_state_shape,
-                    name='state_{:d}_decoder_raw_output_reshape'.format(i))
+                    name=f'state_{i:d}_decoder_raw_output_reshape'
+                )(decoder_output)
 
             if time_stacked_states:
                 decoder_output = tfkl.TimeDistributed(decoder_output)(_decoder)
-            else:
-                decoder_output = decoder_output(_decoder)
 
             outputs.append(decoder_output)
 
@@ -100,12 +99,13 @@ class StateReconstructionNetwork(DistributionModel):
 
     def distribution(self, latent_state: Float) -> tfd.Distribution:
         outputs = self(latent_state)
-        distributions = []
-        for output in outputs:
-            if self.time_stacked_states:
-                distributions.append(tfd.Independent(tfd.Deterministic(loc=output)))
-            else:
-                distributions.append(tfd.Deterministic(loc=output))
+        outputs = tf.nest.flatten(outputs)
+        distributions = [
+            tfd.Independent(tfd.Deterministic(loc=output))
+            if self.time_stacked_states
+            else tfd.Deterministic(loc=output)
+            for output in outputs
+        ]
         if self.n_dim == 1:
             return distributions[0]
         else:
