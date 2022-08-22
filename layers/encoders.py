@@ -23,7 +23,9 @@ class EncodingType(enum.Enum):
 def _get_elem(l: List, i: int):
     return l[min(i, len(l) - 1)]
 
+
 PreprocessingNetwork = Union[Tuple[Union[tfk.Model, tfkl.Layer], ...], Union[tfk.Model, tfkl.Layer]]
+
 
 class StateEncoderNetwork(DiscreteDistributionModel):
 
@@ -211,8 +213,8 @@ class TFAgentEncodingNetworkWrapper(Network):
     def call(self, state_and_label, step_type=None, network_state=(), training=False):
         state, label = state_and_label
         return self.state_encoder_network.relaxed_distribution(
-                 state=state, temperature=self.temperature, label=label,
-             ).sample(), network_state
+            state=state, temperature=self.temperature, label=label,
+        ).sample(), network_state
 
     def copy(self, **kwargs):
         return super(TFAgentEncodingNetworkWrapper, self).copy(
@@ -230,7 +232,7 @@ class DeterministicStateEncoderNetwork(StateEncoderNetwork):
             atomic_prop_dims: int,
             time_stacked_states: bool = False,
             output_softclip: Callable[[Float], Float] = tfb.Identity(),
-            state_encoder_pre_processing_network: Optional[tfk.Model] = None,
+            pre_proc_net: Optional[PreprocessingNetwork] = None,
             *args, **kwargs
     ):
         _saved_kwargs = {key: value for key, value in list(locals().items())}
@@ -245,14 +247,14 @@ class DeterministicStateEncoderNetwork(StateEncoderNetwork):
             time_stacked_states=time_stacked_states,
             lstm_output=False,
             output_softclip=output_softclip,
-            state_encoder_pre_processing_network=state_encoder_pre_processing_network)
+            pre_proc_net=pre_proc_net)
         self._saved_kwargs = _saved_kwargs
 
     def _deterministic_distribution(
-        self,
-        state: Float,
-        step_fn: Callable[[Float], Float],
-        label: Optional[Float] = None
+            self,
+            state: Float,
+            step_fn: Callable[[Float], Float],
+            label: Optional[Float] = None
     ):
         loc = step_fn(self(state))
         if label is not None:
@@ -302,7 +304,7 @@ class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):
             time_stacked_states: bool = False,
             time_stacked_lstm_units: int = 128,
             output_softclip: Callable[[Float], Float] = tfb.Identity(),
-            state_encoder_pre_processing_network: Optional[tfk.Model] = None,
+            pre_proc_net: Optional[PreprocessingNetwork] = None,
             deterministic_reset: bool = True,
     ):
         super(AutoRegressiveStateEncoderNetwork, self).__init__(
@@ -314,7 +316,7 @@ class AutoRegressiveStateEncoderNetwork(AutoRegressiveBernoulliNetwork):
             output_softclip=output_softclip,
             time_stacked_input=time_stacked_states,
             time_stacked_lstm_units=time_stacked_lstm_units,
-            pre_processing_network=state_encoder_pre_processing_network,
+            pre_processing_network=pre_proc_net,
             name='autoregressive_state_encoder')
         self._atomic_prop_dims = atomic_prop_dims
         self.deterministic_reset = deterministic_reset

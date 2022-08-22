@@ -227,7 +227,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 time_stacked_states=self.time_stacked_states,
                 temperature=self.state_encoder_temperature,
                 time_stacked_lstm_units=self.time_stacked_lstm_units,
-                state_encoder_pre_processing_network=base_models.get('state_encoder_pre_processing_network', None),
+                pre_proc_net=base_models.get('state_encoder_pre_processing_network', None),
                 output_softclip=self.softclip)
         elif state_encoder_type is EncodingType.DETERMINISTIC:
             self.state_encoder_network = DeterministicStateEncoderNetwork(
@@ -238,7 +238,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 atomic_prop_dims=self.atomic_prop_dims,
                 time_stacked_states=time_stacked_states,
                 output_softclip=self.softclip,
-                state_encoder_pre_processing_network=base_models.get('state_encoder_pre_processing_network', None))
+                pre_proc_net=base_models.get('state_encoder_pre_processing_network', None))
         else:
             self.state_encoder_network = StateEncoderNetwork(
                 state=state,
@@ -248,7 +248,7 @@ class WassersteinMarkovDecisionProcess(VariationalMarkovDecisionProcess):
                 atomic_prop_dims=self.atomic_prop_dims,
                 time_stacked_states=self.time_stacked_states,
                 time_stacked_lstm_units=self.time_stacked_lstm_units,
-                state_encoder_pre_processing_network=base_models.get('state_encoder_pre_processing_network', None),
+                pre_proc_net=base_models.get('state_encoder_pre_processing_network', None),
                 output_softclip=self.softclip,
                 lstm_output=state_encoder_type is EncodingType.LSTM)
         # action encoder network
