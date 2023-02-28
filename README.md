@@ -1,97 +1,54 @@
-# VAE-MDPs
+# Wasserstein Auto-encoded MDPs
+### Formal Verification of Efficiently Distilled RL Policies with Many-sided Guarantees
+This repository is the official implementation of Wasserstein Auto-encoded MDPs (WAE-MDPs).
+The implementation is as a fork of the [VAE-MDP framework](https://github.com/florentdelgrange/vae_mdp).
 
 ## Installation
-We provide two `conda` environment files that can be used to re-create our `python` 
-environment and reproduce our results:
-- `environment.yml` (using TensorFlow CPU)
-- `environment_gpu.yml` (using TensorFlow GPU)
+We provide a `conda` environment file `environment.yml` that can be used to re-create our `python` environment and reproduce our results.
+The file explicitely lists all the dependencies required for running our tool.
 
-These files can be found in the `conda_environments` directory and explicitly list all the dependencies required
-for our tool. 
-Note that these conda environments have been tested with `conda 4.10.1`, under `Ubuntu 20.04.2 LTS`.
+To create the environment, run:
+```shell
+conda env create -f environment.yml
+```
 
-- Note 1: We additionally provide these environments with build specifications removed from dependencies.
-- Note 2: [`reverb`](https://github.com/deepmind/reverb) currently only supports Linux based OSes. Our tool can be used without `reverb` if you don't use
-prioritized replay buffers.
-
-In the following, we detail how to create automatically the conda environment from the environment CPU file,
-but you can easily create an environment for GPU by replacing `environment.yml` by
-`environment_gpu.yml`.
-1. Create the environment from `environment.yml`:
-   ```shell
-   cd conda_environments
-   conda env create -f environment.yml
-   ```
-2. The environment ``vae_mdp`` (or `vae_mdp_gpu`) is now created.
-To use [`reverb`](https://github.com/deepmind/reverb) replay buffers, we need
-   to indicate the variable `LD_LIBRARY_PATH` to conda.
-   We provide the installation script `set_environment_variables.sh`
-   that makes the environment variable become activate when the environment is activated:
-   ```shell 
-   conda activate vae_mdp  # or vae_mdp_gpu
-   ./set_environment_variables
-   # reactivate the environment to apply the changes
-   conda deactivate
-   conda activate vae_mdp
-   ```
-   The `vae_mdp` environment should now work properly on your machine.
-
-## Run the experiments
-We provide the exact set of hyper-parameters used during our experiments in the `inputs` directory.
+## Experiments
 ### Quick start
-- Each individual experiments can be run via:
+- Each individual experiment can be run via:
     ```shell
     python train.py --flagfile inputs/[name of the environment] 
     ```
-- Add `--display_progressbar` to display a TF progressbar
+- Add `--display_progressbar` to display a progressbar with useful learning metrics
 - Display the possible options with `--help`
-- By default, the `log` directory is created, where training logs are stored.
-  Moreover, logs can be optionally vizualized via `TensorBoard` using
+- By default,
+   - the `saves` directory is created, where checkpoints and models learned are stored.
+   - the `log` directory is created, where training and evaluation logs are stored.
+- The logs can be vizualized via `TensorBoard` using
   ```shell
   tensorboard --logdir=log
   ```
-- The `N` best models can be saved during training with the option `--evaluation_window_size N`
-  (by default set to 0, use 1 to save the best model encountered during training).
-  
-### Reproduce the paper results
-We provide a script for each environment in `inputs/[environment].sh`, containing the exact commands to run, as well as the seeds we used.
-You can run all the experiments as follows:
+
+### Evaluation
+The file `evaluation.html` summarizes the results presented in our paper.
+It embeds videos, comparing the performance of the input RL policies and their distillation, as well as the metrics related to the formal verification of those distilled policies.
+The code for using our formal verification tool is also presented in this file.
+
+### Reproducing the paper results
+- We provide the exact hyperparameters used for each individual environment in `inputs/[name of the environment]`.
+- For each environment, we provide a script (`inputs/[environment].sh`) to train 5 instances of the WAE-MDP with different seeds.
+You can further run *all* the experiments as follows:
 ```shell
 ./run_all_experiments.sh
 ```
-Then, you can vizualize the experiments via TensorBoard or reproduce the paper plots via:
-```shell
-# plot distortion/rate/elbo, the PAC bounds, and the policy evaluation
-python util/io/plot.py --flagfile inputs/plots
-# plot the latent space vizualization
-python util/io/plot.py --flagfile inputs/plot_histograms
-```
-The plots are stored in `evaluation/plots`.
+### Pre-trained Models
+- Input RL policies are available at `reinforcement_learning/saves`.
+- Pre-trained models are available at `evaluation/saved_models`.
+### Results
+#### WAE-MDP Losses
+![pac_bounds](evaluation/loss.pdf)
+#### Local Losses: Pac Bounds
+![pac_bounds](evaluation/local_losses.pdf)
+#### Distillation
+![distillation](evaluation/eval_policy.pdf)
+- The code to generate the plots of the paper is availbale in the [notebook](https://jupyter.org/) `evaluation/plots.ipynb`.
 
-## Additional installation instructions 
-- (Optional) Alternatively, you can indicate manually the environment variable `LD_LIBRARY_PATH` to conda as follows:
-   ```shell
-   conda activate vae_mdp  # or vae_mdp_gpu
-   cd $CONDA_PREFIX
-   mkdir -p ./etc/conda/activate.d
-   mkdir -p ./etc/conda/deactivate.d
-   touch ./etc/conda/activate.d/env_vars.sh
-   touch ./etc/conda/deactivate.d/env_vars.sh
-   ```
-   
-   Edit `./etc/conda/activate.d/env_vars.sh` as follows:
-   ```shell
-   #!/bin/sh
-   
-   ENV_NAME='vae_mdp'  # or 'vae_mdp_gpu'
-   export OLD_LD_LIBRARY_PATH=${LD_LIBRARY_PATH}
-   export LD_LIBRARY_PATH=${HOME}/anaconda3/envs/${ENV_NAME}/lib/:${LD_LIBRARY_PATH}
-   ```
-
-   Edit `./etc/conda/deactivate.d/env_vars.sh` as follows:
-   ```shell
-   #!/bin/sh
-
-   export LD_LIBRARY_PATH=${OLD_LD_LIBRARY_PATH}
-   unset OLD_LD_LIBRARY_PATH
-   ```
