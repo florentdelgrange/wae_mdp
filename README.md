@@ -52,3 +52,16 @@ You can further run *all* the experiments as follows:
 ![distillation](evaluation/eval_policy.png)
 - The code to generate the plots of the paper is availbale in the [notebook](https://jupyter.org/) `evaluation/plots.ipynb`.
 
+## Cite
+If you use this code, please cite it as:
+```
+@inproceedings{
+delgrange2023wasserstein,
+title={Wasserstein Auto-encoded {MDP}s: Formal Verification of Efficiently Distilled {RL} Policies with Many-sided Guarantees},
+author={Florent Delgrange and Ann Nowe and Guillermo Perez},
+booktitle={The Eleventh International Conference on Learning Representations },
+year={2023},
+url={https://openreview.net/forum?id=JLLTtEdh1ZY}
+}
+```
+
