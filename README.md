@@ -45,10 +45,10 @@ You can further run *all* the experiments as follows:
 - Pre-trained models are available at `evaluation/saved_models`.
 ### Results
 #### WAE-MDP Losses
-![pac_bounds](evaluation/loss.pdf)
+![pac_bounds](evaluation/loss.png)
 #### Local Losses: Pac Bounds
-![pac_bounds](evaluation/local_losses.pdf)
+![pac_bounds](evaluation/local_losses.png)
 #### Distillation
-![distillation](evaluation/eval_policy.pdf)
+![distillation](evaluation/eval_policy.png)
 - The code to generate the plots of the paper is availbale in the [notebook](https://jupyter.org/) `evaluation/plots.ipynb`.
 
