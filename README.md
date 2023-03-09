@@ -1,6 +1,6 @@
 # Wasserstein Auto-encoded MDPs
 ### Formal Verification of Efficiently Distilled RL Policies with Many-sided Guarantees
-This repository is the official implementation of Wasserstein Auto-encoded MDPs (WAE-MDPs).
+This repository is the official implementation of the Wasserstein Auto-encoded MDP (WAE-MDP) framework, introduced in the paper [_Wasserstein Auto-encoded MDPs: Formal Verification of Efficiently Distilled RL Policies with Many-sided Guarantees_](https://openreview.net/pdf?id=JLLTtEdh1ZY) (ICLR 2023).
 The implementation is as a fork of the [VAE-MDP framework](https://github.com/florentdelgrange/vae_mdp).
 
 ## Installation
